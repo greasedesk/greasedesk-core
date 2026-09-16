@@ -15,10 +15,13 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantApi } from '@/lib/admin-guard';
+import { prisma } from '@/lib/db';
 import {
   addStockCost, creditStockCost, findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal,
-  stockDetail, stockList, takeIntoStock, updateStockItem,
+  setStockStatus, soldInPeriod, stockDetail, stockList, takeIntoStock, updateStockItem,
 } from '@/lib/stock-store';
+import { resolveRange } from '@/lib/dashboard-periods';
+import { ALL_TIME_FROM, SOLD_EXTRA_PRESET } from '@/lib/stock-sold';
 import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
@@ -46,6 +49,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // turns on it. getTaxProfile, never garageVatRegistered(), which is our own registration.
     const vatRegistered = (await getTaxProfile(scope.groupId)).isRegistered;
 
+    /**
+     * THE SOLD REPORT. Periods come from lib/dashboard-periods — the SAME vocabulary and the same
+     * FY-aware resolver the main dashboard uses, because a second period vocabulary would drift and
+     * the two screens would eventually disagree about what "last quarter" means.
+     *
+     * `all_time` is the one addition, resolved here rather than added to that module: it is a stock
+     * question, not a dashboard one, and every preset there assumes enough history for a month to
+     * mean something.
+     */
+    if (req.query.sold === '1') {
+      // THE TENANT'S OWN FINANCIAL YEAR, read from Group where it lives — not defaulted to April.
+      // A cast onto the tax profile compiled fine and would have silently given every tenant an
+      // April year-end, which is wrong for anyone whose year does not start there.
+      const g = await prisma.group.findUnique({
+        where: { id: scope.groupId }, select: { fy_start_month: true },
+      });
+      const preset = typeof req.query.preset === 'string' ? req.query.preset : 'this_fy';
+      const range = preset === SOLD_EXTRA_PRESET
+        ? { from: ALL_TIME_FROM, to: new Date() }
+        : resolveRange({ preset, from: req.query.from as string, to: req.query.to as string },
+          g?.fy_start_month ?? 4);
+      if (!range) return res.status(400).json({ message: 'That period is not one we can work out.' });
+      const out = await soldInPeriod(scope.groupId, range.from, range.to);
+      return res.status(200).json({ ...out, preset, from: range.from, to: range.to });
+    }
+
     if (typeof req.query.id === 'string' && req.query.id) {
       const detail = await stockDetail(scope.groupId, req.query.id, new Date(), { vatRegistered });
       if (!detail) return res.status(404).json({ message: 'That car is not on this account.' });
@@ -69,6 +98,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       if ('refused' in out) return res.status(409).json({ message: out.refused });
       return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    if (b.action === 'set-status') {
+      const out = await setStockStatus({
+        groupId: scope.groupId, stockItemId: String(b.stockItemId ?? ''),
+        status: b.status, arrivedAt: parseDate(b.arrivedAt),
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id, status: out.status });
     }
 
     if (b.action === 'add-cost') {
@@ -139,6 +177,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       purchasePence: b.purchasePence, vatStatus: b.vatStatus, source: b.source,
       premiumPence: b.premiumPence, servicesPence: b.servicesPence,
       mileageMiles: b.mileageMiles, mileageWarranted: b.mileageWarranted,
+      // WHERE IT STARTS, stated. A car bought for Friday collection starts due_in and has no arrival
+      // date yet; anything else arrived the day it was bought unless told otherwise.
+      status: b.status, arrivedAt: parseDate(b.arrivedAt),
       reacquiredFromDisposalId: typeof b.reacquiredFromDisposalId === 'string' ? b.reacquiredFromDisposalId : null,
     });
     if ('refused' in out) return res.status(409).json({ message: out.refused });

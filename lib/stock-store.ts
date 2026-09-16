@@ -5,8 +5,8 @@
  */
 import { prisma } from '@/lib/db';
 import {
-  DISPOSAL_KINDS, bookRow, daysInStock, hasSalePrice, sectionFor, vatPositionFor,
-  type BookRow, type DisposalKind,
+  DISPOSAL_KINDS, bookRow, daysInStock, daysOnForecourt, hasSalePrice, isStockStatus, sectionFor,
+  vatPositionFor, type BookRow, type DisposalKind, type StockStatus,
 } from '@/lib/stock';
 import { SOURCES, VAT_STATUSES, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
 import {
@@ -16,6 +16,7 @@ import {
 import { recordOdometerReadings } from '@/lib/odometer';
 import { prepCost, type PrepCost } from '@/lib/stock-prep';
 import { projectStock, type Projection } from '@/lib/stock-projection';
+import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
 import {
   CREDIT_AFTER_DISPOSAL_REFUSAL, checkCredit, isStockCostKind, isVatTreatment, netCosts,
   type CostRow, type CostTotals,
@@ -38,6 +39,10 @@ export async function takeIntoStock(a: {
   mileageMiles?: unknown; mileageWarranted?: unknown;
   /** Set ONLY when the person said this is a return or a buyback — never inferred from a match. */
   reacquiredFromDisposalId?: string | null;
+  /** Where it starts. A car bought at auction for Friday collection starts `due_in`, not in prep. */
+  status?: unknown;
+  /** When it turned up. NULL for a due-in car — see lib/stock::stockClock. */
+  arrivedAt?: Date | null;
 }): Promise<{ id: string; creditableInvoiceId?: string | null } | { refused: string }> {
   // THE CAR MUST BE THIS TENANT'S. Checked here because this is the door, not in each caller.
   const vehicle = await prisma.vehicle.findFirst({
@@ -105,6 +110,16 @@ export async function takeIntoStock(a: {
       premium_pence: asMoney(a.premiumPence), services_pence: asMoney(a.servicesPence),
       // A TERM OF THIS SALE, not a fact about the car — see the schema comment for why it lives here.
       mileage_warranted: parseWarranted(a.mileageWarranted),
+      /**
+       * EXPLICIT FROM THE START. Defaulted to in_prep rather than guessed from whether an arrival date
+       * was given: a person taking a car in says which it is, and deriving it would be the inference
+       * this column exists to avoid. An unrecognised value falls to the default rather than being
+       * stored — a status nothing can render is worse than the wrong tab.
+       */
+      status: isStockStatus(a.status) ? a.status : 'in_prep',
+      // A due-in car has no arrival date yet. Anything else defaults to the day it was bought, which
+      // is what every car recorded before this column existed effectively had.
+      arrived_at: a.arrivedAt ?? (isStockStatus(a.status) && a.status === 'due_in' ? null : a.acquiredAt),
     },
     select: { id: true },
   });
@@ -323,7 +338,11 @@ export type StockListRow = {
   registration: string;
   description: string | null;
   acquiredAt: Date;
-  daysInStock: number;
+  /** NULL = not yet arrived. The car is owned and is somewhere else. */
+  arrivedAt: Date | null;
+  status: string;
+  /** NULL when the car has not arrived — never 0, which would claim it got here today. */
+  daysInStock: number | null;
   purchasePence: number;
   vatStatus: string;
   source: string;
@@ -335,6 +354,10 @@ export type StockListRow = {
   /** Lines with no trade cost recorded — counted, never valued at zero. */
   prepUnknownLines: number;
   prepCards: number;
+  /** Set once the car has GONE. Null = still owned. The kind is shown on the row, not collapsed. */
+  disposalKind: string | null;
+  disposedAt: Date | null;
+  salePence: number | null;
 };
 
 /**
@@ -352,7 +375,9 @@ export async function stockList(
     select: {
       id: true, vehicle_id: true, acquired_at: true, purchase_pence: true, vat_status: true, source: true,
       premium_pence: true, services_pence: true, projected_sale_pence: true,
+      arrived_at: true, status: true,
       vehicle: { select: { registration: true, make: true, model: true } },
+      disposal: { select: { disposed_at: true, kind: true, sale_pence: true } },
     },
     orderBy: { acquired_at: 'asc' },
   });
@@ -389,7 +414,10 @@ export async function stockList(
     registration: r.vehicle?.registration ?? '—',
     description: [r.vehicle?.make, r.vehicle?.model].filter(Boolean).join(' ') || null,
     acquiredAt: r.acquired_at,
-    daysInStock: daysInStock(r.acquired_at, asOf),
+    arrivedAt: r.arrived_at,
+    status: r.status,
+    // FROM ARRIVAL, not purchase — and NULL for a car that has not turned up. See lib/stock::stockClock.
+    daysInStock: daysOnForecourt({ acquiredAt: r.acquired_at, arrivedAt: r.arrived_at, status: r.status }, asOf),
     purchasePence: r.purchase_pence,
     vatStatus: r.vat_status,
     source: r.source,
@@ -397,11 +425,17 @@ export async function stockList(
     prepUnknownLines: prepByItem.get(r.id)?.unknownCostLines ?? 0,
     prepCards: prepByItem.get(r.id)?.cards ?? 0,
     projectedSalePence: r.projected_sale_pence,
+    disposalKind: r.disposal?.kind ?? null,
+    disposedAt: r.disposal?.disposed_at ?? null,
+    salePence: r.disposal?.sale_pence ?? null,
     // THE SAME MAPPER the detail page uses. A second arithmetic for the column would be a second
     // answer, and the one on the list is the one a person compares cars with.
     projectedProfitPence: projectStock({
       purchasePence: r.purchase_pence, premiumPence: r.premium_pence, servicesPence: r.services_pence,
-      vatStatus: r.vat_status, source: r.source, daysInStock: daysInStock(r.acquired_at, asOf),
+      vatStatus: r.vat_status, source: r.source,
+      // THE STOCKING COST counts forecourt time, so it uses the same clock — and 0 for a car that has
+      // not arrived, because it is not yet costing space. The projection cannot take a null.
+      daysInStock: daysOnForecourt({ acquiredAt: r.acquired_at, arrivedAt: r.arrived_at, status: r.status }, asOf) ?? 0,
       partsPence: prepByItem.get(r.id)?.partsPence ?? 0, projectedSalePence: r.projected_sale_pence,
     }, { vatRegistered: opts.vatRegistered === true })?.grossProfitPence ?? null,
   }));
@@ -712,7 +746,9 @@ export type StockDetail = {
   registration: string;
   description: string | null;
   acquiredAt: Date;
-  daysInStock: number;
+  arrivedAt: Date | null;
+  status: string;
+  daysInStock: number | null;
   purchasePence: number;
   premiumPence: number;
   servicesPence: number;
@@ -739,7 +775,7 @@ export async function stockDetail(
     select: {
       id: true, vehicle_id: true, acquired_at: true, purchase_pence: true, premium_pence: true,
       services_pence: true, vat_status: true, source: true, mileage_warranted: true,
-      projected_sale_pence: true,
+      projected_sale_pence: true, arrived_at: true, status: true,
       vehicle: { select: { registration: true, make: true, model: true } },
       disposal: { select: { disposed_at: true, kind: true, sale_pence: true } },
     },
@@ -748,13 +784,19 @@ export async function stockDetail(
   const prep = await liveStockCosts(groupId, it.id);
   const costRows = await stockCostRows(groupId, it.id);
   const costs = netCosts(costRows, opts.vatRegistered);
-  const days = daysInStock(it.acquired_at, it.disposal?.disposed_at ?? asOf);
+  // SAME CLOCK as the list: arrival, not purchase, and null for a car that has not turned up.
+  const days = daysOnForecourt(
+    { acquiredAt: it.acquired_at, arrivedAt: it.arrived_at, status: it.status },
+    it.disposal?.disposed_at ?? asOf,
+  );
   return {
     stockItemId: it.id,
     vehicleId: it.vehicle_id,
     registration: it.vehicle?.registration ?? '—',
     description: [it.vehicle?.make, it.vehicle?.model].filter(Boolean).join(' ') || null,
     acquiredAt: it.acquired_at,
+    arrivedAt: it.arrived_at,
+    status: it.status,
     daysInStock: days,
     purchasePence: it.purchase_pence,
     premiumPence: it.premium_pence,
@@ -770,7 +812,7 @@ export async function stockDetail(
     // think beside what happened invites reading the guess as a result.
     projection: it.disposal ? null : projectStock({
       purchasePence: it.purchase_pence, premiumPence: it.premium_pence, servicesPence: it.services_pence,
-      vatStatus: it.vat_status, source: it.source, daysInStock: days,
+      vatStatus: it.vat_status, source: it.source, daysInStock: days ?? 0,
       partsPence: prep.partsPence, projectedSalePence: it.projected_sale_pence,
       // NET of credits and NET of recoverable VAT — the cost actually borne, not the cash that moved.
       otherCostsPence: costs.costPence,
@@ -851,6 +893,52 @@ export async function updateStockItem(a: {
   return { id: it.id };
 }
 
+
+/**
+ * ── MOVE A CAR TO ANOTHER STATE, or record that it has turned up ────────────────────────────────
+ *
+ * The ONE writer for status and arrival. Both are statements a person makes, so both are refused
+ * rather than guessed at, and neither is inferred from anything else changing.
+ *
+ * ARRIVING IS ITS OWN ACT. Moving a car off `due_in` without saying when it arrived would leave its
+ * days-on-forecourt counting from the purchase date — the exact thing arrived_at exists to prevent —
+ * so leaving due_in REQUIRES an arrival date, and the refusal says why.
+ */
+export async function setStockStatus(a: {
+  groupId: string; stockItemId: string; status: unknown; arrivedAt?: Date | null;
+}): Promise<{ id: string; status: StockStatus } | { refused: string }> {
+  if (!isStockStatus(a.status)) return { refused: 'Say which state the car is in.' };
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, status: true, arrived_at: true, acquired_at: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+  if (it.disposal) {
+    return { refused: 'This car has gone. Its state was settled when you recorded how it left.' };
+  }
+
+  const leavingDueIn = it.status === 'due_in' && a.status !== 'due_in';
+  const arrived = a.arrivedAt ?? it.arrived_at ?? (leavingDueIn ? null : it.acquired_at);
+  if (a.status !== 'due_in' && !arrived) {
+    return {
+      refused: 'Say when it arrived. Days in stock counts from the day the car turned up, and without '
+        + 'that date it would count from the day you bought it — which is what makes a week at the '
+        + 'auction look like a week on your forecourt.',
+    };
+  }
+  if (arrived && arrived < it.acquired_at) {
+    return { refused: 'A car cannot arrive before you bought it.' };
+  }
+
+  const row = await prisma.stockItem.update({
+    where: { id: it.id },
+    // Going BACK to due_in clears the arrival date: the car is not here, and a stale date would keep
+    // a clock running on a forecourt the car has left.
+    data: { status: a.status, arrived_at: a.status === 'due_in' ? null : arrived },
+    select: { id: true, status: true },
+  });
+  return { id: row.id, status: row.status as StockStatus };
+}
 
 /** The car's non-parts costs, as rows, oldest first. Live while in stock; frozen at disposal. */
 export async function stockCostRows(groupId: string, stockItemId: string): Promise<CostRow[]> {
@@ -953,4 +1041,48 @@ export async function stockCostTotals(
   groupId: string, stockItemId: string, vatRegistered: boolean,
 ): Promise<CostTotals> {
   return netCosts(await stockCostRows(groupId, stockItemId), vatRegistered);
+}
+
+
+/**
+ * ── THE CARS THAT LEFT IN A PERIOD ──────────────────────────────────────────────────────────────
+ *
+ * Keyed on `disposed_at`, which never changes, over figures that FROZE at disposal — so re-running a
+ * closed quarter gives what it gave then. The costs come from StockCostSnapshot, which already holds
+ * prep parts per card and non-parts costs net of credits; nothing is recomputed live.
+ *
+ * Days in stock is the one live derivation and it is arrival-to-disposal, so it answers "how long did
+ * this car sit on my forecourt" rather than "how long did I own it". A car with no arrival recorded
+ * yields NULL and is counted separately rather than averaged in at its purchase date.
+ */
+export async function soldInPeriod(
+  groupId: string, from: Date, to: Date,
+): Promise<{ rows: SoldRow[]; summary: SoldSummary }> {
+  const items = await prisma.stockItem.findMany({
+    where: { group_id: groupId, disposal: { is: { disposed_at: { gte: from, lte: to } } } },
+    select: {
+      id: true, acquired_at: true, arrived_at: true, status: true, purchase_pence: true,
+      vehicle: { select: { registration: true } },
+      disposal: { select: { disposed_at: true, kind: true, sale_pence: true } },
+      costs: { select: { amount_pence: true } },
+    },
+    orderBy: { acquired_at: 'asc' },
+  });
+  const rows: SoldRow[] = items.map((it) => ({
+    stockItemId: it.id,
+    registration: it.vehicle?.registration ?? '—',
+    disposedAt: it.disposal!.disposed_at,
+    kind: it.disposal!.kind,
+    salePence: it.disposal!.sale_pence,
+    purchasePence: it.purchase_pence,
+    // FROZEN. The snapshots are the record; the live readers are for cars still in stock.
+    costsPence: it.costs.reduce((a, c) => a + c.amount_pence, 0),
+    daysInStock: daysOnForecourt(
+      { acquiredAt: it.acquired_at, arrivedAt: it.arrived_at, status: it.status },
+      it.disposal!.disposed_at,
+    ),
+  }));
+  // Sorted by when they left — a period report reads chronologically, not by when they were bought.
+  rows.sort((a, b) => a.disposedAt.getTime() - b.disposedAt.getTime());
+  return { rows, summary: summariseSold(rows) };
 }

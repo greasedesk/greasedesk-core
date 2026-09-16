@@ -18,6 +18,7 @@ const RA = await import('../lib/stock-reacquisition.ts');
 const PJ = await import('../lib/stock-projection.ts');
 const SCST = await import('../lib/stock-cost.ts');
 const SL = await import('../lib/stock-list.ts');
+const SS = await import('../lib/stock-sold.ts');
 const PM = await import('../lib/purchase-model.ts');
 const DC = await import('../lib/diary-colours.ts');
 const SC = await import('../lib/status-colours.ts');
@@ -390,9 +391,18 @@ try {
   const capitalTile = (await page.locator('[data-testid="tile-capital"]').textContent()) ?? '';
   check('  …with what is tied up said once, in the capital tile',
     /£[\d,]+(\.\d\d)?/.test(capitalTile) && /invested/i.test(capitalTile), capitalTile.trim().slice(0, 90));
-  check('  …covering EVERY car, not only the priced ones',
-    new RegExp(`All ${(await page.$$('[data-testid^="stock-row-"]')).length}\\.`).test(capitalTile),
-    'capital is money that has gone out and is known for all of them');
+  /**
+   * COVERING EVERY CAR YOU OWN — across every TAB, not just the one on screen. Rewritten 2026-09-16
+   * when the tabs landed: the tile is the yard summary and the tab is a filter on the list, so the
+   * tile's number is the owned count and the list's is the tab's. They differ on purpose.
+   */
+  const ownedNow = await page.evaluate(async () => {
+    const b = await (await fetch('/api/stock')).json();
+    return b.stock.filter((r) => !r.disposalKind).length;
+  });
+  check('  …covering EVERY car you own, not only the priced ones and not only this tab',
+    new RegExp(`All ${ownedNow} you own`).test(capitalTile),
+    `${ownedNow} owned — capital is money that has gone out and is known for all of them`);
 
   // THE SOURCE STILL CONSTRAINS THE TREATMENT, on this page too.
   await page.click('[data-testid="add-toggle"]');
@@ -1443,11 +1453,196 @@ try {
    * it covers, so that sentence is the one that has to move when the search does.
    */
   const narrowedTile = (await page.textContent('[data-testid="tile-capital"]')) ?? '';
-  check('  …and the TILES retotal to what is on screen, not to the whole yard',
-    new RegExp(`All ${after}\\.`).test(narrowedTile) && after < before,
-    `${narrowedTile.trim().slice(-24)} with ${after} of ${before} rows shown — a tile describing a set `
-    + 'the reader is not looking at is worse than no tile');
+  /**
+   * THE TILES FOLLOW THE SEARCH. Still asserted: a tile describing a set the reader is not looking at
+   * is worse than no tile. What it does NOT follow is the TAB — see the clause below, which is the
+   * deliberate half and the one a later "simplification" would break.
+   */
+  check('  …and the TILES retotal to the SEARCH',
+    /All 1 you own/.test(narrowedTile) && after < before,
+    `${narrowedTile.trim().slice(-30)} with ${after} of ${before} rows shown`);
 
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  //  TWO CLOCKS: the book counts OWNERSHIP, the forecourt counts ARRIVAL
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— the split, on the pure functions —');
+  const march = new Date('2026-03-30T12:00:00Z');
+  const april = new Date('2026-04-02T12:00:00Z');
+  const may = new Date('2026-05-01T12:00:00Z');
+  check('days on the forecourt count from ARRIVAL, not purchase',
+    S.daysOnForecourt({ acquiredAt: march, arrivedAt: april, status: 'in_prep' }, may) === 29
+      && S.daysInStock(march, may) === 32,
+    '29 on the forecourt against 32 owned — three days of those were spent at the auction');
+  check('a car with no arrival date falls back to purchase, so nothing already recorded moves',
+    S.daysOnForecourt({ acquiredAt: march, arrivedAt: null, status: 'in_prep' }, may) === S.daysInStock(march, may),
+    'arrived_at was added nullable and never backfilled — this is what makes that safe');
+  check('a car that has NOT arrived has NO days on the forecourt — null, never 0',
+    S.daysOnForecourt({ acquiredAt: march, arrivedAt: null, status: 'due_in' }, may) === null,
+    '0 would say it got here today and has been sitting no time, about a car on somebody else’s site');
+
+  console.log('\n— and the BOOK does not move —');
+  check('a car bought in MARCH and collected in APRIL is in the MARCH book',
+    S.sectionFor({ acquiredAt: march, disposedAt: null, periodStart: new Date('2026-03-01T00:00:00Z'), periodEnd: new Date('2026-03-31T23:59:59Z') }) === 'in_stock',
+    'ownership starts at purchase whether or not the car is on your premises');
+  check('  …and is NOT filed as not-yet-acquired in March because it had not turned up',
+    S.sectionFor({ acquiredAt: march, disposedAt: null, periodStart: new Date('2026-03-01T00:00:00Z'), periodEnd: new Date('2026-03-31T23:59:59Z') }) !== 'not_yet');
+  /**
+   * SCOPED TO THE WHOLE FUNCTION BODY, to the NEXT top-level export. The first version split on the
+   * first column-0 `}` — the closing brace of stockBook's own RETURN TYPE, three lines in — so it
+   * tested the signature and nothing else. Measured: a mutation pointing the book's query at
+   * arrived_at scored 0 failures against the entire suite.
+   */
+  const bookSrc = readFileSync('lib/stock-store.ts', 'utf8');
+  const bookBody = bookSrc.split('export async function stockBook')[1].split('\nexport ')[0];
+  check('the book body was actually found, so the clauses below are about something',
+    bookBody.length > 600 && /periodEnd/.test(bookBody), `${bookBody.length} chars`);
+  check('the book’s period query reads acquired_at',
+    hasKey(bookBody, 'acquired_at', /\{ lte: periodEnd \}/),
+    'the one query that decides which quarter a car belongs to');
+  check('  …and stockBook never consults arrived_at at all',
+    !/arrived_at/.test(bookBody),
+    'a book that counted from arrival would silently re-file cars between quarters');
+
+  console.log('\n— status is EXPLICIT, and arriving is its own act —');
+  check('the four states, and Sold is NOT one of them',
+    JSON.stringify([...S.STOCK_STATUSES]) === JSON.stringify(['due_in', 'in_prep', 'advertised', 'reserved'])
+      && !S.STOCK_STATUSES.includes('sold'),
+    'a sold car is one with a StockDisposal — two sources for "is it sold" would disagree');
+  check('  …and the tabs add GONE on top of them', S.STOCK_TABS.length === 5 && S.STOCK_TABS.includes('gone'));
+
+  const regL = `ZZYARD${Math.floor(Math.random() * 900 + 100)}L`;
+  const vL = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regL, acquiredAt: bought });
+  if ('refused' in vL) throw new Error(vL.refused);
+  made.vehicles.push(vL.id);
+  const dueIn = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vL.id, acquiredAt: bought,
+    purchasePence: 214300, vatStatus: 'margin', source: 'auction', status: 'due_in',
+  });
+  if ('refused' in dueIn) throw new Error(dueIn.refused);
+  made.items.push(dueIn.id);
+  let dueRow = (await ST.stockList(ZZ_GROUP, new Date())).find((r) => r.stockItemId === dueIn.id);
+  check('a car taken in as DUE IN has no arrival date and no days on the forecourt',
+    dueRow.status === 'due_in' && dueRow.arrivedAt === null && dueRow.daysInStock === null,
+    `status=${dueRow.status} arrived=${dueRow.arrivedAt} days=${dueRow.daysInStock}`);
+
+  const noDateMove = await ST.setStockStatus({ groupId: ZZ_GROUP, stockItemId: dueIn.id, status: 'in_prep' });
+  check('leaving DUE IN without saying when it arrived is REFUSED',
+    'refused' in noDateMove && /when it arrived/i.test(noDateMove.refused),
+    'otherwise its clock would start at the purchase date — the thing arrived_at exists to prevent');
+  const early = await ST.setStockStatus({
+    groupId: ZZ_GROUP, stockItemId: dueIn.id, status: 'in_prep',
+    arrivedAt: new Date('2020-01-01T12:00:00Z'),
+  });
+  check('  …and arriving BEFORE you bought it is refused', 'refused' in early);
+
+  const arrived = new Date(bought.getTime() + 3 * 86400000);
+  const moved = await ST.setStockStatus({ groupId: ZZ_GROUP, stockItemId: dueIn.id, status: 'in_prep', arrivedAt: arrived });
+  if ('refused' in moved) throw new Error(moved.refused);
+  dueRow = (await ST.stockList(ZZ_GROUP, new Date())).find((r) => r.stockItemId === dueIn.id);
+  check('once it arrives the clock starts, and starts from ARRIVAL',
+    dueRow.daysInStock === S.daysInStock(arrived, new Date()) && dueRow.daysInStock < S.daysInStock(bought, new Date()),
+    `${dueRow.daysInStock} days on the forecourt vs ${S.daysInStock(bought, new Date())} owned`);
+  const sentBack = await ST.setStockStatus({ groupId: ZZ_GROUP, stockItemId: dueIn.id, status: 'due_in' });
+  check('sending it BACK to due in clears the arrival date',
+    'id' in sentBack
+      && (await ST.stockList(ZZ_GROUP, new Date())).find((r) => r.stockItemId === dueIn.id).arrivedAt === null,
+    'a stale arrival date keeps a clock running on a forecourt the car has left');
+  await ST.setStockStatus({ groupId: ZZ_GROUP, stockItemId: dueIn.id, status: 'advertised', arrivedAt: arrived });
+
+  console.log('\n— tabs and counts —');
+  const all = await ST.stockList(ZZ_GROUP, new Date());
+  const counts = SL.tabCounts(all);
+  check('every car lands in exactly one tab',
+    Object.values(counts).reduce((a, b) => a + b, 0) === all.length,
+    `${JSON.stringify(counts)} over ${all.length} cars`);
+  check('the advertised car is in Advertised', SL.tabFor(all.find((r) => r.stockItemId === dueIn.id)) === 'advertised');
+  check('GONE WINS over status — a sold car counted as advertised would be the defect',
+    SL.tabFor({ status: 'advertised', disposalKind: 'sold' }) === 'gone');
+  check('an unrecognised status shows SOMEWHERE rather than vanishing from every tab',
+    SL.tabFor({ status: 'nonsense-status', disposalKind: null }) === 'in_prep');
+  /**
+   * THE BUBBLE DOES NOT MOVE WHEN YOU SEARCH — driven through the real page, because the rule lives
+   * in what the component hands to tabCounts, and a pure-function clause cannot see that choice.
+   * Measured: wiring the page to count the filtered rows scored 0 failures against the suite.
+   */
+  await page.goto(`${gateOrigin()}/admin/stock`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stock-tabs"]', { timeout: 25000 });
+  await page.click('[data-testid="tab-advertised"]');
+  const bubbleBefore = (await page.textContent('[data-testid="count-advertised"]')).trim();
+  const rowsBefore = (await page.$$('[data-testid^="stock-row-"]')).length;
+  /**
+   * A SEARCH THAT MATCHES NOTHING, deliberately. Searching for the advertised car itself cannot see
+   * the defect: it is the only advertised car, so a bubble that DID follow the search would still
+   * read 1. A term that matches no car drives every filtered count to zero, so the bubble holding its
+   * value is the whole assertion. Measured: with the car's own plate, the mutation scored 0 failures.
+   */
+  await page.fill('[data-testid="stock-search"]', 'ZZNOSUCHCARATALL');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid^="stock-row-"]').length === 0,
+    null, { timeout: 15000 });
+  const bubbleAfter = (await page.textContent('[data-testid="count-advertised"]')).trim();
+  const rowsAfter = (await page.$$('[data-testid^="stock-row-"]')).length;
+  check('the bubble counts the WHOLE YARD and does not move when you search',
+    bubbleBefore === bubbleAfter,
+    `${bubbleBefore} → ${bubbleAfter} while the list went ${rowsBefore} → ${rowsAfter}`);
+  check('  …while the list itself really did empty, so the clause above is not vacuous',
+    rowsAfter === 0 && rowsBefore > 0, `${rowsBefore} → ${rowsAfter}`);
+  check('  …and the header says "N of M", so the two numbers are visibly different',
+    /\d+ of \d+ in /.test((await page.textContent('[data-testid="stock-summary"]')) ?? ''),
+    ((await page.textContent('[data-testid="stock-summary"]')) ?? '').trim());
+  await page.fill('[data-testid="stock-search"]', '');
+  check('a car with NO projection still counts in its bubble',
+    SL.tabCounts([{ status: 'in_prep', disposalKind: null, projectedSalePence: null, projectedProfitPence: null,
+      registration: 'X', description: null, acquiredAt: '2026-01-01', daysInStock: 1, purchasePence: 1, prepPence: 0, vatStatus: 'margin' }]).in_prep === 1,
+    'a bubble counts cars in a state, which every car has');
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  //  THE SOLD REPORT — the denominator is cars SOLD
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— sales only, and the average says over what —');
+  const soldRows = [
+    { stockItemId: 'a', registration: 'A', disposedAt: new Date('2026-05-01'), kind: 'sold',
+      salePence: 400000, purchasePence: 214300, costsPence: 20000, daysInStock: 30 },
+    { stockItemId: 'b', registration: 'B', disposedAt: new Date('2026-05-10'), kind: 'sold',
+      salePence: 300000, purchasePence: 200000, costsPence: 0, daysInStock: 60 },
+    { stockItemId: 'c', registration: 'C', disposedAt: new Date('2026-05-20'), kind: 'scrapped',
+      salePence: null, purchasePence: 150000, costsPence: 5000, daysInStock: 200 },
+  ];
+  const sum = SS.summariseSold(soldRows);
+  check('a SCRAPPED car is not a sale', sum.sold === 2 && sum.disposals === 3 && sum.nonSales === 1);
+  check('revenue counts only the sales', sum.revenuePence === 700000);
+  check('profit is sale minus purchase minus FROZEN costs',
+    sum.profitPence === (400000 - 214300 - 20000) + (300000 - 200000 - 0), `${sum.profitPence}p`);
+  check('THE DENOMINATOR IS CARS SOLD, not cars disposed',
+    sum.avgProfitPence === Math.round(sum.profitPence / 2),
+    'dividing by 3 would drag the average down as though a scrapped car were a bad sale');
+  check('  …and the scrapped car’s 200 days do not enter the average either',
+    sum.avgDaysInStock === 45, `${sum.avgDaysInStock} — (30 + 60) / 2`);
+  check('  …and the denominator is stated ON THE FACE OF IT',
+    /over the 2 cars SOLD/.test(SS.denominatorNote(sum)) && /1 other car left without being sold/.test(SS.denominatorNote(sum)),
+    SS.denominatorNote(sum));
+  check('nothing sold gives NULL averages, never £0',
+    SS.summariseSold([]).avgProfitPence === null && SS.summariseSold([]).avgDaysInStock === null,
+    '£0 would read as "we sold cars and made nothing"');
+  check('a sold car with NO arrival date is counted, not averaged in at its purchase date',
+    (() => { const x = SS.summariseSold([{ ...soldRows[0], daysInStock: null }]);
+             return x.avgDaysInStock === null && x.daysUnknown === 1; })(),
+    'and the note says so rather than quietly covering fewer cars than it claims');
+  check('traded out IS a sale; scrapped, returned and own use are not',
+    SS.isSaleKind('sold') && SS.isSaleKind('traded_out')
+      && !SS.isSaleKind('scrapped') && !SS.isSaleKind('returned') && !SS.isSaleKind('own_use'));
+
+  console.log('\n— the period vocabulary is the dashboard’s own —');
+  const api = readFileSync('pages/api/stock.ts', 'utf8');
+  check('the sold report resolves its period through lib/dashboard-periods',
+    /resolveRange\(/.test(api) && /from '@\/lib\/dashboard-periods'/.test(api),
+    'a second period vocabulary would drift and the two screens would disagree about "last quarter"');
+  check('  …and reads the tenant’s OWN financial year, not a default April',
+    hasKey(api, 'fy_start_month', 'true') && /g\?\.fy_start_month \?\? 4/.test(api),
+    'a cast onto the tax profile compiled fine and would have given every tenant an April year-end');
+  check('all_time is the one addition, and it is a STOCK preset not a dashboard one',
+    SS.SOLD_EXTRA_PRESET === 'all_time' && !/all_time/.test(readFileSync('lib/dashboard-periods.ts', 'utf8')),
+    'every dashboard preset assumes enough history for a month to mean something');
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

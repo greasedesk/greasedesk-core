@@ -16,13 +16,18 @@
  *   on a ROW     it reads blank. £0 would say "this car makes nothing".
  */
 import { normalizeReg } from '@/lib/vehicle-identity';
+import { STOCK_TABS, type StockTab } from '@/lib/stock';
 
 /** Only what the list needs. Structural, so the page's row type and the store's both satisfy it. */
 export type StockRowLike = {
   registration: string;
   description: string | null;
   acquiredAt: string;
-  daysInStock: number;
+  status: string;
+  /** NULL when the car has not arrived — never 0. */
+  daysInStock: number | null;
+  /** Set once the car has gone. Its kind is shown on the row; see the Gone tab. */
+  disposalKind?: string | null;
   purchasePence: number;
   prepPence: number;
   vatStatus: string;
@@ -81,7 +86,7 @@ const valueOf = (r: StockRowLike, k: SortKey): string | number | null => {
   switch (k) {
     case 'registration': return r.registration;
     case 'acquiredAt': return r.acquiredAt;
-    case 'daysInStock': return r.daysInStock;
+    case 'daysInStock': return r.daysInStock;   // null sorts LAST — a car not yet here has no answer
     case 'purchasePence': return r.purchasePence;
     case 'prepPence': return r.prepPence;
     case 'investedPence': return r.purchasePence + r.prepPence;
@@ -128,4 +133,36 @@ export function matchStock(r: StockRowLike, query: string): boolean {
   const plate = normalizeReg(q);
   if (plate && normalizeReg(r.registration)?.includes(plate)) return true;
   return (r.description ?? '').toLowerCase().includes(q.toLowerCase());
+}
+
+
+/**
+ * ── WHICH TAB A CAR IS IN ───────────────────────────────────────────────────────────────────────
+ *
+ * GONE WINS over status. A disposed car keeps whatever status it last had — nothing rewrites it, and
+ * rewriting it would destroy the record of what it was doing when it left — so "has it gone" is asked
+ * first. Otherwise a car sold off the Advertised tab would go on being counted as advertised.
+ */
+export function tabFor(r: StockRowLike): StockTab {
+  if (r.disposalKind) return 'gone';
+  return (STOCK_TABS as readonly string[]).includes(r.status) && r.status !== 'gone'
+    ? (r.status as StockTab)
+    : 'in_prep';   // an unrecognised status shows SOMEWHERE rather than vanishing from every tab
+}
+
+/**
+ * ── THE BUBBLE COUNTS THE WHOLE YARD, ALWAYS ────────────────────────────────────────────────────
+ *
+ * Deliberately computed from the UNFILTERED rows. A tab count that changes when you search is
+ * answering a different question from the one you asked it: the bubble says how many cars are in a
+ * state, and the list says which of those match what you typed. The list header reports "N of M" so
+ * the two numbers are visibly different rather than silently disagreeing.
+ *
+ * EVERY CAR COUNTS, including one with no projection. A bubble counts cars in a state, which every
+ * car has; a projection is a separate optional fact, and the tiles already name that gap separately.
+ */
+export function tabCounts(allRows: StockRowLike[]): Record<StockTab, number> {
+  const out = Object.fromEntries(STOCK_TABS.map((t) => [t, 0])) as Record<StockTab, number>;
+  for (const r of allRows) out[tabFor(r)] += 1;
+  return out;
 }

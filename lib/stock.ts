@@ -24,6 +24,69 @@ import { VAT_FRACTION_DIVISOR } from '@/lib/stock-vat-fraction';
  * on the disposal and why a book that assumed "left stock" meant "sold" would be wrong three times
  * out of five.
  */
+/**
+ * ── WHERE A CAR IS IN ITS LIFE ──────────────────────────────────────────────────────────────────
+ *
+ * EXPLICIT, never derived. "This is advertised now" is a fact a dealer states; inferring it from a
+ * projected price being set would mean typing an estimate silently advertises a car. A car that moves
+ * state because somebody did something unrelated is worse than one sitting in the wrong tab — the
+ * wrong tab is visible and the spontaneous move is not.
+ *
+ * SOLD IS NOT HERE. A sold car is one with a StockDisposal, which is already a fact with a date and a
+ * freeze. Two sources for "is it sold" would eventually disagree.
+ */
+export const STOCK_STATUSES = ['due_in', 'in_prep', 'advertised', 'reserved'] as const;
+export type StockStatus = (typeof STOCK_STATUSES)[number];
+
+export const STOCK_STATUS_LABELS: Record<StockStatus, string> = {
+  due_in: 'Due in',
+  in_prep: 'In prep',
+  advertised: 'Advertised',
+  reserved: 'Reserved',
+};
+
+export const isStockStatus = (v: unknown): v is StockStatus =>
+  (STOCK_STATUSES as readonly string[]).includes(String(v));
+
+/** The tabs, in the order a car moves through them. `gone` is disposal, not a status. */
+export const STOCK_TABS = [...STOCK_STATUSES, 'gone'] as const;
+export type StockTab = (typeof STOCK_TABS)[number];
+export const STOCK_TAB_LABELS: Record<StockTab, string> = { ...STOCK_STATUS_LABELS, gone: 'Gone' };
+
+/**
+ * ── THE ONE CLOCK ───────────────────────────────────────────────────────────────────────────────
+ *
+ * WHEN DID THIS CAR START COSTING ME FORECOURT TIME? Not when I bought it — a car sitting at Manheim
+ * for a week has not been on the forecourt for a week, and counting from purchase makes an auction's
+ * collection queue look like slow retail.
+ *
+ * Falls back to the purchase date when nothing says otherwise, which is what keeps this change from
+ * moving a single existing car: arrived_at was added nullable and never backfilled.
+ *
+ * RETURNS NULL FOR A CAR THAT HAS NOT ARRIVED. Not zero — zero says "it arrived today and has been
+ * here no time", which is a claim about a car that is still on somebody else's site. Honest null, and
+ * every reader has to say what it shows instead.
+ *
+ * THIS IS NOT THE BOOK'S CLOCK. The book reads acquired_at, because ownership starts at purchase
+ * whether or not the car is on your premises — see stockBook and sectionFor. Two clocks, deliberately,
+ * answering two questions: what do I own, and what is costing me space.
+ */
+export function stockClock(item: {
+  acquiredAt: Date; arrivedAt?: Date | null; status?: string | null;
+}): Date | null {
+  if (item.status === 'due_in' && !item.arrivedAt) return null;
+  return item.arrivedAt ?? item.acquiredAt;
+}
+
+/** Days on the forecourt. NULL when the car has not arrived — see stockClock. */
+export function daysOnForecourt(
+  item: { acquiredAt: Date; arrivedAt?: Date | null; status?: string | null },
+  asOf: Date,
+): number | null {
+  const from = stockClock(item);
+  return from === null ? null : daysInStock(from, asOf);
+}
+
 export const DISPOSAL_KINDS = ['sold', 'traded_out', 'scrapped', 'returned', 'own_use'] as const;
 export type DisposalKind = (typeof DISPOSAL_KINDS)[number];
 

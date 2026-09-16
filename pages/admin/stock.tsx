@@ -18,15 +18,20 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCES, SOURCE_RULES, VAT_STATUSES, availableVatStatuses, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
 // LEAF import — lib/stock reaches no database, so this cannot ship Prisma to the browser.
-import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import {
-  DEFAULT_SORT, matchStock, sortStock, stockTotals, type SortDir, type SortKey,
+  DISPOSAL_LABELS, LABOUR_AT_ZERO_NOTE, STOCK_TABS, STOCK_TAB_LABELS, type DisposalKind, type StockTab,
+} from '@/lib/stock';
+import {
+  DEFAULT_SORT, matchStock, sortStock, stockTotals, tabCounts, tabFor, type SortDir, type SortKey,
 } from '@/lib/stock-list';
+import { denominatorNote } from '@/lib/stock-sold';
 import { isReacquisition, priorSaleNotice, raisesCreditNote } from '@/lib/stock-reacquisition';
 
 type Row = {
   stockItemId: string; vehicleId: string; registration: string; description: string | null;
-  acquiredAt: string; daysInStock: number; purchasePence: number; vatStatus: string; source: string;
+  acquiredAt: string; arrivedAt: string | null; status: string;
+  daysInStock: number | null; purchasePence: number; vatStatus: string; source: string;
+  disposalKind: string | null; disposedAt: string | null; salePence: number | null;
   prepPence: number; prepUnknownLines: number; prepCards: number;
   projectedSalePence: number | null; projectedProfitPence: number | null;
 };
@@ -74,12 +79,35 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
   const [priorState, setPriorState] = useState<'idle' | 'asking' | 'done'>('idle');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>(DEFAULT_SORT);
+  const [tab, setTab] = useState<StockTab>('in_prep');
+  const [soldPreset, setSoldPreset] = useState('this_fy');
+  const [sold, setSold] = useState<null | {
+    summary: { disposals: number; sold: number; revenuePence: number; profitPence: number;
+      avgProfitPence: number | null; avgDaysInStock: number | null; daysUnknown: number; nonSales: number };
+    from: string; to: string;
+  }>(null);
 
   const load = useCallback(async () => {
     const res = await fetch('/api/stock');
     setRows(res.ok ? (await res.json()).stock : []);
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  /**
+   * THE SOLD REPORT, fetched only when the Gone tab is open. Its figures froze at disposal and the
+   * period keys on disposed_at, so the same period asked twice gives the same answer — which is what
+   * the freeze was for.
+   */
+  useEffect(() => {
+    if (tab !== 'gone') return;
+    let live = true;
+    void (async () => {
+      const res = await fetch(`/api/stock?sold=1&preset=${encodeURIComponent(soldPreset)}`);
+      const body = await res.json().catch(() => null);
+      if (live) setSold(res.ok && body ? body : null);
+    })();
+    return () => { live = false; };
+  }, [tab, soldPreset]);
 
   // ONLY WHAT THIS SOURCE CAN PRODUCE — the same rule as the purchase model, from the same reader, so
   // a private purchase cannot be recorded as VAT qualifying here either.
@@ -186,11 +214,27 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
    * table renders, so a tile can never describe a set the reader is not looking at — searching for
    * one car retotals to that car. lib/stock-list decides what a missing projection does to each.
    */
+  /**
+   * THE BUBBLE COUNTS THE WHOLE YARD — from the UNFILTERED rows, so a tab count never moves when you
+   * search. The list header says "N of M" instead, which makes the two numbers visibly different
+   * rather than silently disagreeing about what they mean.
+   */
+  const counts = useMemo(() => tabCounts(rows ?? []), [rows]);
+  /** What the table shows: this tab, narrowed by the search, sorted. */
   const shown = useMemo(
-    () => sortStock((rows ?? []).filter((r) => matchStock(r, query)), sort.key, sort.dir),
-    [rows, query, sort],
+    () => sortStock((rows ?? []).filter((r) => tabFor(r) === tab && matchStock(r, query)), sort.key, sort.dir),
+    [rows, tab, query, sort],
   );
-  const totals = useMemo(() => stockTotals(shown), [shown]);
+  /** How many are in this tab before the search — the denominator in "N of M". */
+  const inTab = useMemo(() => (rows ?? []).filter((r) => tabFor(r) === tab).length, [rows, tab]);
+  /**
+   * THE TILES ARE THE YARD, NOT THE TAB. Cars you OWN, every tab of them, narrowed only by the search.
+   * Following the tab would make "capital invested" mean "capital invested in advertised cars", and
+   * would stop the tile showing money already spent on cars you cannot see yet — which is the one
+   * thing it exists to say. A gone car is excluded: capital in a car you have sold is not capital.
+   */
+  const owned = useMemo(() => (rows ?? []).filter((r) => !r.disposalKind && matchStock(r, query)), [rows, query]);
+  const totals = useMemo(() => stockTotals(owned), [owned]);
 
   /**
    * A SORTABLE HEADER. Clicking a column sorts by it; clicking the same one again reverses. A new
@@ -231,8 +275,30 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
         </div>
         {rows && rows.length > 0 && (
           <p className="mt-1 text-sm text-muted" data-testid="stock-summary">
-            {shown.length} of {rows.length} {rows.length === 1 ? 'car' : 'cars'} in stock.
+            {query.trim()
+              ? <>{shown.length} of {inTab} in {STOCK_TAB_LABELS[tab]}.</>
+              : <>{inTab} in {STOCK_TAB_LABELS[tab]}.</>}
           </p>
+        )}
+
+        {/* ── THE TABS, each with a WHOLE-YARD count ─────────────────────────────────────────
+            The bubble never moves when you search. It answers "how many cars are in this state"; the
+            list header answers "how many of those match what I typed". */}
+        {rows && rows.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5" data-testid="stock-tabs" role="tablist">
+            {STOCK_TABS.map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={tab === k}
+                data-testid={`tab-${k}`} onClick={() => setTab(k)}
+                className={`min-h-[40px] px-3 rounded-lg border text-sm inline-flex items-center gap-2 ${
+                  tab === k ? 'bg-accent text-white border-accent font-semibold' : 'bg-surface border-line text-ink'}`}>
+                {STOCK_TAB_LABELS[k]}
+                <span data-testid={`count-${k}`}
+                  className={`text-xs rounded-full px-1.5 py-0.5 tabular-nums ${tab === k ? 'bg-white/25' : 'bg-surface-muted text-muted'}`}>
+                  {counts[k]}
+                </span>
+              </button>
+            ))}
+          </div>
         )}
 
         {/* ── SEARCH ───────────────────────────────────────────────────────────────────────── */}
@@ -242,16 +308,86 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
             className="mt-3 w-full sm:max-w-sm min-h-[44px] p-2 bg-surface border border-line rounded-lg text-ink" />
         )}
 
+        {/* ── THE SOLD DASHBOARD, on the Gone tab only ────────────────────────────────────────
+            The four yard tiles answer "what am I holding"; on Gone that question has no meaning, so
+            this replaces them rather than sitting beside them. Periods come from the SAME
+            lib/dashboard-periods vocabulary the main dashboard uses, plus all-time. */}
+        {tab === 'gone' && (
+          <section className="mt-3" data-testid="sold-dashboard">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm text-muted">Period
+                <select value={soldPreset} onChange={(e) => setSoldPreset(e.target.value)}
+                  data-testid="sold-period"
+                  className="ml-2 min-h-[40px] p-2 bg-surface border border-line rounded-lg text-ink">
+                  <option value="this_month">This month</option>
+                  <option value="last_month">Last month</option>
+                  <option value="this_quarter">This quarter</option>
+                  <option value="last_quarter">Last quarter</option>
+                  <option value="this_fy">This financial year</option>
+                  <option value="last_fy">Last financial year</option>
+                  <option value="rolling_12">Last 12 months</option>
+                  <option value="all_time">All time</option>
+                </select>
+              </label>
+            </div>
+            {sold && (
+              <>
+                <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="rounded-xl border border-line bg-surface p-3" data-testid="sold-revenue">
+                    <p className="text-xs text-muted">Revenue</p>
+                    <p className="text-xl font-bold text-ink tabular-nums">{money(sold.summary.revenuePence)}</p>
+                    <p className="text-[11px] text-muted">{sold.summary.sold} sold.</p>
+                  </div>
+                  <div className="rounded-xl border border-line bg-surface p-3" data-testid="sold-profit">
+                    <p className="text-xs text-muted">Gross profit</p>
+                    <p className={`text-xl font-bold tabular-nums ${sold.summary.profitPence < 0 ? 'text-danger' : 'text-ink'}`}>
+                      {money(sold.summary.profitPence)}
+                    </p>
+                    <p className="text-[11px] text-muted">Before fixed monthly costs and tax.</p>
+                  </div>
+                  <div className="rounded-xl border border-line bg-surface p-3" data-testid="sold-avg-profit">
+                    <p className="text-xs text-muted">Profit per car</p>
+                    {/* NULL, not £0 — "nothing sold" and "sold at no profit" are different statements. */}
+                    <p className="text-xl font-bold text-ink tabular-nums">
+                      {sold.summary.avgProfitPence === null
+                        ? <span className="text-muted">—</span> : money(sold.summary.avgProfitPence)}
+                    </p>
+                    <p className="text-[11px] text-muted">Over cars SOLD, not cars that left.</p>
+                  </div>
+                  <div className="rounded-xl border border-line bg-surface p-3" data-testid="sold-avg-days">
+                    <p className="text-xs text-muted">Average days in stock</p>
+                    <p className="text-xl font-bold text-ink tabular-nums">
+                      {sold.summary.avgDaysInStock === null
+                        ? <span className="text-muted">—</span> : sold.summary.avgDaysInStock}
+                    </p>
+                    <p className="text-[11px] text-muted">From the day each car arrived.</p>
+                  </div>
+                </div>
+                {/* THE DENOMINATOR, ON THE FACE OF IT — not in a tooltip. It also names the cars that
+                    left without being sold, so the two counts can be reconciled by a reader. */}
+                <p className="mt-2 text-xs text-muted" data-testid="sold-denominator">
+                  {denominatorNote(sold.summary)}
+                </p>
+              </>
+            )}
+          </section>
+        )}
+
         {/* ── THE FOUR TILES ───────────────────────────────────────────────────────────────────
             Capital is a FACT and covers every car. The two expectation tiles cover only the cars
             somebody has priced, and the fourth tile is what makes that legible: a figure resting on
             estimates that does not say how many cars have none will be read as covering the yard. */}
-        {rows && rows.length > 0 && (
+        {rows && rows.length > 0 && tab !== 'gone' && (
           <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="stock-tiles">
             <div className="rounded-xl border border-line bg-surface p-3" data-testid="tile-capital">
               <p className="text-xs text-muted">Capital invested</p>
               <p className="text-xl font-bold text-ink tabular-nums">{money(totals.capitalPence)}</p>
-              <p className="text-[11px] text-muted">Paid for the cars, plus parts fitted. All {totals.cars}.</p>
+              {/* IT INCLUDES CARS THAT HAVE NOT ARRIVED, and says so: the money has gone whether or
+                  not the car has. Quietly excluding them would understate what is tied up. */}
+              <p className="text-[11px] text-muted">
+                Paid for the cars, plus parts fitted. All {totals.cars} you own
+                {counts.due_in > 0 && <>, including {counts.due_in} not yet arrived — the money has gone</>}.
+              </p>
             </div>
             <div className="rounded-xl border border-line bg-surface p-3" data-testid="tile-revenue">
               <p className="text-xs text-muted">Expected back when sold</p>
@@ -506,7 +642,7 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                   <Th k="investedPence">In it</Th>
                   <Th k="projectedSalePence">Back when sold</Th>
                   <Th k="projectedProfitPence">Projected profit</Th>
-                  <Th k="vatStatus" align="left" pad>VAT</Th>
+                  <Th k="vatStatus" align="left" pad>{tab === 'gone' ? 'How it went' : 'VAT'}</Th>
                 </tr>
               </thead>
               <tbody>
@@ -523,9 +659,11 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                     {/* THE NUMBER THAT TURNS INTO MONEY. Emphasised past 90 days rather than coloured
                         by a threshold nobody chose — 90 is three advertising slot-months and a quarter
                         of a year's interest, which is where a garage starts to feel it. */}
-                    <td className={`py-2 text-right tabular-nums ${r.daysInStock >= 90 ? 'text-danger font-semibold' : 'text-ink'}`}
+                    {/* NULL = the car has not arrived. Shown as "—", never 0: a zero would claim it
+                        got here today, about a car still on somebody else's site. */}
+                    <td className={`py-2 text-right tabular-nums ${r.daysInStock !== null && r.daysInStock >= 90 ? 'text-danger font-semibold' : 'text-ink'}`}
                       data-testid={`days-${r.registration}`}>
-                      {r.daysInStock}
+                      {r.daysInStock === null ? <span className="text-muted" title="Not arrived yet">—</span> : r.daysInStock}
                     </td>
                     <td className="py-2 text-right text-ink tabular-nums">{money(r.purchasePence)}</td>
                     {/* PARTS AT TRADE COST from prep cards linked to this car. Labour is absent because
@@ -552,7 +690,13 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                         ? <span className="text-muted">—</span>
                         : <span className={r.projectedProfitPence > 0 ? 'text-ink font-medium' : 'text-danger font-semibold'}>{money(r.projectedProfitPence)}</span>}
                     </td>
-                    <td className="py-2 pl-3 text-muted">{r.vatStatus === 'margin' ? 'Margin' : 'Qualifying'}</td>
+                    {/* ON THE GONE TAB the useful last column is HOW it went, not its VAT route:
+                        scrapped, returned and own-use are not sales and must not read as one. */}
+                    <td className="py-2 pl-3 text-muted" data-testid={`last-${r.registration}`}>
+                      {tab === 'gone'
+                        ? (DISPOSAL_LABELS[r.disposalKind as DisposalKind] ?? r.disposalKind ?? '—')
+                        : (r.vatStatus === 'margin' ? 'Margin' : 'Qualifying')}
+                    </td>
                   </tr>
                 ))}
               </tbody>

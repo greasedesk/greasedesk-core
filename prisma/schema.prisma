@@ -5237,9 +5237,33 @@ model StockItem {
   /// The car's identity. Vehicle is identity-only since the weld was retired, which is exactly what
   /// makes it safe to point at from here without implying a customer.
   vehicle_id String
-  /// WHEN IT BECAME STOCK. The book's period boundary reads this, so it is a date the garage states
-  /// rather than a created_at they cannot correct.
+  /// WHEN YOU BOUGHT IT — when it became YOURS. The book's period boundary reads this and must go on
+  /// reading it: ownership starts at purchase whether or not the car is on your premises, so a car
+  /// bought 30 March and collected 2 April belongs in the March book. A date the garage states rather
+  /// than a created_at they cannot correct.
+  ///
+  /// NOT RENAMED when arrived_at arrived (2026-09-16). A rename would have moved the book.
   acquired_at DateTime
+  /// WHEN IT TURNED UP. NULL = not yet — bought at auction Tuesday, arriving Friday, possibly not yet
+  /// paid for. DAYS IN STOCK COUNTS FROM HERE, because a car sitting at Manheim for a week has not
+  /// been on the forecourt for a week.
+  ///
+  /// Nullable and NOT backfilled: existing rows fall back to acquired_at through one reader
+  /// (lib/stock::stockClock), so nothing already recorded changes its days-in-stock by a single day.
+  arrived_at  DateTime? @db.Date
+  /// WHERE THE CAR IS IN ITS LIFE — due_in | in_prep | advertised | reserved. EXPLICIT, never derived:
+  /// "this is advertised now" is a fact a dealer states, and inferring it from a projected price being
+  /// set would mean typing an estimate silently advertises a car. A car that moves state because
+  /// somebody did something unrelated is worse than one sitting in the wrong tab, because the wrong
+  /// tab is visible and the spontaneous move is not.
+  ///
+  /// SOLD IS NOT ONE OF THESE. A sold car is one with a StockDisposal — a fact with a date and a
+  /// freeze already. Two sources for "is it sold" would eventually disagree.
+  ///
+  /// Defaulted to in_prep so the five rows that existed when this column landed read as what they
+  /// were: arrived, not yet advertised. A DEFAULT on ADD COLUMN needs no UPDATE, which is what keeps
+  /// the migration additive.
+  status      String   @default("in_prep")
   /// WHAT WAS PAID FOR THE CAR ITSELF. The margin is measured from this and nothing else.
   purchase_pence Int
   /// CAPTURED AT PURCHASE AND NEVER RE-READ. A car bought under the margin scheme stays a margin car
