@@ -120,7 +120,9 @@ try {
     'lib/credit-note.ts | series === \'chargeable\'': [1, 'LATER — declared-supply rule moves into the module in step 4 (credit notes)'],
     'lib/invoice-list-filters.ts | series: \'warranty\'': [1, 'KIND — the list filter NAMED warranty'],
     'lib/invoice-list-filters.ts | series: \'historical\'': [1, 'KIND — the list filter NAMED historical'],
-    'lib/vat-summary.ts | series: \'chargeable\'': [2, 'LATER — the VAT output rule moves into the module in step 3, with vat_position'],
+    // The invoice query's literal went in step 3 (VAT_RETURN_TREATMENT decides every invoice now); this one
+    // joins CREDIT NOTES to the invoices they correct, and moves with credit notes in step 4.
+    'lib/vat-summary.ts | series: \'chargeable\'': [1, 'LATER — the credit-note join; moves with credit notes in step 4'],
     'lib/invoice-issue.ts | series: \'chargeable\'': [2, 'KIND — the chargeable mint naming the series it is about to issue; and a parameter TYPE'],
     'lib/invoice-issue.ts | series === \'warranty\'': [1, 'KIND — the warranty goodwill freeze; a car sale freezes its one line like chargeable work'],
     'pages/admin/settings/invoicing.tsx | series: \'warranty\'': [1, 'KIND — has the WARRANTY counter been used'],

@@ -159,6 +159,15 @@ export type BookRow = {
  */
 export function bookRow(args: {
   purchasePence: number;
+  /**
+   * WHAT ELSE IS PART OF THE PRICE OF THE GOODS — the buyer's premium, from
+   * lib/purchase-model::marginBaseFeePence. REQUIRED with no default, like vatStatus: the book used to
+   * measure the margin from the purchase price alone and overstated an auction car's margin VAT by a
+   * sixth of its premium. Zero is a stated answer (a private seller invoices none), not an omission.
+   * Part of the PRICE, never preparation — this signature still cannot see what went into the car
+   * after it was bought.
+   */
+  inMarginBasePence: number;
   /** WHICH SCHEME THE CAR WAS BOUGHT UNDER. No default — see vatPositionFor. */
   vatStatus: VatStatus;
   disposal: { kind: DisposalKind; salePence: number | null } | null;
@@ -173,7 +182,7 @@ export function bookRow(args: {
     // supply whose value we cannot state, and stating one would be worse than the gap.
     return { marginPence: null, vatDuePence: null, vatPosition: position, inStock: false };
   }
-  const margin = sale - args.purchasePence;
+  const margin = sale - args.purchasePence - args.inMarginBasePence;
   return {
     marginPence: margin,
     /**

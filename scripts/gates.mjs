@@ -181,6 +181,7 @@ const TIERS = {
     'sale-invoice-gate',
     'car-sale-gate',
     'series-scope-gate',
+    'vat-sales-gate',
     'redaction-gate',
     'stock-gate',
     'sms-sends-gate', 'sms-suffix-gate', 'spine-gate', 'status-union-gate', 'tenant-scope-gate',

@@ -215,6 +215,20 @@ export type FeePosition = {
  * profile on every render — persisting it into a saved model would freeze a fact about the business
  * inside a document about a car, and it would be wrong the day they registered.
  */
+/**
+ * WHAT A FEE ADDS TO THE PRICE THE MARGIN IS MEASURED FROM. The buyer's premium, and only the premium —
+ * HMRC Notice 718/1 treats it as part of the price of the goods, VAT inside and not reclaimable. A
+ * source whose invoice cannot carry a premium contributes nothing, whatever a stale field says.
+ *
+ * ONE RULE, TWO READERS: feePosition below (the purchase model) and lib/stock::bookRow (the stock book,
+ * and through it the VAT summary's margin-scheme section). The book used to measure margin from the
+ * purchase price ALONE, so an auction car's margin VAT was overstated by a sixth of its premium — latent
+ * only because nothing showed the book until the VAT summary did.
+ */
+export function marginBaseFeePence(source: PurchaseSource, premiumPence: number): number {
+  return hasFeeSlot(source, 'premium') ? Math.max(0, Math.round(premiumPence)) : 0;
+}
+
 export function feePosition(
   source: PurchaseSource,
   fees: { premiumPence: number; servicesPence: number },
@@ -222,7 +236,7 @@ export function feePosition(
 ): FeePosition {
   // A FIGURE FOR A FEE THIS INVOICE CANNOT CARRY IS NOT A COST. It is a stale field from a changed
   // answer — a private seller invoices no premium — and reading it would be inventing money.
-  const premium = hasFeeSlot(source, 'premium') ? Math.max(0, Math.round(fees.premiumPence)) : 0;
+  const premium = marginBaseFeePence(source, fees.premiumPence);
   // GROSS, like every other money field. It was typed NET until 2026-09-13, which made this the one
   // field on the page asking for a different kind of number — so the VAT is now EXTRACTED (÷ 6) rather
   // than ADDED (× 0.2). One direction of arithmetic everywhere.

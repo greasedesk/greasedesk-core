@@ -27,8 +27,7 @@
  * question has been given an answer for it. A `not:` or a list naming only the included series
  * would let it arrive silently on whichever side the author did not think about.
  *
- * Still to move here, deliberately in later steps: the VAT return's output rule (step 3, which also
- * needs vat_position) and credit notes' declared-supply rule (step 4).
+ * Still to move here, deliberately in a later step: credit notes' declared-supply rule.
  */
 import type { InvoiceSeriesName } from '@/lib/invoice-number';
 
@@ -80,6 +79,48 @@ export const USES_CHARGEABLE_COUNTER: SeriesRule = { chargeable: true, warranty:
  * never quoted — for a sale card this is one of two independent reasons divergence is null.
  */
 export const TRACKS_AGREED_QUOTE: SeriesRule = { chargeable: true, warranty: false, historical: false, vehicle_sale: false };
+
+/**
+ * ── THE VAT SUMMARY: HOW EACH INVOICE IS DECLARED ───────────────────────────────────────────────
+ *
+ * Not a yes/no, because the answer for a car sale depends on the car, not the series. Read from
+ * Invoice.vat_position — frozen at issue — never from the series (a margin car and a qualifying one are
+ * both vehicle_sale) and never from a line's VAT rate (a margin line is 0%, and so is zero-rated
+ * workshop work from a registered garage).
+ *
+ *   output_lines   the invoice's frozen lines enter the rate breakdown and the totals
+ *   margin_scheme  its lines stay OUT; VAT is on the margin, from the stock book, in its own section.
+ *                  Including the 0% lines would add the whole price as sales with no VAT — wrong twice
+ *   not_declared   not a supply this summary reports
+ *   unclassified   REFUSED VISIBLY: left out of every figure and named on the report, to be classified
+ *                  before the return is filed. Never defaulted to margin, which would under-declare a
+ *                  qualifying car, and never counted as lines.
+ *
+ * A Record over the series, so a fifth series must be answered here too.
+ */
+export type VatTreatment = 'output_lines' | 'margin_scheme' | 'not_declared' | 'unclassified';
+type VatFacts = { vatPosition: string | null | undefined; registeredAtIssue: boolean };
+
+export const VAT_RETURN_TREATMENT: Readonly<Record<InvoiceSeriesName, (f: VatFacts) => VatTreatment>> = {
+  // Workshop work, exactly as before: its lines are frozen with VAT gated by registration at issue.
+  chargeable: () => 'output_lines',
+  warranty: () => 'not_declared',     // settles at £0 goodwill — not a sale
+  historical: () => 'not_declared',   // declared under the previous system; never re-declared here
+  vehicle_sale: ({ vatPosition, registeredAtIssue }) => {
+    // A garage that was not registered cannot use the margin scheme and charged no VAT on the car.
+    if (!registeredAtIssue) return 'not_declared';
+    if (vatPosition === 'qualifying') return 'output_lines';
+    if (vatPosition === 'margin') return 'margin_scheme';
+    return 'unclassified';
+  },
+};
+
+/** The treatment of one invoice. An unknown SERIES is refused visibly too, not quietly skipped. */
+export function vatTreatment(series: string, facts: VatFacts): VatTreatment {
+  return Object.prototype.hasOwnProperty.call(VAT_RETURN_TREATMENT, series)
+    ? VAT_RETURN_TREATMENT[series as InvoiceSeriesName](facts)
+    : 'unclassified';
+}
 
 /** Every rule, by name — for the gate, which pins each answer and checks each is total. */
 export const SERIES_RULES = {

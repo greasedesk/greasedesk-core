@@ -10,7 +10,7 @@ import {
   DISPOSAL_KINDS, bookRow, daysInStock, daysOnForecourt, hasSalePrice, isStockStatus, sectionFor,
   vatPositionFor, type BookRow, type DisposalKind, type StockStatus,
 } from '@/lib/stock';
-import { SOURCES, VAT_STATUSES, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
+import { SOURCES, VAT_STATUSES, marginBaseFeePence, type PurchaseSource, type VatStatus } from '@/lib/purchase-model';
 import {
   firstRegisteredRefusal, motExpiryDecision, normaliseV5c, parseImportStatus, parseMiles,
   parseWarranted, vinAtIntake,
@@ -677,7 +677,7 @@ export async function stockBook(groupId: string, periodStart: Date, periodEnd: D
   const items = await prisma.stockItem.findMany({
     where: { group_id: groupId, acquired_at: { lte: periodEnd } },
     select: {
-      id: true, acquired_at: true, purchase_pence: true, vat_status: true,
+      id: true, acquired_at: true, purchase_pence: true, vat_status: true, source: true, premium_pence: true,
       vehicle: { select: { registration: true, make: true, model: true } },
       disposal: { select: { disposed_at: true, kind: true, sale_pence: true } },
       costs: { select: { amount_pence: true } },
@@ -702,7 +702,12 @@ export async function stockBook(groupId: string, periodStart: Date, periodEnd: D
       : null;
     // vat_status rides along because the SCHEME decides the basis, not just the kind — a qualifying
     // car owes VAT on the whole price, a margin car on the margin. See lib/stock::vatPositionFor.
-    const row = bookRow({ purchasePence: it.purchase_pence, vatStatus: it.vat_status as VatStatus, disposal: disposed });
+    const row = bookRow({
+      purchasePence: it.purchase_pence,
+      // THE PREMIUM IS PART OF THE PRICE OF THE GOODS — the purchase model's rule, not a second copy.
+      inMarginBasePence: marginBaseFeePence(it.source as PurchaseSource, it.premium_pence),
+      vatStatus: it.vat_status as VatStatus, disposal: disposed,
+    });
     const entry: BookEntry = {
       stockItemId: it.id,
       registration: it.vehicle?.registration ?? null,

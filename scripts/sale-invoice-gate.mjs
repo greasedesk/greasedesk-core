@@ -137,15 +137,15 @@ try {
     'the disposal kind alone used to decide this, and was wrong for every qualifying car');
 
   console.log('\n— TWO BASES, AND ONLY ONE OF THEM HAS A FLOOR —');
-  const marginProfit = S.bookRow({ purchasePence: 500_00, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 800_00 } });
-  const qualProfit = S.bookRow({ purchasePence: 500_00, vatStatus: 'qualifying', disposal: { kind: 'sold', salePence: 800_00 } });
+  const marginProfit = S.bookRow({ purchasePence: 500_00, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 800_00 } });
+  const qualProfit = S.bookRow({ purchasePence: 500_00, inMarginBasePence: 0, vatStatus: 'qualifying', disposal: { kind: 'sold', salePence: 800_00 } });
   check('a margin car owes a sixth of the MARGIN', marginProfit.vatDuePence === Math.round(300_00 / 6), gbp(marginProfit.vatDuePence));
   check('a qualifying car owes a sixth of the WHOLE PRICE', qualProfit.vatDuePence === Math.round(800_00 / 6), gbp(qualProfit.vatDuePence));
   check('  …so the two differ on the same sale', marginProfit.vatDuePence !== qualProfit.vatDuePence,
     `${gbp(marginProfit.vatDuePence)} vs ${gbp(qualProfit.vatDuePence)} — the old rule gave both the first figure`);
 
-  const marginLoss = S.bookRow({ purchasePence: 800_00, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 500_00 } });
-  const qualLoss = S.bookRow({ purchasePence: 800_00, vatStatus: 'qualifying', disposal: { kind: 'sold', salePence: 500_00 } });
+  const marginLoss = S.bookRow({ purchasePence: 800_00, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 500_00 } });
+  const qualLoss = S.bookRow({ purchasePence: 800_00, inMarginBasePence: 0, vatStatus: 'qualifying', disposal: { kind: 'sold', salePence: 500_00 } });
   check('a margin car at a loss owes nothing', marginLoss.vatDuePence === 0 && marginLoss.marginPence === -300_00,
     `${gbp(marginLoss.vatDuePence)} on a ${gbp(marginLoss.marginPence)} loss`);
   /**

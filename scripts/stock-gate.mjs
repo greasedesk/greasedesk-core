@@ -122,11 +122,22 @@ try {
   const row = q2.disposals.find((d) => d.stockItemId === taken.id);
   check('the car is in Q2 as a disposal', !!row, `${q2.disposals.length} disposal(s) in the quarter`);
   check('  …carrying £800 of frozen costs', row?.costsPence === 80000, gbp(row?.costsPence ?? -1));
-  check('  …and the margin is SALE MINUS PURCHASE, costs untouched', row?.marginPence === 400000 - 125000,
-    `${gbp(row?.marginPence ?? 0)} = ${gbp(400000)} − ${gbp(125000)}, with ${gbp(row?.costsPence ?? 0)} of prep on the car`);
+  /**
+   * CORRECTED 2026-09-16. This read "SALE MINUS PURCHASE", and it was half right: prep must never move the
+   * margin, and that is still the point. But this car was bought at AUCTION with a £265.20 buyer's premium,
+   * and HMRC 718/1 treats the premium as part of the price of the goods — which the purchase model already
+   * did and the book did not, so the book overstated this car's margin VAT by £44.20. The premium now enters
+   * the margin base through ONE rule (lib/purchase-model::marginBaseFeePence). The £81.60 of indemnities do
+   * NOT: they are a separate reclaimable service, never part of the price.
+   */
+  const priceOfGoods = 125000 + 26520;
+  check('  …and the margin is SALE MINUS THE PRICE OF THE GOODS (premium in, prep out)', row?.marginPence === 400000 - priceOfGoods,
+    `${gbp(row?.marginPence ?? 0)} = ${gbp(400000)} − ${gbp(125000)} − ${gbp(26520)} premium, with ${gbp(row?.costsPence ?? 0)} of prep on the car and not in it`);
   check('  …so the VAT is a sixth of THAT, not of the margin after costs',
-    row?.vatDuePence === Math.round((400000 - 125000) / 6),
-    `${gbp(row?.vatDuePence ?? 0)} — netting prep off first would have said ${gbp(Math.round((400000 - 125000 - 80000) / 6))}, and understated the return`);
+    row?.vatDuePence === Math.round((400000 - priceOfGoods) / 6),
+    `${gbp(row?.vatDuePence ?? 0)} — netting prep off first would have said ${gbp(Math.round((400000 - priceOfGoods - 80000) / 6))}, and ignoring the premium ${gbp(Math.round((400000 - 125000) / 6))}`);
+  check('  …and the indemnities are NOT in the price of the goods', row?.marginPence !== 400000 - priceOfGoods - 8160,
+    'a separate, reclaimable service — in the margin base AND reclaimed would count it twice');
   check('  …and bookRow cannot see costs at all, by signature', (() => {
     const src = readFileSync('lib/stock.ts', 'utf8');
     const fn = src.slice(src.indexOf('export function bookRow'), src.indexOf('\n}', src.indexOf('export function bookRow')));
@@ -156,15 +167,15 @@ try {
 
   /** ── THE FLOOR IS A VAT RULE, AND THE BOOK STILL SHOWS THE LOSS ───────────────────────────── */
   console.log('\n— a loss-making car —');
-  const loser = S.bookRow({ purchasePence: 400000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } });
+  const loser = S.bookRow({ purchasePence: 400000, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } });
   check('the book shows the real loss', loser.marginPence === -100000, gbp(loser.marginPence));
   check('  …and no VAT is owed on it', loser.vatDuePence === 0, gbp(loser.vatDuePence));
   check('  …the floor is on the VAT, never on the reported margin', loser.marginPence < 0 && loser.vatDuePence === 0,
     'a book showing zero instead of −£1,000 would hide the thing this feature exists to surface');
   check('  …and two losses cannot offset a profit', (() => {
     const rows = [
-      S.bookRow({ purchasePence: 400000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } }),
-      S.bookRow({ purchasePence: 100000, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 400000 } }),
+      S.bookRow({ purchasePence: 400000, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 300000 } }),
+      S.bookRow({ purchasePence: 100000, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'sold', salePence: 400000 } }),
     ];
     const due = rows.reduce((a, r) => a + (r.vatDuePence ?? 0), 0);
     return due === Math.round(300000 / 6);
@@ -173,7 +184,7 @@ try {
   /** ── THREE OF THE FIVE WAYS OUT ARE NOT SALES ─────────────────────────────────────────────── */
   console.log('\n— how a car left, which is not always a sale —');
   for (const k of ['scrapped', 'returned']) {
-    const r = S.bookRow({ purchasePence: 125000, vatStatus: 'margin', disposal: { kind: k, salePence: null } });
+    const r = S.bookRow({ purchasePence: 125000, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: k, salePence: null } });
     check(`  …${k}: no supply, so no VAT and no margin`, r.vatPosition === 'none' && r.vatDuePence === null
       && r.marginPence === null, 'a scrapped car did not sell for nothing — it did not sell');
   }
@@ -203,7 +214,7 @@ try {
   check('a sale price handed to a SCRAPPED disposal is dropped', scrapRow?.sale_pence === null,
     `stored ${scrapRow?.sale_pence === null ? 'null' : scrapRow?.sale_pence} — a scrapped car did not sell for £500, it did not sell`);
 
-  const ownUse = S.bookRow({ purchasePence: 125000, vatStatus: 'margin', disposal: { kind: 'own_use', salePence: null } });
+  const ownUse = S.bookRow({ purchasePence: 125000, inMarginBasePence: 0, vatStatus: 'margin', disposal: { kind: 'own_use', salePence: null } });
   check('own use is recorded and marked UNSETTLED, with no figure', ownUse.vatPosition === 'unsettled'
     && ownUse.vatDuePence === null,
     'a deemed supply whose treatment we cannot state — any figure would be believed');

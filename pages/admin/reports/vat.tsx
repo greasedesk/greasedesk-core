@@ -13,6 +13,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { getVatSummary, type VatSummary } from '@/lib/vat-summary';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
+import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
 
 type PageProps = {
   summary: VatSummary; periodLabel: string; preset: string; from: string; to: string;
@@ -83,6 +84,18 @@ export default function VatReport(props: PageProps) {
           )}
         </div>
 
+        {/* ── REFUSED, VISIBLY — above the figures, because the figures are incomplete without them. ── */}
+        {summary.unclassified.length > 0 && (
+          <div className="bg-danger-soft border border-danger rounded-xl p-4 mb-5 text-sm text-danger" data-testid="vat-unclassified">
+            <p className="font-semibold">{unclassifiedHeadline(summary.unclassified.length)} {UNCLASSIFIED_ACTION}</p>
+            <ul className="mt-2 list-disc pl-5">
+              {summary.unclassified.map((u) => (
+                <li key={u.invoiceNumber}><span className="font-semibold tabular-nums">{u.invoiceNumber}</span> — {u.reason}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Figures */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <div className="bg-surface border border-line rounded-xl p-5">
@@ -118,6 +131,41 @@ export default function VatReport(props: PageProps) {
             </tbody>
           </table>
         </div>
+
+        {/* ── THE MARGIN SCHEME, IN ITS OWN SECTION — never merged into the rate breakdown above. ── */}
+        {summary.marginScheme.count > 0 && (
+          <div className="bg-surface border border-line rounded-xl overflow-hidden mb-6" data-testid="vat-margin-scheme">
+            <div className="px-4 pt-4">
+              <h2 className="text-sm font-semibold text-ink">{MARGIN_SECTION_TITLE}</h2>
+              <p className="text-xs text-muted mt-1">{marginSectionNote(T)}</p>
+            </div>
+            <table className="w-full text-sm mt-3">
+              <thead className="bg-surface-muted text-muted">
+                <tr className="text-left"><th className="px-4 py-2 font-medium">Invoice</th><th className="px-4 py-2 font-medium">Car</th><th className="px-4 py-2 font-medium text-right">Sale</th><th className="px-4 py-2 font-medium text-right">Paid for it</th><th className="px-4 py-2 font-medium text-right">Margin</th><th className="px-4 py-2 font-medium text-right">{T} on margin</th></tr>
+              </thead>
+              <tbody>
+                {summary.marginScheme.rows.map((r) => (
+                  <tr key={r.invoiceNumber} className="border-t border-line">
+                    <td className="px-4 py-2 text-ink tabular-nums">{r.invoiceNumber}</td>
+                    <td className="px-4 py-2 text-ink">{r.registration ?? '—'}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{fmt(r.salePennies)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{fmt(r.basePennies)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{fmt(r.marginPennies)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{fmt(r.vatPennies)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t border-line font-semibold">
+                  <td className="px-4 py-2" colSpan={5}>{MARGIN_SECTION_TITLE}: {T} due</td>
+                  <td className="px-4 py-2 text-right tabular-nums" data-testid="vat-margin-total">{fmt(summary.marginScheme.vatPennies)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="flex justify-between px-4 py-3 border-t border-line bg-surface-muted text-sm">
+              <span className="text-ink font-semibold">{totalIncludingMarginLabel(T)}</span>
+              <span className="text-ink font-semibold tabular-nums" data-testid="vat-total-including-margin">{fmt(summary.totalOutputVatPennies)}</span>
+            </div>
+          </div>
+        )}
 
         {/* Exports */}
         <div className="flex flex-wrap gap-3">
