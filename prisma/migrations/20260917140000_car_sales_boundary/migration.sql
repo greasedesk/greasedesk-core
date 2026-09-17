@@ -1,0 +1,12 @@
+-- @migration: additive
+--
+-- THE HISTORICAL-SALE BOUNDARY, DECLARED PER TENANT.
+--
+-- The first design derived the boundary from the tenant's first invoiced car sale. That assumed the
+-- first invoiced sale comes BEFORE the historical ones; on TMBS the historical sales came first and the
+-- first invoiced sale is weeks away, so the derived boundary blocked history on a sale not yet made.
+--
+-- Declared instead: stamped with the day the owner declares it, written once, movable earlier only.
+-- NULL on every tenant = not declared, and historical entry stays refused until it is — which is also
+-- what every tenant had before this column (no invoiced car sale anywhere).
+ALTER TABLE "Group" ADD COLUMN     "car_sales_invoiced_from" DATE;

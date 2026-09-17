@@ -26,7 +26,7 @@ import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
 import { sellCar, openPrepCards } from '@/lib/stock-sale';
-import { historicalBoundary, recordHistoricalSale } from '@/lib/stock-historical';
+import { declareCarSalesBoundary, historicalBoundary, moveCarSalesBoundaryEarlier, recordHistoricalSale } from '@/lib/stock-historical';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope = await requireTenantApi(req, res);
@@ -44,8 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // THE BOUNDARY for recording a past sale: the first car sale invoiced here. The page shows it and
     // refuses early; lib/stock-historical refuses again, because the page is not the rule.
     if (req.query.historicalBoundary === '1') {
-      const b = await historicalBoundary(scope.groupId);
-      return res.status(200).json({ boundary: b ? { date: b.date.toISOString(), invoiceNumber: b.invoiceNumber } : null });
+      const hb = await historicalBoundary(scope.groupId);
+      return res.status(200).json({
+        boundary: hb ? { date: hb.date.toISOString(), basis: hb.basis, invoiceNumber: hb.invoiceNumber, declared: hb.declared.toISOString() } : null,
+        canDeclare: scope.vis.isAdmin,
+      });
     }
     if (typeof req.query.priorSaleFor === 'string' && req.query.priorSaleFor.trim()) {
       // findVehicleByReg, NOT find-or-create: asking whether a car has been here before must not
@@ -125,6 +128,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      * paperwork and ownership are all decided there. The site is resolved exactly as a sale's is, because a
      * new buyer becomes a customer and a customer belongs to a location.
      */
+    /**
+     * THE BOUNDARY DECLARATION — admin only: it decides, for the whole account, that from today every car
+     * sale is invoiced. Stamped with today by lib/stock-historical; no date is accepted from the request.
+     */
+    if (b.action === 'declare-boundary' || b.action === 'move-boundary-earlier') {
+      if (!scope.vis.isAdmin) return res.status(403).json({ message: 'Only an admin can set when car sales started being invoiced here.' });
+      const out = b.action === 'declare-boundary'
+        ? await declareCarSalesBoundary({ groupId: scope.groupId, userId: scope.userId })
+        : await moveCarSalesBoundaryEarlier({ groupId: scope.groupId, userId: scope.userId, date: parseDate(b.date) });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, date: out.date.toISOString() });
+    }
+
     if (b.action === 'record-historical') {
       const vis = scope.vis;
       const siteId = vis.primarySiteId && vis.activeSiteIds.includes(vis.primarySiteId) ? vis.primarySiteId

@@ -24,7 +24,8 @@ import {
   PAPERWORK_LABELS, PURCHASE_PAPERWORK_KEYS, SALE_PAPERWORK_KEYS, checkPaperwork, type PaperworkKey,
 } from '@/lib/stock-paperwork';
 import {
-  HISTORICAL_NO_BOUNDARY_REFUSAL, boundaryRefusal, dayLabel, historicalBasicsRefusal,
+  HISTORICAL_NO_BOUNDARY_REFUSAL, boundaryReason, boundaryRefusal, dayLabel, declarationSentence, historicalBasicsRefusal,
+  type Boundary,
 } from '@/lib/stock-historical-rules';
 
 type Found = { id: string; name: string; address: string | null; phone: string | null; email: string | null };
@@ -36,8 +37,13 @@ const money = (p: number) => `£${(p / 100).toLocaleString('en-GB', { minimumFra
 
 export default function PastSalePage() {
   const router = useRouter();
-  const [boundary, setBoundary] = useState<null | { date: string; invoiceNumber: string }>(null);
+  const [boundary, setBoundary] = useState<null | { date: string; basis: Boundary['basis']; invoiceNumber: string | null; declared: string }>(null);
+  const [canDeclare, setCanDeclare] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [declaring, setDeclaring] = useState(false);
+  const [earlier, setEarlier] = useState('');
+  const [boundaryMsg, setBoundaryMsg] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
   const [f, setF] = useState({
     registration: '', make: '', model: '', acquiredAt: '', arrivedAt: '', source: 'private', vatStatus: 'margin',
@@ -60,11 +66,24 @@ export default function PastSalePage() {
       try {
         const res = await fetch('/api/stock?historicalBoundary=1');
         const body = res.ok ? await res.json() : {};
-        if (live) setBoundary(body.boundary ?? null);
+        if (live) { setBoundary(body.boundary ?? null); setCanDeclare(!!body.canDeclare); }
       } finally { if (live) setLoaded(true); }
     })();
     return () => { live = false; };
-  }, []);
+  }, [reload]);
+
+  async function boundaryAction(action: 'declare-boundary' | 'move-boundary-earlier') {
+    setBoundaryMsg(null);
+    try {
+      const res = await fetch('/api/stock', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'declare-boundary' ? { action } : { action, date: earlier }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { setBoundaryMsg(body.message ?? 'That did not save.'); return; }
+      setDeclaring(false); setEarlier(''); setReload((n) => n + 1);
+    } catch { setBoundaryMsg('That did not save.'); }
+  }
+  const asBoundary = (b: NonNullable<typeof boundary>): Boundary =>
+    ({ date: new Date(b.date), basis: b.basis, invoiceNumber: b.invoiceNumber, declared: new Date(b.declared) });
 
   useEffect(() => {
     if (picked || q.trim().length < 2) { setFound([]); return; }
@@ -100,7 +119,7 @@ export default function PastSalePage() {
 
   const blocker = (!boundary ? HISTORICAL_NO_BOUNDARY_REFUSAL : null)
     ?? historicalBasicsRefusal({ registration: f.registration, acquiredAt, soldAt, purchasePence: pence(f.purchase), salePence: pence(f.sale), vatStatus: f.vatStatus, source: f.source })
-    ?? (soldAt && boundary ? boundaryRefusal(soldAt, { date: new Date(boundary.date), invoiceNumber: boundary.invoiceNumber }) : null)
+    ?? (soldAt && boundary ? boundaryRefusal(soldAt, asBoundary(boundary)) : null)
     ?? checkPaperwork(PURCHASE_PAPERWORK_KEYS, {
       seller_name: f.sellerName, purchase_ref: f.purchaseRef, mileage: f.mileage.trim() ? Number(f.mileage) : undefined,
       make_model: f.make.trim() && f.model.trim() ? `${f.make} ${f.model}` : undefined,
@@ -171,11 +190,39 @@ export default function PastSalePage() {
         </p>
 
         {loaded && (
-          <p className="mt-3 rounded-lg border border-line bg-surface p-3 text-sm text-ink" data-testid="past-sale-boundary">
-            {boundary
-              ? `Sales dated before ${dayLabel(new Date(boundary.date))} can be recorded here. That is the date of your first car sale invoiced through GreaseDesk (${boundary.invoiceNumber}); anything on or after it goes through “Sell this car”.`
-              : HISTORICAL_NO_BOUNDARY_REFUSAL}
-          </p>
+          <div className="mt-3 rounded-lg border border-line bg-surface p-3 text-sm text-ink">
+            <p data-testid="past-sale-boundary">
+              {boundary
+                ? `Sales dated before ${dayLabel(new Date(boundary.date))} can be recorded here — ${boundaryReason(asBoundary(boundary))}. Anything on or after it goes through “Sell this car”.`
+                : HISTORICAL_NO_BOUNDARY_REFUSAL}
+            </p>
+            {/* DECLARING: two steps, the sentence read back first. No date to choose — it is today. */}
+            {!boundary && canDeclare && (declaring ? (
+              <div className="mt-3 rounded-lg border-2 border-ink p-3" data-testid="ps-declare-confirm">
+                <p className="font-semibold" data-testid="ps-declare-sentence">{declarationSentence(new Date())}</p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button type="button" onClick={() => boundaryAction('declare-boundary')} data-testid="ps-declare-submit"
+                    className="min-h-[44px] px-4 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold">Declare it</button>
+                  <button type="button" onClick={() => setDeclaring(false)} className="min-h-[44px] px-4 rounded-lg border border-line text-ink">Not yet</button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setDeclaring(true)} data-testid="ps-declare"
+                className="mt-3 min-h-[44px] px-4 rounded-lg border border-line text-ink">Declare that car sales are invoiced from today</button>
+            ))}
+            {!boundary && !canDeclare && <p className="mt-2 text-muted">An admin on this account can declare it.</p>}
+            {/* MOVING IT: earlier only. The server refuses later, future, and past a recorded sale. */}
+            {boundary && canDeclare && (
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <label className="text-xs uppercase text-muted">Move the declared date earlier
+                  <input className={input} type="date" value={earlier} onChange={(e) => setEarlier(e.target.value)} data-testid="ps-boundary-earlier" />
+                </label>
+                <button type="button" disabled={!earlier} onClick={() => boundaryAction('move-boundary-earlier')} data-testid="ps-boundary-earlier-submit"
+                  className="min-h-[44px] px-4 rounded-lg border border-line text-ink disabled:opacity-50">Move earlier</button>
+              </div>
+            )}
+            {boundaryMsg && <p className="mt-2 text-danger" data-testid="ps-boundary-msg">{boundaryMsg}</p>}
+          </div>
         )}
 
         <section className="mt-5 rounded-xl border border-line bg-surface p-4">

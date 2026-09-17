@@ -310,6 +310,13 @@ model Group {
   // started in. The counter underneath stays continuous — FY is formatting, never a reset.
   invoice_fy_digits         Int      @default(0)
   fy_start_month            Int      @default(4) // 1-12; UK default April
+  /// THE HISTORICAL-SALE BOUNDARY, DECLARED. "Every car sale from this date is invoiced through GreaseDesk;
+  /// sales before it can be recorded as history." STAMPED with the day it is declared — never typed, so it
+  /// can be neither a future date (the back door left open for months) nor a guess — and written once.
+  /// It may later move EARLIER only, which narrows the door and can never reopen it (lib/stock-historical).
+  /// NULL = not declared yet, and historical entry is refused until it is. The effective boundary is the
+  /// EARLIER of this and the tenant's first invoiced car sale, so a sale invoiced first still closes the door.
+  car_sales_invoiced_from   DateTime? @db.Date
   // Warranty-series prefix (comeback £0 invoices) — the filter key for the future comebacks tile.
   invoice_warranty_prefix   String   @default("W")
   // Historical-series prefix. Deliberately distinct so a historical number can never be mistaken

@@ -38,8 +38,9 @@ import {
   PURCHASE_PAPERWORK_KEYS, SALE_PAPERWORK_KEYS, checkPaperwork,
 } from '@/lib/stock-paperwork';
 import {
-  HELD_OVERLAP_REFUSAL, HISTORICAL_NO_BOUNDARY_REFUSAL, boundaryRefusal, historicalBasicsRefusal,
-  overlapsHeld, ownershipConflicts, ownershipRefusal, type OwnerEdge,
+  HELD_OVERLAP_REFUSAL, HISTORICAL_NO_BOUNDARY_REFUSAL, boundaryRefusal, effectiveBoundary, historicalBasicsRefusal,
+  laterOwners, moveEarlierRefusal, overlapsHeld, ownershipConflicts, ownershipRefusal, ownershipWrite,
+  type Boundary, type OwnerEdge,
 } from '@/lib/stock-historical-rules';
 
 class Refused extends Error {}
@@ -72,8 +73,8 @@ export type HistoricalSaleResult =
 const text = (v: unknown, cap = 200): string | null =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, cap) : null;
 
-/** THE BOUNDARY: the tenant's first car sale invoiced through GreaseDesk, dated by its sale. */
-export async function historicalBoundary(groupId: string): Promise<{ date: Date; invoiceNumber: string } | null> {
+/** The tenant's first car sale invoiced through GreaseDesk, dated by its sale — the second limit. */
+async function firstInvoicedSale(groupId: string): Promise<{ date: Date; invoiceNumber: string } | null> {
   const first = await prisma.invoice.findFirst({
     where: { group_id: groupId, series: 'vehicle_sale' },
     orderBy: { sequence_value: 'asc' },
@@ -89,13 +90,67 @@ export async function historicalBoundary(groupId: string): Promise<{ date: Date;
   return { date, invoiceNumber: first.invoice_number ?? '' };
 }
 
+/** THE EFFECTIVE BOUNDARY: NULL until declared; then the earlier of the declaration and the first invoiced sale. */
+export async function historicalBoundary(groupId: string): Promise<Boundary | null> {
+  const g = await prisma.group.findUnique({ where: { id: groupId }, select: { car_sales_invoiced_from: true } });
+  return effectiveBoundary(g?.car_sales_invoiced_from ?? null, await firstInvoicedSale(groupId));
+}
+
+const utcToday = (now: Date): Date => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+/**
+ * DECLARE THE BOUNDARY — stamped with today, written once. The update is conditional on the column still
+ * being NULL, so two declarations at once cannot both write: the second finds it set and refuses.
+ */
+export async function declareCarSalesBoundary(a: { groupId: string; userId: string; now?: Date }): Promise<{ date: Date } | { refused: string }> {
+  const today = utcToday(a.now ?? new Date());
+  return prisma.$transaction(async (tx) => {
+    const u = await tx.group.updateMany({ where: { id: a.groupId, car_sales_invoiced_from: null }, data: { car_sales_invoiced_from: today } });
+    if (u.count !== 1) {
+      const g = await tx.group.findUnique({ where: { id: a.groupId }, select: { car_sales_invoiced_from: true } });
+      return { refused: g?.car_sales_invoiced_from
+        ? `The boundary was already declared: sales before ${g.car_sales_invoiced_from.toISOString().slice(0, 10)}. It can only be moved earlier.`
+        : 'That account could not be found.' };
+    }
+    await writeAudit(tx, { groupId: a.groupId, userId: a.userId, entity: 'group', entityId: a.groupId,
+      action: 'stock.boundary_declared', diff: { carSalesInvoicedFrom: today.toISOString().slice(0, 10) } });
+    return { date: today };
+  });
+}
+
+/** MOVE THE DECLARATION EARLIER — never later, never past a sale already recorded as history. */
+export async function moveCarSalesBoundaryEarlier(a: { groupId: string; userId: string; date: Date | null; now?: Date }): Promise<{ date: Date } | { refused: string }> {
+  const now = a.now ?? new Date();
+  return prisma.$transaction(async (tx) => {
+    const g = await tx.group.findUnique({ where: { id: a.groupId }, select: { car_sales_invoiced_from: true } });
+    const proposed = a.date ? utcToday(a.date) : null;
+    const recorded = proposed ? await tx.stockDisposal.findMany({
+      where: { group_id: a.groupId, recorded_not_invoiced: true, disposed_at: { gte: proposed } },
+      select: { disposed_at: true, stock_item: { select: { vehicle: { select: { registration: true } } } } },
+      orderBy: { disposed_at: 'asc' },
+    }) : [];
+    const refused = moveEarlierRefusal({
+      current: g?.car_sales_invoiced_from ?? null, proposed, now,
+      recordedOnOrAfter: recorded.map((r) => `${r.stock_item.vehicle.registration} (${r.disposed_at.toISOString().slice(0, 10)})`),
+    });
+    if (refused) return { refused };
+    const u = await tx.group.updateMany({
+      where: { id: a.groupId, car_sales_invoiced_from: g!.car_sales_invoiced_from }, data: { car_sales_invoiced_from: proposed },
+    });
+    if (u.count !== 1) return { refused: 'The boundary changed while this was being saved. Look again and retry.' };
+    await writeAudit(tx, { groupId: a.groupId, userId: a.userId, entity: 'group', entityId: a.groupId, action: 'stock.boundary_moved_earlier',
+      diff: { from: g!.car_sales_invoiced_from!.toISOString().slice(0, 10), to: proposed!.toISOString().slice(0, 10) } });
+    return { date: proposed! };
+  });
+}
+
 async function ownerEdges(db: Prisma.TransactionClient | typeof prisma, vehicleId: string): Promise<OwnerEdge[]> {
   const rows = await db.vehicleOwnership.findMany({
     where: { vehicle_id: vehicleId },
-    select: { valid_from: true, valid_to: true, is_current: true, customer: { select: { name: true } } },
+    select: { customer_id: true, valid_from: true, valid_to: true, is_current: true, customer: { select: { name: true } } },
     orderBy: { valid_from: 'asc' },
   });
-  return rows.map((r) => ({ customerName: r.customer?.name ?? '—', validFrom: r.valid_from, validTo: r.valid_to, isCurrent: r.is_current }));
+  return rows.map((r) => ({ customerId: r.customer_id, customerName: r.customer?.name ?? '—', validFrom: r.valid_from, validTo: r.valid_to, isCurrent: r.is_current }));
 }
 
 async function heldPeriods(db: Prisma.TransactionClient | typeof prisma, groupId: string, vehicleId: string) {
@@ -198,7 +253,8 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
   try {
     const out = await prisma.$transaction(async (tx) => {
       // INSIDE the transaction, so nothing can change between the check and the write.
-      const conflicts = ownershipConflicts(await ownerEdges(tx, vehicle.id), acquiredAt);
+      const edges = await ownerEdges(tx, vehicle.id);
+      const conflicts = ownershipConflicts(edges, acquiredAt, soldAt);
       if (conflicts.length) throw new Refused(ownershipRefusal(conflicts));
       if (overlapsHeld(await heldPeriods(tx, a.groupId, vehicle.id), acquiredAt, soldAt)) throw new Refused(HELD_OVERLAP_REFUSAL);
 
@@ -258,8 +314,14 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
       });
       if ('refused' in disposal) throw new Refused(disposal.refused);
 
-      // 5 ─ OWNERSHIP, ADDED. The checks above guarantee nothing current exists to end.
-      if (customerId) {
+      // 5 ─ OWNERSHIP, ADDED BESIDE WHAT IS THERE. Nothing overlapping our holding exists (checked above);
+      // an owner from after the sale is left exactly as recorded (lib/stock-historical-rules::ownershipWrite).
+      const own = ownershipWrite(customerId, laterOwners(edges, soldAt));
+      if (own.kind === 'ended') {
+        await tx.vehicleOwnership.create({
+          data: { vehicle_id: vehicle.id, customer_id: customerId as string, is_current: false, valid_from: soldAt, valid_to: own.validTo },
+        });
+      } else if (own.kind === 'current' && customerId) {
         await tx.vehicleOwnership.create({
           data: { vehicle_id: vehicle.id, customer_id: customerId, is_current: true, valid_from: soldAt },
         });
@@ -278,6 +340,7 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
           acquiredAt: acquiredAt.toISOString(), soldAt: soldAt.toISOString(),
           purchasePence: Number(a.purchasePence), salePence: Number(a.salePence), costs: costs.length,
           notOnPaperwork: { purchase: purchaseTicks, sale: ticksSale },
+          ownership: own.kind === 'none' ? own.why : own.kind,
         },
       });
       return { stockItemId: item.id, disposalId: disposal.id, stockNumber: item.stockNumber, customerId };

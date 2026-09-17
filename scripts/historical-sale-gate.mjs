@@ -67,15 +67,31 @@ try {
   check('an unreadable tick list refuses rather than counting as none', !!PW.checkPaperwork(KP, full, 'seller_name'));
   check('mileage 0 is a value, not a blank', PW.checkPaperwork(['mileage'], { mileage: 0 }, []) === null);
 
-  console.log('\n— THE BOUNDARY IS A DATE —');
-  const b = { date: new Date('2026-09-17T10:00:00Z'), invoiceNumber: 'VS-0001' };
-  check('the day before the first invoiced sale is history', HR.boundaryRefusal(new Date('2026-09-16T23:30:00Z'), b) === null);
-  const same = HR.boundaryRefusal(new Date('2026-09-17T00:05:00Z'), b) ?? '';
+  console.log('\n— THE BOUNDARY IS DECLARED, AND IS THE EARLIER OF TWO LIMITS —');
+  const decl = new Date('2026-09-17T00:00:00Z');
+  check('not declared: no boundary at all, whatever has been invoiced', HR.effectiveBoundary(null, { date: new Date('2026-03-12'), invoiceNumber: 'VS1' }) === null);
+  const onlyDeclRaw = HR.effectiveBoundary(decl, null);
+  check('declared, nothing invoiced: the declared date — no sale needs to have happened', onlyDeclRaw?.date.getTime() === decl.getTime() && onlyDeclRaw.basis === 'declared');
+  // NULL-SAFE onward: a broken effectiveBoundary must fail the clause above, not throw and end the run here.
+  const onlyDecl = onlyDeclRaw ?? { date: decl, basis: 'declared', invoiceNumber: null, declared: decl };
+  const firstEarlier = HR.effectiveBoundary(decl, { date: new Date('2026-03-12T10:00:00Z'), invoiceNumber: 'VS1' });
+  check('an invoiced sale BEFORE the declaration still closes the door behind it', firstEarlier?.basis === 'first_invoice' && firstEarlier.invoiceNumber === 'VS1');
+  check('an invoiced sale AFTER the declaration changes nothing', HR.effectiveBoundary(decl, { date: new Date('2026-10-01'), invoiceNumber: 'VS1' })?.basis === 'declared');
+  check('the same day goes to the declaration', HR.effectiveBoundary(decl, { date: new Date('2026-09-17T15:00:00Z'), invoiceNumber: 'VS1' })?.basis === 'declared');
+  check('the day before the boundary is history', HR.boundaryRefusal(new Date('2026-09-16T23:30:00Z'), onlyDecl) === null);
+  const same = HR.boundaryRefusal(new Date('2026-09-17T00:05:00Z'), onlyDecl) ?? '';
   check('the SAME day refuses — "on or after"', /on or after 17 Sep 2026/.test(same), same.slice(0, 80));
-  check('  …and names the invoice that set the boundary, and where the sale goes instead', /VS-0001/.test(same) && /Sell this car/.test(same));
-  check('the day after refuses', !!HR.boundaryRefusal(new Date('2026-09-18T12:00:00Z'), b));
-  check('with no invoiced sale yet, the refusal says why and when that changes',
-    /once your first car sale has been invoiced/.test(HR.HISTORICAL_NO_BOUNDARY_REFUSAL));
+  check('  …and says WHICH limit set it, and where the sale goes instead', /the date you declared/.test(same) && /Sell this car/.test(same));
+  check('  …naming the invoice when that is the limit', /\(VS1\)/.test(HR.boundaryRefusal(new Date('2026-04-01'), firstEarlier) ?? ''));
+  check('with nothing declared, the refusal says what to do', /once you declare/.test(HR.HISTORICAL_NO_BOUNDARY_REFUSAL));
+  check('the declaration reads back its own date and that it only moves earlier',
+    HR.declarationSentence(decl) === 'From 17 Sep 2026, every car sale is invoiced through GreaseDesk. Sales before 17 Sep 2026 can be recorded as history. This date can later be moved earlier, never later.');
+  const mv = (proposed, recorded = []) => HR.moveEarlierRefusal({ current: decl, proposed: proposed ? new Date(proposed) : null, now: new Date('2026-09-17T12:00:00Z'), recordedOnOrAfter: recorded });
+  check('moving EARLIER is allowed', mv('2026-09-01') === null);
+  check('moving to the same date or LATER refuses — it would reopen the door', /only move earlier/.test(mv('2026-09-17') ?? '') && /only move earlier/.test(mv('2026-09-18') ?? ''));
+  check('a future date refuses', /future/.test(HR.moveEarlierRefusal({ current: new Date('2026-12-01'), proposed: new Date('2026-10-01'), now: new Date('2026-09-17'), recordedOnOrAfter: [] }) ?? ''));
+  check('moving past a sale already recorded refuses and names it', /NU14KUF \(2026-07-07\)/.test(mv('2026-07-01', ['NU14KUF (2026-07-07)']) ?? ''));
+  check('nothing declared: nothing to move', !!HR.moveEarlierRefusal({ current: null, proposed: new Date('2026-09-01'), now: decl, recordedOnOrAfter: [] }));
 
   console.log('\n— THE CHEAP REFUSALS —');
   const ok = { registration: 'AB12CDE', acquiredAt: new Date('2026-01-01'), soldAt: new Date('2026-02-01'), purchasePence: 100000, salePence: 200000, vatStatus: 'margin', source: 'private', now: new Date('2026-09-17') };
@@ -87,17 +103,28 @@ try {
   check('no scheme refuses', !!HR.historicalBasicsRefusal({ ...ok, vatStatus: '' }));
   check('a zero sale price refuses', !!HR.historicalBasicsRefusal({ ...ok, salePence: 0 }));
 
-  console.log('\n— OWNERSHIP IS ADDED, NEVER REWRITTEN —');
+  console.log('\n— OWNERSHIP IS ADDED, NEVER REWRITTEN — A CONFLICT IS AN OVERLAP WITH OUR HOLDING —');
   const bought = new Date('2026-03-01T12:00:00Z');
-  const e = (from, to, cur) => ({ customerName: 'K', validFrom: new Date(from), validTo: to ? new Date(to) : null, isCurrent: cur });
-  check('a keeper whose record ENDED before we bought it is the car’s past, not a conflict',
-    HR.ownershipConflicts([e('2020-01-01', '2026-02-10', false)], bought).length === 0);
-  check('  …nor one ending ON the purchase day — that is who we bought it from',
-    HR.ownershipConflicts([e('2020-01-01', '2026-03-01T09:00:00Z', false)], bought).length === 0);
-  check('a CURRENT owner conflicts', HR.ownershipConflicts([e('2020-01-01', null, true)], bought).length === 1);
-  check('an owner whose record reaches past the purchase conflicts', HR.ownershipConflicts([e('2020-01-01', '2026-04-01', false)], bought).length === 1);
-  const orf = HR.ownershipRefusal([{ customerName: 'Jane Owner', validFrom: new Date('2026-05-02'), validTo: null, isCurrent: true }]);
-  check('the refusal SHOWS what is there: who, from when, still current', /Jane Owner, from 2 May 2026 and still current/.test(orf), orf.slice(0, 110));
+  const soldOn = new Date('2026-05-01T00:00:00Z');
+  const e = (from, to, cur, id = 'k') => ({ customerId: id, customerName: 'K', validFrom: new Date(from), validTo: to ? new Date(to) : null, isCurrent: cur });
+  const conflicts = (edges) => HR.ownershipConflicts(edges, bought, soldOn).length;
+  check('a keeper whose record ENDED before we bought it is the car’s past, not a conflict', conflicts([e('2020-01-01', '2026-02-10', false)]) === 0);
+  check('  …nor one ending ON the purchase day — that is who we bought it from', conflicts([e('2020-01-01', '2026-03-01T09:00:00Z', false)]) === 0);
+  check('an owner CURRENT since before the sale conflicts — they owned it while we did', conflicts([e('2020-01-01', null, true)]) === 1);
+  check('an ended owner whose record reaches into our holding conflicts', conflicts([e('2020-01-01', '2026-04-01', false)]) === 1);
+  check('an owner starting INSIDE our holding conflicts', conflicts([e('2026-04-01', null, true)]) === 1);
+  /** THE NARROWING (owner, 2026-09-17). NU14KUF: sold 7 July, its buyer entered as a customer 18 August. */
+  check('an owner starting ON the sale day is NOT a conflict — the normal case', conflicts([e('2026-05-01', null, true)]) === 0);
+  check('  …nor one starting after it', conflicts([e('2026-08-18', null, true)]) === 0);
+  const laterPure = [e('2026-08-18', null, true, 'bethany')];
+  check('the buyer IS the later owner: nothing is written, their record stands', JSON.stringify(HR.ownershipWrite('bethany', HR.laterOwners(laterPure, soldOn))) === '{"kind":"none","why":"buyer_already_owner"}');
+  const ended = HR.ownershipWrite('someone', HR.laterOwners(laterPure, soldOn));
+  check('a DIFFERENT later owner: the buyer from the sale, ENDED the day that owner starts', ended.kind === 'ended' && ended.validTo.toISOString() === '2026-08-18T00:00:00.000Z', JSON.stringify(ended));
+  check('no later owner: the buyer is current', HR.ownershipWrite('someone', []).kind === 'current');
+  check('no buyer named: nothing', HR.ownershipWrite(null, laterPure).kind === 'none');
+  check('later owners are taken earliest first', HR.laterOwners([e('2026-09-01', null, true, 'b'), e('2026-06-01', '2026-09-01', false, 'a')], soldOn)[0].customerId === 'a');
+  const orf = HR.ownershipRefusal([{ customerId: 'j', customerName: 'Jane Owner', validFrom: new Date('2026-04-02'), validTo: null, isCurrent: true }]);
+  check('the refusal SHOWS what is there: who, from when, still current', /Jane Owner, from 2 Apr 2026 and still current/.test(orf), orf.slice(0, 110));
   check('  …and says it never rewrites', /never rewrites ownership/.test(orf));
   check('held periods: a car still in stock overlaps anything', !!HR.overlapsHeld([{ acquiredAt: new Date('2025-01-01'), disposedAt: null }], new Date('2026-01-01'), new Date('2026-02-01')));
   check('  …an earlier, finished holding does not', HR.overlapsHeld([{ acquiredAt: new Date('2025-01-01'), disposedAt: new Date('2025-06-01') }], new Date('2026-01-01'), new Date('2026-02-01')) === null);
@@ -178,6 +205,9 @@ try {
       if (idents.length) await prisma.vehicleIdentity.deleteMany({ where: { id: { in: idents }, vehicles: { none: {} } } });
     }
     await prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: PREFIX }, ownerships: { none: {} }, job_cards: { none: {} } } });
+    // ZZ's DECLARATION is this gate's fixture too. No app path clears it (write-once, earlier-only), so the
+    // gate clears it directly — on the gate tenant and nowhere else.
+    await prisma.group.update({ where: { id: ZZ_GROUP }, data: { car_sales_invoiced_from: null } });
     return ids.length;
   };
   const swept = await sweep();
@@ -215,9 +245,24 @@ try {
   check('premise: ZZ holds no car-sale invoice at the start', vsOnZz === 0,
     `${vsOnZz} found — a previous run left one, and every boundary clause below would read ITS date`);
   const early = await HS.recordHistoricalSale(entry());
-  check('with no car sale invoiced yet, a past sale refuses', 'refused' in early && early.refused === HR.HISTORICAL_NO_BOUNDARY_REFUSAL,
+  check('nothing declared: a past sale refuses', 'refused' in early && early.refused === HR.HISTORICAL_NO_BOUNDARY_REFUSAL,
     'refused' in early ? early.refused.slice(0, 70) : 'IT RECORDED A SALE WITH NO BOUNDARY');
   check('  …and wrote nothing, not even the car', (await regCount(`${PREFIX}10M`)) === 0);
+
+  console.log('\n— DECLARED: HISTORY OPENS WITHOUT ANY SALE HAVING BEEN INVOICED —');
+  const todayUtc = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  const d1 = await HS.declareCarSalesBoundary({ groupId: ZZ_GROUP, userId: user.id });
+  check('declaring stamps TODAY — no date is taken from anyone', 'date' in d1 && d1.date.toISOString() === todayUtc.toISOString(), JSON.stringify(d1));
+  const stored = (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from;
+  check('  …stored on the account', stored?.toISOString() === todayUtc.toISOString(), stored?.toISOString());
+  check('  …with an audit row saying so', !!(await prisma.auditLog.findFirst({ where: { group_id: ZZ_GROUP, action: 'stock.boundary_declared', created_at: { gte: new Date(Date.now() - 120000) } } })));
+  const d2 = await HS.declareCarSalesBoundary({ groupId: ZZ_GROUP, userId: user.id, now: new Date(Date.now() + 5 * 86_400_000) });
+  check('declaring AGAIN refuses — written once, and a later date would reopen the door', 'refused' in d2 && /already declared/.test(d2.refused)
+    && (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from?.toISOString() === todayUtc.toISOString(),
+    'refused' in d2 ? d2.refused.slice(0, 70) : 'MOVED');
+  const noSale = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}13M`, acquiredAt: new Date('2026-03-20T00:00:00Z'), soldAt: new Date('2026-04-02T00:00:00Z') }));
+  check('with NO car sale invoiced, a past sale before the declaration is recorded — the TMBS case', 'stockItemId' in noSale, 'refused' in noSale ? noSale.refused.slice(0, 90) : 'recorded');
+  check('  …the boundary reads as declared', (await HS.historicalBoundary(ZZ_GROUP))?.basis === 'declared');
 
   console.log('\n— THE FIRST INVOICED SALE SETS THE BOUNDARY —');
   const bv = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}01B`, registration_normalized: `${PREFIX}01B`, make: 'MINI', model: 'One' }, select: { id: true } });
@@ -229,8 +274,9 @@ try {
   check('the live sale completes', 'invoiceId' in bSale, 'refused' in bSale ? bSale.refused : 'sold');
   const bInv = 'invoiceId' in bSale ? await prisma.invoice.findUnique({ where: { id: bSale.invoiceId }, select: { invoice_number: true } }) : null;
   const boundary = await HS.historicalBoundary(ZZ_GROUP);
-  check('the boundary is THAT sale’s date and number', boundary?.date.toISOString() === boundaryDay.toISOString() && boundary?.invoiceNumber === bInv?.invoice_number,
-    `${boundary?.date?.toISOString?.()} ${boundary?.invoiceNumber}`);
+  check('an invoiced sale EARLIER than the declaration becomes the boundary — the earlier of the two', boundary?.basis === 'first_invoice'
+    && boundary?.date.toISOString() === boundaryDay.toISOString() && boundary?.invoiceNumber === bInv?.invoice_number,
+    `${boundary?.basis} ${boundary?.date?.toISOString?.()} ${boundary?.invoiceNumber}`);
   const bDisp = await prisma.stockDisposal.findFirst({ where: { stock_item_id: bItem.id }, select: { buyer_name: true, buyer_address: true, recorded_not_invoiced: true, receipt_ref: true } });
   check('a LIVE sale freezes its buyer onto the disposal for the book', bDisp?.buyer_name === `${PREFIX} Live Buyer` && /Tipton/.test(bDisp?.buyer_address ?? ''),
     `${bDisp?.buyer_name} / ${bDisp?.buyer_address}`);
@@ -240,7 +286,7 @@ try {
   const onDay = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}11M`, acquiredAt: new Date('2026-03-01T00:00:00Z'), soldAt: new Date('2026-03-12T15:00:00Z') }));
   check('a past sale ON the boundary day refuses', 'refused' in onDay && /on or after 12 Mar 2026/.test(onDay.refused), 'refused' in onDay ? onDay.refused.slice(0, 80) : 'ACCEPTED');
   const after = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}12M`, acquiredAt: new Date('2026-03-01T00:00:00Z'), soldAt: new Date('2026-04-02T00:00:00Z') }));
-  check('  …and after it', 'refused' in after);
+  check('  …and after it — the same date that was accepted before that sale was invoiced', 'refused' in after);
   check('  …and neither wrote a car', (await regCount(`${PREFIX}11M`)) + (await regCount(`${PREFIX}12M`)) === 0);
 
   console.log('\n— A PAST SALE, RECORDED: NOTHING MINTED —');
@@ -363,12 +409,34 @@ try {
    * names the defect. So these calls turn a throw into a refusal-shaped result the clauses can read.
    */
   const attempt = async (input) => { try { return await HS.recordHistoricalSale(input); } catch (x) { return { threw: describeError(x).slice(0, 120) }; } };
+  /** THE NARROWING (owner, 2026-09-17): an owner entered AFTER the sale is the normal case, not a conflict. */
   const oc = await attempt(entry({ registration: `${PREFIX}40M` }));
-  check('a car GreaseDesk already records with a later owner refuses', 'refused' in oc && /never rewrites ownership/.test(oc.refused), 'refused' in oc ? oc.refused.slice(0, 60) : 'ACCEPTED');
-  check('  …and SHOWS who, from when', 'refused' in oc && oc.refused.includes(`${PREFIX} Brought It Back, from 2 May 2026 and still current`), 'refused' in oc ? oc.refused : '');
-  const ovEdges = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: ov.id }, select: { customer_id: true, is_current: true, valid_to: true } });
-  check('  …and left that owner exactly as it was, and no stock item', ovEdges.length === 1 && ovEdges[0].is_current && ovEdges[0].valid_to === null
-    && (await prisma.stockItem.count({ where: { vehicle_id: ov.id } })) === 0);
+  check('a car whose recorded owner starts AFTER our sale is recorded — the NU14KUF case', 'stockItemId' in oc, 'refused' in oc ? oc.refused.slice(0, 90) : ('threw' in oc ? `THREW ${oc.threw}` : ''));
+  const ovEdges = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: ov.id }, select: { customer_id: true, is_current: true, valid_from: true, valid_to: true } });
+  const laterEdge = ovEdges.find((x) => x.customer_id === later.id);
+  const buyerEdge = ovEdges.find((x) => x.customer_id !== later.id);
+  check('  …that later owner is left exactly as it was: current, from 2 May', ovEdges.length === 2 && laterEdge?.is_current === true && laterEdge.valid_to === null
+    && laterEdge.valid_from.toISOString() === '2026-05-02T00:00:00.000Z', JSON.stringify(ovEdges));
+  check('  …and our buyer is ADDED beside it: from the sale, ended the day that owner starts', buyerEdge?.is_current === false
+    && buyerEdge.valid_from.toISOString() === '2026-02-20T00:00:00.000Z' && buyerEdge.valid_to?.toISOString() === '2026-05-02T00:00:00.000Z', JSON.stringify(buyerEdge));
+
+  const bv2 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}43M`, registration_normalized: `${PREFIX}43M`, make: 'BMW', model: '114' }, select: { id: true } });
+  const cameBack = await prisma.customer.create({ data: { group_id: ZZ_GROUP, site_id: site.id, name: `${PREFIX} Came Back`, address: '57 Test Close' }, select: { id: true } });
+  await prisma.vehicleOwnership.create({ data: { vehicle_id: bv2.id, customer_id: cameBack.id, is_current: true, valid_from: new Date('2026-03-01T00:00:00Z') } });
+  const same2 = await attempt(entry({ registration: `${PREFIX}43M`, buyer: { customerId: cameBack.id } }));
+  const bv2Edges = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: bv2.id }, select: { customer_id: true, is_current: true, valid_from: true } });
+  check('the buyer who IS that later owner: recorded, and NO ownership written — their record stands, start date and all',
+    'stockItemId' in same2 && bv2Edges.length === 1 && bv2Edges[0].customer_id === cameBack.id && bv2Edges[0].valid_from.toISOString() === '2026-03-01T00:00:00.000Z',
+    'refused' in same2 ? same2.refused.slice(0, 80) : JSON.stringify(bv2Edges));
+
+  const iv = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}44M`, registration_normalized: `${PREFIX}44M`, make: 'MINI', model: 'Cooper' }, select: { id: true } });
+  const inside = await prisma.customer.create({ data: { group_id: ZZ_GROUP, site_id: site.id, name: `${PREFIX} Owned It Meanwhile`, address: '1 Overlap Road' }, select: { id: true } });
+  await prisma.vehicleOwnership.create({ data: { vehicle_id: iv.id, customer_id: inside.id, is_current: true, valid_from: new Date('2026-02-01T00:00:00Z') } });
+  const ic = await attempt(entry({ registration: `${PREFIX}44M` }));
+  check('an owner CURRENT since a date INSIDE our holding refuses and is shown', 'refused' in ic && ic.refused.includes(`${PREFIX} Owned It Meanwhile, from 1 Feb 2026 and still current`),
+    'refused' in ic ? ic.refused.slice(0, 100) : ('threw' in ic ? `THREW ${ic.threw}` : 'ACCEPTED'));
+  check('  …and wrote no stock item and no owner', (await prisma.stockItem.count({ where: { vehicle_id: iv.id } })) === 0
+    && (await prisma.vehicleOwnership.count({ where: { vehicle_id: iv.id } })) === 1);
 
   /**
    * THE CASE THE DATABASE CANNOT CATCH. A current owner collides with the partial unique index on its own,
@@ -404,10 +472,25 @@ try {
   const naT = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}52M`, buyer: { customerId: noAddr.id }, notOnPaperwork: { purchase: [], sale: ['buyer_address'] } }));
   check('  …and completes when it is', 'stockItemId' in naT, 'refused' in naT ? naT.refused : '');
 
+  console.log('\n— THE DECLARATION MOVES EARLIER ONLY —');
+  const declBefore = (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from;
+  const later1 = await HS.moveCarSalesBoundaryEarlier({ groupId: ZZ_GROUP, userId: user.id, date: new Date(todayUtc.getTime() + 86_400_000) });
+  check('moving it LATER refuses', 'refused' in later1 && /only move earlier/.test(later1.refused));
+  const past = await HS.moveCarSalesBoundaryEarlier({ groupId: ZZ_GROUP, userId: user.id, date: new Date('2026-03-01T00:00:00Z') });
+  check('moving it past a sale already recorded as history refuses, naming the car', 'refused' in past && past.refused.includes(`${PREFIX}13M (2026-04-02)`),
+    'refused' in past ? past.refused.slice(0, 120) : 'MOVED');
+  check('  …and neither changed it', (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from?.toISOString() === declBefore?.toISOString());
+  const earlierOk = await HS.moveCarSalesBoundaryEarlier({ groupId: ZZ_GROUP, userId: user.id, date: new Date('2026-04-03T00:00:00Z') });
+  check('moving it earlier, clear of every recorded sale, is accepted and stored', 'date' in earlierOk
+    && (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from?.toISOString() === '2026-04-03T00:00:00.000Z',
+    'refused' in earlierOk ? earlierOk.refused : '');
+  check('  …with an audit row carrying both dates', !!(await prisma.auditLog.findFirst({ where: { group_id: ZZ_GROUP, action: 'stock.boundary_moved_earlier', created_at: { gte: new Date(Date.now() - 120000) } } })));
+
   // ════════════════════════════════════════════════════════════════════════════════════════════
   // THE WAY A PERSON DOES IT: from the sold dashboard, through the form, to the car's own page
   // ════════════════════════════════════════════════════════════════════════════════════════════
   console.log('\n— ON SCREEN —');
+  await prisma.group.update({ where: { id: ZZ_GROUP }, data: { car_sales_invoiced_from: null } });
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status}`);
   const origin = gateOrigin();
@@ -427,6 +510,18 @@ try {
   if (link) await Promise.all([page.waitForURL((u) => AM.underPath(u.pathname, '/admin/stock/past-sale'), { timeout: 30000 }), link.click()]);
   else await page.goto(`${origin}/admin/stock/past-sale`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="past-sale-boundary"]', { timeout: 25000 });
+  // DECLARED ON SCREEN, the way the owner will. ZZ's declaration is cleared first — a gate fixture, not a path.
+  const undeclaredText = await page.textContent('[data-testid="past-sale-boundary"]');
+  check('undeclared, the page says what to do rather than showing a form that cannot be sent', undeclaredText === HR.HISTORICAL_NO_BOUNDARY_REFUSAL, undeclaredText.slice(0, 80));
+  const declareBtn = await page.$('[data-testid="ps-declare"]');
+  check('  …and offers the declaration to an admin', !!declareBtn);
+  if (declareBtn) await declareBtn.click();
+  const declSentence = await page.waitForSelector('[data-testid="ps-declare-sentence"]', { timeout: 10000 }).then((x) => x.textContent()).catch(() => '');
+  check('the declaration is read back before it is made, with today’s date and no date to choose',
+    declSentence === HR.declarationSentence(new Date()) && !(await page.$('[data-testid="ps-declare-confirm"] input')), declSentence);
+  if (await page.$('[data-testid="ps-declare-submit"]')) await page.click('[data-testid="ps-declare-submit"]');
+  await page.waitForFunction(() => /before \d/.test(document.querySelector('[data-testid="past-sale-boundary"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+  check('  …and once declared it is stored as today', (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from?.toISOString() === todayUtc.toISOString());
   const bText = await page.textContent('[data-testid="past-sale-boundary"]');
   check('the page states the boundary: the date, and the invoice that set it',
     bText.includes('before 12 Mar 2026') && bText.includes(bInv?.invoice_number ?? 'NONE'), bText.slice(0, 120));
@@ -535,10 +630,12 @@ try {
         if (idents.length) await prisma.vehicleIdentity.deleteMany({ where: { id: { in: idents }, vehicles: { none: {} } } });
       }
       await prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: PREFIX }, ownerships: { none: {} }, job_cards: { none: {} } } });
+      await prisma.group.update({ where: { id: ZZ_GROUP }, data: { car_sales_invoiced_from: null } });
+      const leftDecl = (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { car_sales_invoiced_from: true } }))?.car_sales_invoiced_from;
       const leftV = await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } } });
       const leftC = await prisma.customer.count({ where: { group_id: ZZ_GROUP, name: { startsWith: PREFIX } } });
       const leftVs = await prisma.invoice.count({ where: { group_id: ZZ_GROUP, series: 'vehicle_sale' } });
-      check('teardown left ZZ with none of this gate’s cars, customers or car-sale invoices', leftV === 0 && leftC === 0 && leftVs === 0,
+      check('teardown left ZZ with none of this gate’s cars, customers or car-sale invoices, and no declaration', leftV === 0 && leftC === 0 && leftVs === 0 && leftDecl === null,
         `${ids.length} car(s) removed; ${leftV} car(s), ${leftC} customer(s), ${leftVs} car-sale invoice(s) left`);
     } catch (e2) { check('teardown completed', false, describeError(e2).slice(0, 200)); }
   }
