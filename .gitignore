@@ -46,3 +46,4 @@ _tmp-*.mjs
 
 # The gate runner writes results here as it goes, so a run can resume. Local state.
 .gate-results.json
+.gate-timings.json

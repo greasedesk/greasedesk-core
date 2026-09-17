@@ -37,6 +37,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import http from 'node:http';
 import { DEV_PORT } from './_dev-port.mjs';
+import { FAST_THRESHOLD_S, fastSet, recordTiming } from './_fast-set.mjs';
 
 /** Mirrors _gate-preflight::EXIT_UNRUN — the runner cannot import it, it runs before any gate. */
 const EXIT_UNRUN = 4;
@@ -87,6 +88,12 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const RESULTS = path.join(ROOT, '.gate-results.json');
+/**
+ * MEASURED TIMES PER GATE, KEPT ACROSS RUNS. .gate-results.json is REPLACED by every --tier run, so after a
+ * full sweep it holds only the last tier. This file is updated gate by gate and never replaced; only a green
+ * run writes to it (scripts/_fast-set). Gitignored, like the results file: a fact about this machine.
+ */
+const TIMINGS = path.join(ROOT, '.gate-timings.json');
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
 /**
@@ -118,7 +125,7 @@ const val = (f) => {
  * defence. An unusable argument now refuses.
  */
 const VALUE_FLAGS = ['--tier'];
-const BOOL_FLAGS = ['--resume', '--list'];
+const BOOL_FLAGS = ['--resume', '--list', '--fast'];
 const KNOWN_FLAGS = [...VALUE_FLAGS, ...BOOL_FLAGS];
 const stray = [];
 for (let i = 0; i < argv.length; i += 1) {
@@ -182,6 +189,7 @@ const TIERS = {
     'car-sale-gate',
     'historical-sale-gate',
     'dev-restart-gate',
+    'fast-set-gate',
     'after-sale-gate',
     'series-scope-gate',
     'vat-sales-gate',
@@ -415,6 +423,21 @@ const tier = val('--tier');
 if (tier && !TIERS[tier]) { console.error(`Unknown tier "${tier}". One of: ${Object.keys(TIERS).join(', ')}`); process.exit(2); }
 let plan = tier ? gates.filter((g) => tierOf(g) === tier) : gates;
 
+/**
+ * --fast: THE FAST SET, derived from measured times (scripts/_fast-set). Not combinable with --tier: "the
+ * fast gates of core" is a set nobody decided, and a filter that quietly intersects is how a run reports
+ * coverage it did not have. Every gate's basis is printed — in or out, and why — before anything runs.
+ */
+const timings = existsSync(TIMINGS) ? JSON.parse(readFileSync(TIMINGS, 'utf8')) : {};
+if (has('--fast')) {
+  if (tier) { console.error('\nREFUSING TO RUN — --fast and --tier together. The fast set spans every tier; run one or the other.\n'); process.exit(2); }
+  const decided = fastSet(gates, timings, tierOf);
+  const inSet = decided.filter((d) => d.member);
+  console.log(`\nFAST SET — ${inSet.length} of ${decided.length} gates. Threshold: under ${FAST_THRESHOLD_S}s on the latest GREEN run; unmeasured gates are in.`);
+  for (const d of decided) console.log(`  ${d.member ? 'IN ' : 'out'} ${d.gate.padEnd(34)} ${String(d.tier ?? '?').padEnd(7)} ${d.basis}`);
+  plan = inSet.map((d) => d.gate);
+}
+
 const prior = has('--resume') && existsSync(RESULTS) ? JSON.parse(readFileSync(RESULTS, 'utf8')) : {};
 if (has('--resume')) plan = plan.filter((g) => !prior[g]);
 
@@ -554,6 +577,13 @@ for (const g of plan) {
     else if (res.code !== 0 && res.firstFailure) console.log(`        ${res.firstFailure}`);
   }
   writeFileSync(RESULTS, JSON.stringify(results, null, 1));
+  // THE MEASUREMENT, if this run was one. Re-read before writing so a second runner's measurements are
+  // not overwritten wholesale; gate runs are sequential, but a --list or --fast print may overlap.
+  if (results[g] && !results[g].unmet) {
+    const current = existsSync(TIMINGS) ? JSON.parse(readFileSync(TIMINGS, 'utf8')) : {};
+    const next = recordTiming(current, results[g]);
+    if (next !== current) writeFileSync(TIMINGS, JSON.stringify(next, null, 1));
+  }
 }
 
 // ── WHAT THE SUITE LEFT BEHIND ─────────────────────────────────────────────────────────────────
