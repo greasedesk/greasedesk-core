@@ -21,7 +21,7 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCE_RULES, type PurchaseSource } from '@/lib/purchase-model';
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import { MISSING_COST_KINDS } from '@/lib/stock-projection';
-import { STOCK_COST_KINDS, STOCK_COST_LABELS, type StockCostKind } from '@/lib/stock-cost';
+import { STOCK_COST_KINDS, STOCK_COST_LABELS, costKindLabel, type StockCostKind } from '@/lib/stock-cost';
 import { FROZEN_DETAIL_NOTE, PREP_EXPAND_THRESHOLD } from '@/lib/stock-prep';
 import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
@@ -340,7 +340,7 @@ export default function StockCarPage() {
                         <td className="py-1.5 text-muted tabular-nums w-24">{iso(c.incurredOn)}</td>
                         <td className="py-1.5">
                           <span className={fully ? 'text-muted line-through' : 'text-ink'}>{c.description}</span>
-                          <span className="ml-2 text-xs text-muted">{STOCK_COST_LABELS[c.kind as StockCostKind] ?? c.kind}</span>
+                          <span className="ml-2 text-xs text-muted">{costKindLabel(c.kind)}</span>
                           {fully && <span className="ml-2 text-xs text-muted" data-testid={`fully-credited-${c.id}`}>credited in full</span>}
                         </td>
                         <td className={`py-1.5 text-right tabular-nums ${fully ? 'text-muted line-through' : 'text-ink'}`}>

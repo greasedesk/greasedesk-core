@@ -6,10 +6,10 @@
  * Pure. The vocabulary, the credit rules and the netting live here so the writer, the book and the
  * page cannot each decide separately what a car has cost.
  *
- * ── WHY ONLY THESE THREE ────────────────────────────────────────────────────────────────────────
+ * ── WHY THESE ───────────────────────────────────────────────────────────────────────────────────
  *
- * Delivery in, valeting and MOT are money out, attributable to one car, on a date. That is the whole
- * test, and two obvious candidates fail it:
+ * Delivery in, valeting, MOT and bought-in repairs are money out, attributable to one car, on a date.
+ * That is the whole test, and two obvious candidates fail it:
  *
  *   ADVERTISING is an apportioned share, not a direct cost. lib/purchase-model already models the
  *   platform as SLOTS — a monthly fee divided by the cars occupying it — so a car's share changes when
@@ -20,25 +20,51 @@
  *   money that has actually left makes the cost base a blend of fact and guess, and the book stops
  *   being a record. It belongs in the projection until a claim is PAID — at which point the payment
  *   is money out on a date, and enters here as an ordinary cost like any other. NOT BUILT.
+ *
+ * ── BOUGHT-IN REPAIRS, ON ANY CAR; PREP PARTS, ONLY ON A PAST SALE ─────────────────────────────
+ *
+ * A BOUGHT-IN REPAIR is a supplier's bill for work done to the car elsewhere — a body shop, a trimmer,
+ * a sublet job. It passes the test above and no prep card can carry it, so it is a live kind.
+ *
+ * PREP PARTS are NOT a live kind, and that is the point. A car in stock gets its parts from its prep
+ * cards, frozen per card at disposal. A typed "prep parts" row on the same car would count a part the
+ * card already counts — and a doubled part is invisible in a total. So the kind exists only for a car
+ * recorded as sold before GreaseDesk invoiced car sales (lib/stock-historical), whose prep was never on
+ * a card here. The live writer refuses it and says why.
  */
 import { VAT_TREATMENTS, costPosition, type VatTreatment } from '@/lib/purchase-model';
 
-export const STOCK_COST_KINDS = ['delivery_in', 'valeting', 'mot'] as const;
+export const STOCK_COST_KINDS = ['delivery_in', 'valeting', 'mot', 'bought_in_repairs'] as const;
 export type StockCostKind = (typeof STOCK_COST_KINDS)[number];
 
 export const STOCK_COST_LABELS: Record<StockCostKind, string> = {
   delivery_in: 'Delivery in',
   valeting: 'Valeting',
   mot: 'MOT',
+  bought_in_repairs: 'Bought-in repairs',
 };
+
+/** Only on a car recorded as sold before car sales were invoiced here. See the header. */
+export const HISTORICAL_ONLY_COST_KINDS = ['prep_parts'] as const;
+export type HistoricalOnlyCostKind = (typeof HISTORICAL_ONLY_COST_KINDS)[number];
+
+/** Every kind a row can hold, for READING — a row of any kind must render with a name, never a key. */
+export const COST_KIND_LABELS: Record<StockCostKind | HistoricalOnlyCostKind, string> = {
+  ...STOCK_COST_LABELS,
+  prep_parts: 'Prep parts',
+};
+export const costKindLabel = (k: string): string =>
+  (COST_KIND_LABELS as Record<string, string>)[k] ?? k;
+
+export const PREP_PARTS_LIVE_REFUSAL =
+  'Prep parts on a car in stock come from its prep cards, and are counted from there when it sells. A '
+  + 'typed prep-parts cost would count the same part twice. Put the parts on the prep card — or, for a '
+  + 'bill for work done elsewhere, use bought-in repairs.';
 
 export const isStockCostKind = (k: unknown): k is StockCostKind =>
   (STOCK_COST_KINDS as readonly string[]).includes(String(k));
-/**
- * WHAT A PAST SALE MAY CARRY. Today the same three; lib/stock-historical reads THIS, not the live list,
- * so a kind allowed only on a recorded sale has one place to be added.
- */
-export const HISTORICAL_COST_KINDS: readonly string[] = [...STOCK_COST_KINDS];
+/** WHAT A PAST SALE MAY CARRY: every live kind, plus prep parts. lib/stock-historical reads THIS. */
+export const HISTORICAL_COST_KINDS: readonly string[] = [...STOCK_COST_KINDS, ...HISTORICAL_ONLY_COST_KINDS];
 export const isHistoricalCostKind = (k: unknown): boolean => HISTORICAL_COST_KINDS.includes(String(k));
 export const isVatTreatment = (v: unknown): v is VatTreatment =>
   (VAT_TREATMENTS as readonly string[]).includes(String(v));

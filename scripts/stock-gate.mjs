@@ -1272,8 +1272,16 @@ try {
   // ════════════════════════════════════════════════════════════════════════════════════════════
   //  WHAT A CAR COST BESIDES ITS PARTS — and the credit that takes it back off
   // ════════════════════════════════════════════════════════════════════════════════════════════
-  console.log('\n— the vocabulary is the three DIRECT costs, and only those —');
-  check('delivery in, valeting and MOT', JSON.stringify([...SCST.STOCK_COST_KINDS]) === JSON.stringify(['delivery_in', 'valeting', 'mot']));
+  console.log('\n— the vocabulary is the DIRECT costs, and only those —');
+  check('delivery in, valeting, MOT and bought-in repairs',
+    JSON.stringify([...SCST.STOCK_COST_KINDS]) === JSON.stringify(['delivery_in', 'valeting', 'mot', 'bought_in_repairs']));
+  check('  …prep parts are NOT a live kind — a car in stock gets its parts from its cards',
+    !SCST.isStockCostKind('prep_parts'), 'a typed row beside the card would count the same part twice, invisibly in a total');
+  check('  …but a PAST sale may carry them, and every live kind besides',
+    SCST.isHistoricalCostKind('prep_parts') && SCST.STOCK_COST_KINDS.every((k) => SCST.isHistoricalCostKind(k)));
+  check('  …and every kind a row can hold reads as a NAME, never a key',
+    [...SCST.STOCK_COST_KINDS, ...SCST.HISTORICAL_ONLY_COST_KINDS].every((k) => SCST.costKindLabel(k) !== k)
+      && SCST.costKindLabel('prep_parts') === 'Prep parts');
   check('  …advertising is NOT one — it is an apportioned slot share, not a direct cost',
     !SCST.isStockCostKind('advertising'));
   check('  …and neither is warranty — a provision is a forecast until a claim is PAID',
@@ -1859,6 +1867,9 @@ try {
     !!(await page.$(`[data-testid="credit-row-${fullCredit.id}"]`)));
   check('  …and the net total shows the credit came back',
     /net of credits/.test((await page.textContent('[data-testid="costs-total"]')) ?? ''));
+  const kindOptions = await page.$$eval('[data-testid="cost-kind"] option', (os) => os.map((o) => o.value));
+  check('the add-cost form offers bought-in repairs', kindOptions.includes('bought_in_repairs'), kindOptions.join(', '));
+  check('  …and does NOT offer prep parts on a car in stock', !kindOptions.includes('prep_parts'), kindOptions.join(', '));
   check('  …and vanishes from the FROZEN snapshot, where a £0 line invites “why is this here”',
     SCST.frozenCostRows((await ST.stockCostRows(ZZ_GROUP, itemS.id)), true)
       .every((r) => r.costId !== costOnS.id),

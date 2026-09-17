@@ -22,7 +22,8 @@ import {
 import { projectStock, type Projection } from '@/lib/stock-projection';
 import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
 import {
-  CREDIT_AFTER_DISPOSAL_REFUSAL, checkCredit, frozenCostRows, isStockCostKind, isVatTreatment, netCosts,
+  CREDIT_AFTER_DISPOSAL_REFUSAL, HISTORICAL_ONLY_COST_KINDS, PREP_PARTS_LIVE_REFUSAL, checkCredit, frozenCostRows,
+  isStockCostKind, isVatTreatment, netCosts,
   type CostRow, type CostTotals,
 } from '@/lib/stock-cost';
 import {
@@ -1059,6 +1060,7 @@ export async function addStockCost(a: {
         + 'now — re-running that quarter has to give what it gave then.',
     };
   }
+  if ((HISTORICAL_ONLY_COST_KINDS as readonly string[]).includes(String(a.kind))) return { refused: PREP_PARTS_LIVE_REFUSAL };
   if (!isStockCostKind(a.kind)) return { refused: 'Say what kind of cost this is.' };
   if (!isVatTreatment(a.vatTreatment)) return { refused: 'Say how the supplier charged VAT on it.' };
   if (!a.incurredOn) return { refused: 'Say when you paid it. The date is what puts it in a quarter.' };

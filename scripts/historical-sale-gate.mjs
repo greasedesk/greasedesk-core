@@ -282,9 +282,41 @@ try {
   check('a car taken in through NORMAL intake reads NOT RECORDED, not "not supplied" — nobody asked',
     PW.paperworkField(liveItem?.seller_name, 'seller_name', liveItem?.not_on_paperwork).state === 'not_recorded', 'the LC09XFU case');
   check('  …but it DOES get a stock number — every car', Number.isInteger(liveItem?.stock_number) && liveItem.stock_number > 0, `${liveItem?.stock_number}`);
+  if ('id' in live) {
+    const livePrep = await ST.addStockCost({ groupId: ZZ_GROUP, userId: user.id, stockItemId: live.id, kind: 'prep_parts',
+      description: 'Brake pads', amountPence: 4800, incurredOn: new Date('2026-06-28T00:00:00Z'), vatTreatment: 'standard_recoverable' });
+    check('PREP PARTS on a car in stock refuse, and say why — its card already counts them',
+      'refused' in livePrep && /count the same part twice/.test(livePrep.refused), 'refused' in livePrep ? livePrep.refused.slice(0, 80) : 'ACCEPTED — a doubled part');
+    const liveRepair = await ST.addStockCost({ groupId: ZZ_GROUP, userId: user.id, stockItemId: live.id, kind: 'bought_in_repairs',
+      description: 'Smart repair, rear bumper', amountPence: 9000, incurredOn: new Date('2026-06-28T00:00:00Z'), vatTreatment: 'standard_recoverable' });
+    check('  …while BOUGHT-IN REPAIRS are accepted on any car', 'id' in liveRepair, 'refused' in liveRepair ? liveRepair.refused : '');
+    check('  …and only the repair was written', JSON.stringify((await prisma.stockCost.findMany({ where: { stock_item_id: live.id }, select: { kind: true } })).map((r) => r.kind)) === '["bought_in_repairs"]');
+  }
   const cBefore = (await counters()).stock;
   const twice = await ST.takeIntoStock({ groupId: ZZ_GROUP, userId: user.id, vehicleId: nv.id, acquiredAt: new Date('2026-06-28T00:00:00Z'), purchasePence: 50000, vatStatus: 'margin', source: 'private' });
   check('a REFUSED intake spends no stock number', 'refused' in twice && (await counters()).stock === cBefore, `${cBefore} → ${(await counters()).stock}`);
+
+  console.log('\n— A PAST SALE CARRIES ITS PREP AS BILLS —');
+  const pp = await HS.recordHistoricalSale(entry({
+    registration: `${PREFIX}25M`,
+    costs: [
+      { kind: 'prep_parts', description: 'Clutch kit, GSF invoice 88213', amountPence: 21600, incurredOn: new Date('2026-01-12T00:00:00Z'), vatTreatment: 'standard_recoverable' },
+      { kind: 'prep_parts', description: 'Parts from a private seller', amountPence: 3000, incurredOn: new Date('2026-01-13T00:00:00Z'), vatTreatment: 'no_vat' },
+      { kind: 'bought_in_repairs', description: 'Alloy refurb, VAT not reclaimed', amountPence: 18000, incurredOn: new Date('2026-01-14T00:00:00Z'), vatTreatment: 'standard_not_recoverable' },
+    ],
+  }));
+  check('prep parts and bought-in repairs are accepted on a past sale', 'stockItemId' in pp, 'refused' in pp ? pp.refused : '');
+  const PP = got(pp);
+  const ppSnaps = await prisma.stockCostSnapshot.findMany({ where: { stock_item_id: PP.stockItemId }, select: { kind: true, amount_pence: true } });
+  // £216 reclaimed → £180; £30 no VAT → £30; £180 whose VAT was NOT reclaimed → £180. Total £390.
+  check('each bill froze at what it cost the car: £180 + £30 + £180, the VAT choice per bill deciding it',
+    ppSnaps.reduce((t, r) => t + r.amount_pence, 0) === 39000 && ppSnaps.length === 3,
+    ppSnaps.map((r) => `${r.kind} ${r.amount_pence}`).join(', '));
+  check('  …keeping their kinds, so the book can say which were parts', ppSnaps.filter((r) => r.kind === 'prep_parts').length === 2);
+  const badKind = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}26M`, costs: [{ kind: 'advertising', description: 'AutoTrader', amountPence: 5000, incurredOn: new Date('2026-01-12T00:00:00Z'), vatTreatment: 'no_vat' }] }));
+  check('a kind that is not a direct cost refuses on a past sale too, naming the row', 'refused' in badKind && /^Cost 1:/.test(badKind.refused));
+  const lateBill = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}27M`, costs: [{ kind: 'prep_parts', description: 'Late part', amountPence: 5000, incurredOn: new Date('2026-03-01T00:00:00Z'), vatTreatment: 'no_vat' }] }));
+  check('a bill dated after the sale refuses', 'refused' in lateBill && /after the car was sold/.test(lateBill.refused));
 
   console.log('\n— A BLANK REFUSES, AND WRITES NOTHING —');
   const bl = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}30M`, sellerName: '' }));
