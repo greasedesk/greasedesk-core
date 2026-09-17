@@ -182,6 +182,7 @@ const TIERS = {
     'car-sale-gate',
     'historical-sale-gate',
     'dev-restart-gate',
+    'after-sale-gate',
     'series-scope-gate',
     'vat-sales-gate',
     'redaction-gate',

@@ -114,6 +114,7 @@ try {
     'lib/invoice-payment-intent.ts | series === \'warranty\'': [1, 'KIND — warranty is not payable by card; a car sale is a debt and IS payable'],
     'lib/invoice-pay-link.ts | series === \'warranty\'': [1, 'KIND — as above: no pay link on warranty; a car sale gets one'],
     'lib/historical-invoice.ts | series !== \'historical\'': [1, 'KIND — the refusal applies only to historical records'],
+    'lib/stock-after-sale.ts | series: \'warranty\'': [1, 'KIND — work after a sale that went on the warranty series is after-sale work by definition'],
     'lib/stock-historical.ts | series: \'vehicle_sale\'': [1, 'KIND — the historical boundary IS the first car sale invoiced here, by definition'],
     'lib/dashboard-tiles.ts | series: \'warranty\'': [1, 'KIND — the warranty tile counts warranty invoices by definition'],
     'lib/invoice-doc.ts | series: \'chargeable\'': [1, 'TYPE — the document’s series union'],

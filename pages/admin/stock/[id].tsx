@@ -23,6 +23,7 @@ import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import { MISSING_COST_KINDS } from '@/lib/stock-projection';
 import { STOCK_COST_KINDS, STOCK_COST_LABELS, VAT_TREATMENT_LABELS, costKindLabel, type StockCostKind } from '@/lib/stock-cost';
 import { paperworkField, paperworkText, type PaperworkKey } from '@/lib/stock-paperwork';
+import { AFTER_SALE_LABOUR_NOTE, AFTER_SALE_NOTE, AFTER_SALE_TITLE, afterSaleSummary } from '@/lib/stock-after-sale-rules';
 import { FROZEN_DETAIL_NOTE, PREP_EXPAND_THRESHOLD } from '@/lib/stock-prep';
 import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
@@ -57,6 +58,11 @@ type Detail = {
     partsPence: number; missingCostKinds: string[]; note: string;
   };
   disposedAt: string | null; disposalKind: string | null; salePence: number | null;
+  afterSale: null | {
+    cards: Array<{ cardId: string; createdAt: string; isComeback: boolean; invoiceNumber: string | null; invoiced: boolean; hours: number;
+      cost: { partsPence: number; unknownCostLines: number; labourLines: number } }>;
+    partsPence: number; unknownCostLines: number; hours: number; labourLines: number;
+  };
   book: {
     stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
     vin: string | null; colour: string | null;
@@ -212,6 +218,36 @@ export default function StockCarPage() {
             {!sold && (
               <SellCarPanel stockItemId={id} registration={d.registration} description={d.description} vatStatus={d.vatStatus}
                 projectedSalePence={d.projectedSalePence} openPrepCards={openPrep} />
+            )}
+
+            {/* ── AFTER THE SALE ───────────────────────────────────────────────────────────────────
+                Beside the frozen figures, never in them. Only on a sold car; stated even when empty. */}
+            {d.afterSale && (
+              <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="after-sale">
+                <h2 className="text-sm font-semibold text-ink">{AFTER_SALE_TITLE}</h2>
+                <p className="text-xs text-muted mt-1">{AFTER_SALE_NOTE}</p>
+                {d.afterSale.cards.length === 0 ? (
+                  <p className="mt-2 text-sm text-muted" data-testid="after-sale-none">No comeback or warranty work recorded on this car since it sold.</p>
+                ) : (
+                  <>
+                    <p className="mt-2 text-sm text-ink" data-testid="after-sale-summary">{afterSaleSummary(d.afterSale, d.afterSale.cards.length)}</p>
+                    <ul className="mt-2 divide-y divide-line text-sm">
+                      {d.afterSale.cards.map((c) => (
+                        <li key={c.cardId} className="py-1.5 flex flex-wrap justify-between gap-2" data-testid={`after-sale-card-${c.cardId}`}>
+                          <span>
+                            <a href={`/admin/jobcards/${c.cardId}`} className="text-ink underline">{new Date(c.createdAt).toISOString().slice(0, 10)}</a>
+                            <span className="ml-2 text-muted">{c.isComeback ? 'Comeback' : 'Warranty'}{c.invoiceNumber ? ` · ${c.invoiceNumber}` : ' · not yet invoiced'}</span>
+                          </span>
+                          <span className="tabular-nums text-ink">
+                            {money(c.cost.partsPence)} parts{c.hours ? ` · ${c.hours} h not costed` : ''}{c.cost.unknownCostLines ? ` · ${c.cost.unknownCostLines} without a trade cost` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {d.afterSale.hours > 0 && <p className="mt-2 text-xs text-muted" data-testid="after-sale-labour-note">{AFTER_SALE_LABOUR_NOTE}</p>}
+                  </>
+                )}
+              </section>
             )}
 
             {/* ── THE STOCK BOOK'S ROW FOR THIS CAR ───────────────────────────────────────────────

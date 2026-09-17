@@ -21,6 +21,8 @@ import {
 } from '@/lib/stock-prep';
 import { projectStock, type Projection } from '@/lib/stock-projection';
 import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
+import { afterSaleWork } from '@/lib/stock-after-sale';
+import type { AfterSaleFigures } from '@/lib/stock-after-sale-rules';
 import {
   CREDIT_AFTER_DISPOSAL_REFUSAL, HISTORICAL_ONLY_COST_KINDS, PREP_PARTS_LIVE_REFUSAL, checkCredit, frozenCostRows,
   isStockCostKind, isVatTreatment, netCosts,
@@ -847,6 +849,8 @@ export type StockDetail = {
   disposedAt: Date | null;
   disposalKind: string | null;
   salePence: number | null;
+  /** Comeback and warranty work since the sale — BESIDE the frozen figures, never in them. NULL while in stock. */
+  afterSale: AfterSaleFigures | null;
   /**
    * THE STOCK BOOK'S FIELDS, raw, with the ticks beside them — the page reads them through
    * lib/stock-paperwork so "not supplied" and "not recorded" stay two different words.
@@ -926,6 +930,7 @@ export async function stockDetail(
     disposedAt: it.disposal?.disposed_at ?? null,
     disposalKind: it.disposal?.kind ?? null,
     salePence: it.disposal?.sale_pence ?? null,
+    afterSale: it.disposal ? ((await afterSaleWork(groupId, [it.id])).get(it.id) ?? null) : null,
     book: {
       stockNumber: it.stock_number, sellerName: it.seller_name, purchaseRef: it.purchase_ref,
       notOnPaperwork: it.not_on_paperwork ?? [],
@@ -1174,9 +1179,11 @@ export async function stockCostTotals(
  * this car sit on my forecourt" rather than "how long did I own it". A car with no arrival recorded
  * yields NULL and is counted separately rather than averaged in at its purchase date.
  */
+export type AfterSaleTotals = { cars: number; cards: number; partsPence: number; unknownCostLines: number; hours: number };
+
 export async function soldInPeriod(
   groupId: string, from: Date, to: Date,
-): Promise<{ rows: SoldRow[]; summary: SoldSummary }> {
+): Promise<{ rows: SoldRow[]; summary: SoldSummary; afterSale: AfterSaleTotals }> {
   const items = await prisma.stockItem.findMany({
     where: { group_id: groupId, disposal: { is: { disposed_at: { gte: from, lte: to } } } },
     select: {
@@ -1203,7 +1210,18 @@ export async function soldInPeriod(
   }));
   // Sorted by when they left — a period report reads chronologically, not by when they were bought.
   rows.sort((a, b) => a.disposedAt.getTime() - b.disposedAt.getTime());
-  return { rows, summary: summariseSold(rows) };
+  /**
+   * AFTER THE SALE, for the cars that left in this period — a SEPARATE figure from `summary`, which is
+   * computed from the frozen rows alone and never sees it. Not frozen: it grows as work is done.
+   */
+  const work = await afterSaleWork(groupId, rows.map((r) => r.stockItemId));
+  const afterSale: AfterSaleTotals = { cars: 0, cards: 0, partsPence: 0, unknownCostLines: 0, hours: 0 };
+  for (const f of work.values()) {
+    if (!f.cards.length) continue;
+    afterSale.cars += 1; afterSale.cards += f.cards.length; afterSale.partsPence += f.partsPence;
+    afterSale.unknownCostLines += f.unknownCostLines; afterSale.hours = Math.round((afterSale.hours + f.hours) * 100) / 100;
+  }
+  return { rows, summary: summariseSold(rows), afterSale };
 }
 
 

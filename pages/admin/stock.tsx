@@ -25,6 +25,7 @@ import {
   DEFAULT_SORT, matchStock, sortStock, stockTotals, tabCounts, tabFor, type SortDir, type SortKey,
 } from '@/lib/stock-list';
 import { denominatorNote } from '@/lib/stock-sold';
+import { AFTER_SALE_LABOUR_NOTE, AFTER_SALE_TITLE, afterSaleSummary } from '@/lib/stock-after-sale-rules';
 import { isReacquisition, priorSaleNotice, raisesCreditNote } from '@/lib/stock-reacquisition';
 
 type Row = {
@@ -84,6 +85,7 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
   const [sold, setSold] = useState<null | {
     summary: { disposals: number; sold: number; revenuePence: number; profitPence: number;
       avgProfitPence: number | null; avgDaysInStock: number | null; daysUnknown: number; nonSales: number };
+    afterSale?: { cars: number; cards: number; partsPence: number; unknownCostLines: number; hours: number };
     from: string; to: string;
   }>(null);
 
@@ -372,6 +374,23 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
                 <p className="mt-2 text-xs text-muted" data-testid="sold-denominator">
                   {denominatorNote(sold.summary)}
                 </p>
+                {/* AFTER THE SALE — beside the profit tile, never in it. Stated even when there is none, so
+                    an absence reads as "nothing recorded" rather than as a panel that failed to load. */}
+                <div className="mt-3 rounded-xl border border-line bg-surface p-3" data-testid="sold-after-sale">
+                  <p className="text-xs text-muted">{AFTER_SALE_TITLE}</p>
+                  {sold.afterSale && sold.afterSale.cars > 0 ? (
+                    <>
+                      <p className="text-sm text-ink" data-testid="sold-after-sale-summary">
+                        On {sold.afterSale.cars} {sold.afterSale.cars === 1 ? 'car' : 'cars'} sold in this period, {afterSaleSummary(sold.afterSale, sold.afterSale.cards)}
+                      </p>
+                      <p className="text-[11px] text-muted">
+                        Comeback and warranty work since they sold. Not taken off the gross profit above, which froze at each sale. {sold.afterSale.hours > 0 ? AFTER_SALE_LABOUR_NOTE : ''}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted" data-testid="sold-after-sale-none">No comeback or warranty work recorded on these cars since they sold.</p>
+                  )}
+                </div>
               </>
             )}
           </section>
