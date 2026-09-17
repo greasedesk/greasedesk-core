@@ -180,6 +180,7 @@ const TIERS = {
     'customer-car-gate',
     'sale-invoice-gate',
     'car-sale-gate',
+    'historical-sale-gate',
     'series-scope-gate',
     'vat-sales-gate',
     'redaction-gate',

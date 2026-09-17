@@ -35,7 +35,23 @@ const asMoney = (v: unknown, cap = 100000000): number => {
 };
 
 /** Bring a car into stock. The row IS the assertion of ownership; no ownership edge is written. */
-export async function takeIntoStock(a: {
+/**
+ * THE STOCK NUMBER — per tenant, in sequence. Same shape as lib/invoice-number's counters: one
+ * upsert-increment that Postgres row-locks on conflict, so two intakes at once serialise. MUST run in the
+ * caller's transaction: a rolled-back intake gives its number back, so the sequence never gaps.
+ */
+export async function assignStockNumber(tx: Prisma.TransactionClient, groupId: string): Promise<number> {
+  const rows = await tx.$queryRaw<Array<{ last_value: number | bigint }>>`
+    INSERT INTO "StockNumberSequence" ("group_id", "last_value")
+    VALUES (${groupId}, 1)
+    ON CONFLICT ("group_id") DO UPDATE
+      SET "last_value" = "StockNumberSequence"."last_value" + 1, "updated_at" = now()
+    RETURNING "last_value";
+  `;
+  return Number(rows[0].last_value);
+}
+
+export type IntakeInput = {
   groupId: string; userId: string; vehicleId: string; acquiredAt: Date;
   purchasePence: unknown; vatStatus: unknown; source: unknown;
   premiumPence?: unknown; servicesPence?: unknown;
@@ -47,9 +63,46 @@ export async function takeIntoStock(a: {
   status?: unknown;
   /** When it turned up. NULL for a due-in car — see lib/stock::stockClock. */
   arrivedAt?: Date | null;
-}): Promise<{ id: string; creditableInvoiceId?: string | null } | { refused: string }> {
+  /**
+   * THE STOCK BOOK'S PURCHASE PAPERWORK. Asked for by historical entry today; normal intake follows.
+   * Validated by the caller through lib/stock-paperwork::checkPaperwork — this writer stores them.
+   */
+  sellerName?: string | null; purchaseRef?: string | null; notOnPaperwork?: string[];
+};
+
+export async function takeIntoStock(a: IntakeInput): Promise<{ id: string; stockNumber: number; creditableInvoiceId?: string | null } | { refused: string }> {
+  const out = await prisma.$transaction((tx) => takeIntoStockInTx(tx, a));
+  if ('refused' in out) return out;
+  await recordIntakeMileage(a);
+  return out;
+}
+
+/**
+ * THE MILEAGE IS A READING, NOT A COLUMN. It goes into the same series the MOT history and every
+ * visit go into, under its own source, so the mileage trend on this car counts the day we bought it
+ * like any other day. Storing it on the stock item instead would have given a number no chart could
+ * see and a second place to ask a car how far it has gone.
+ *
+ * AFTER the stock row commits, deliberately. A reading is a fact about the car that stands whether or
+ * not this purchase completes, so it must not be able to prevent the purchase being recorded; and
+ * recordOdometerReadings upserts on (vehicle, source, date), so a retried intake writes one row.
+ */
+export async function recordIntakeMileage(a: { groupId: string; vehicleId: string; acquiredAt: Date; mileageMiles?: unknown }): Promise<void> {
+  const miles = parseMiles(a.mileageMiles);
+  if ('miles' in miles && miles.miles !== null) {
+    await recordOdometerReadings(prisma, {
+      groupId: a.groupId, vehicleId: a.vehicleId, source: 'auction',
+      readings: [{ date: a.acquiredAt, miles: miles.miles }],
+    });
+  }
+}
+
+/** The intake itself, in the CALLER'S transaction — so the stock number and the row commit together. */
+export async function takeIntoStockInTx(
+  tx: Prisma.TransactionClient, a: IntakeInput,
+): Promise<{ id: string; stockNumber: number; creditableInvoiceId?: string | null } | { refused: string }> {
   // THE CAR MUST BE THIS TENANT'S. Checked here because this is the door, not in each caller.
-  const vehicle = await prisma.vehicle.findFirst({
+  const vehicle = await tx.vehicle.findFirst({
     where: { id: a.vehicleId, group_id: a.groupId }, select: { id: true },
   });
   if (!vehicle) return { refused: 'That vehicle is not on this account.' };
@@ -57,7 +110,7 @@ export async function takeIntoStock(a: {
   // ONE LIVE STOCK RECORD PER CAR. A second would make "is this in stock?" a question with two
   // answers. Not a database constraint: a car legitimately comes back — bought, sold, bought again —
   // so the rule is "no UNDISPOSED record", which no UNIQUE index can express.
-  const open = await prisma.stockItem.findFirst({
+  const open = await tx.stockItem.findFirst({
     where: { group_id: a.groupId, vehicle_id: a.vehicleId, disposal: { is: null } },
     select: { id: true },
   });
@@ -103,10 +156,16 @@ export async function takeIntoStock(a: {
     return { refused: MUST_CHOOSE_REFUSAL };
   }
 
-  const row = await prisma.stockItem.create({
+  // LAST, after every refusal: a number is spent only on a row that is about to exist.
+  const stockNumber = await assignStockNumber(tx, a.groupId);
+  const row = await tx.stockItem.create({
     data: {
       group_id: a.groupId, vehicle_id: a.vehicleId, created_by_user_id: a.userId,
       acquired_at: a.acquiredAt,
+      stock_number: stockNumber,
+      seller_name: typeof a.sellerName === 'string' && a.sellerName.trim() ? a.sellerName.trim().slice(0, 200) : null,
+      purchase_ref: typeof a.purchaseRef === 'string' && a.purchaseRef.trim() ? a.purchaseRef.trim().slice(0, 100) : null,
+      not_on_paperwork: Array.isArray(a.notOnPaperwork) ? a.notOnPaperwork : [],
       purchase_pence: purchasePence,
       // CAPTURED AT PURCHASE. Never re-read from the tenant's profile: a margin car stays a margin car.
       vat_status: vatStatusFinal, source,
@@ -127,25 +186,7 @@ export async function takeIntoStock(a: {
     },
     select: { id: true },
   });
-
-  /**
-   * THE MILEAGE IS A READING, NOT A COLUMN. It goes into the same series the MOT history and every
-   * visit go into, under its own source, so the mileage trend on this car counts the day we bought it
-   * like any other day. Storing it on the stock item instead would have given a number no chart could
-   * see and a second place to ask a car how far it has gone.
-   *
-   * AFTER the stock row, deliberately. A reading is a fact about the car that stands whether or not
-   * this purchase completes, so it must not be able to prevent the purchase being recorded; and
-   * recordOdometerReadings upserts on (vehicle, source, date), so a retried intake writes one row.
-   */
-  const miles = parseMiles(a.mileageMiles);
-  if ('miles' in miles && miles.miles !== null) {
-    await recordOdometerReadings(prisma, {
-      groupId: a.groupId, vehicleId: a.vehicleId, source: 'auction',
-      readings: [{ date: a.acquiredAt, miles: miles.miles }],
-    });
-  }
-  return { id: row.id, creditableInvoiceId };
+  return { id: row.id, stockNumber, creditableInvoiceId };
 }
 
 /**
@@ -165,6 +206,18 @@ export async function recordDisposalInTx(tx: Prisma.TransactionClient, a: {
   kind: unknown; salePence?: unknown; note?: unknown;
   /** What prep cost, as the caller can see it TODAY. Frozen here and never recomputed. */
   costs?: { kind: string; description: string; amountPence: unknown; jobCardId?: string | null }[];
+  /**
+   * WHO BOUGHT IT, AS THEY WERE AT THE SALE. Frozen onto the disposal for the stock book: a customer's
+   * name and address move on, and the book must say who the car went to THEN. Sales only.
+   */
+  buyer?: { customerId: string | null; name: string | null; address: string | null };
+  /**
+   * RECORDED, NOT INVOICED — historical entry ONLY (lib/stock-historical). Written here, once, and never
+   * changed: it is how a reader tells no-invoice-by-design from a sale whose invoice is missing.
+   */
+  notInvoiced?: { receiptRef: string | null };
+  /** Sale-side fields a person looked for on the paperwork and did not find. See lib/stock-paperwork. */
+  notOnPaperwork?: string[];
 }): Promise<{ id: string } | { refused: string }> {
   const kind = (DISPOSAL_KINDS as readonly string[]).includes(String(a.kind))
     ? (a.kind as DisposalKind) : null;
@@ -192,6 +245,16 @@ export async function recordDisposalInTx(tx: Prisma.TransactionClient, a: {
       group_id: a.groupId, stock_item_id: a.stockItemId, created_by_user_id: a.userId,
       disposed_at: a.disposedAt, kind, sale_pence: salePence,
       note: typeof a.note === 'string' && a.note.trim() ? a.note.trim().slice(0, 500) : null,
+      ...(a.buyer && hasSalePrice(kind) ? {
+        buyer_customer_id: a.buyer.customerId,
+        buyer_name: a.buyer.name?.trim() || null,
+        buyer_address: a.buyer.address?.trim() || null,
+      } : {}),
+      ...(a.notInvoiced ? {
+        recorded_not_invoiced: true,
+        receipt_ref: a.notInvoiced.receiptRef?.trim() || null,
+      } : {}),
+      not_on_paperwork: Array.isArray(a.notOnPaperwork) ? a.notOnPaperwork : [],
     },
     select: { id: true },
   });

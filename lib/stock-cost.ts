@@ -34,6 +34,12 @@ export const STOCK_COST_LABELS: Record<StockCostKind, string> = {
 
 export const isStockCostKind = (k: unknown): k is StockCostKind =>
   (STOCK_COST_KINDS as readonly string[]).includes(String(k));
+/**
+ * WHAT A PAST SALE MAY CARRY. Today the same three; lib/stock-historical reads THIS, not the live list,
+ * so a kind allowed only on a recorded sale has one place to be added.
+ */
+export const HISTORICAL_COST_KINDS: readonly string[] = [...STOCK_COST_KINDS];
+export const isHistoricalCostKind = (k: unknown): boolean => HISTORICAL_COST_KINDS.includes(String(k));
 export const isVatTreatment = (v: unknown): v is VatTreatment =>
   (VAT_TREATMENTS as readonly string[]).includes(String(v));
 

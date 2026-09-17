@@ -5335,6 +5335,26 @@ model StockItem {
   /// Editable for as long as the car is in stock, and meaningless afterwards: once disposed, the real
   /// sale price on StockDisposal is the answer and this is only what we used to think.
   projected_sale_pence Int?
+  /// ── THE STOCK BOOK'S OWN FIELDS ───────────────────────────────────────────────────────────────
+  /// THE STOCK NUMBER — per tenant, in sequence, from StockNumberSequence, assigned in the same
+  /// transaction that creates the row, so a rolled-back intake spends no number.
+  /// NULL = the car was taken in BEFORE stock numbers existed and has not been numbered yet. The book
+  /// prints that as not recorded; it never invents one.
+  /// Not UNIQUE in the database yet: CREATE UNIQUE INDEX classifies constraining. The counter is the
+  /// guarantee until the index follows in a migration of its own.
+  stock_number Int?
+  /// WHO SOLD IT TO US and THEIR invoice or receipt number — both on the purchase paperwork.
+  /// Each has THREE states, not two, read through lib/stock-paperwork:
+  ///   a value                                  → recorded
+  ///   NULL and its key IN not_on_paperwork     → "not supplied": somebody looked and it was not there
+  ///   NULL and its key NOT in not_on_paperwork → "not recorded": nobody was asked (every car taken in
+  ///                                               before these columns, LC09XFU included)
+  /// @nulls: seller_name, purchase_ref
+  seller_name  String?
+  purchase_ref String?
+  /// THE PURCHASE-SIDE FIELDS A PERSON LOOKED FOR AND DID NOT FIND. A statement, written once at entry
+  /// — never a way of leaving a field blank. Keys from lib/stock-paperwork PURCHASE_PAPERWORK_KEYS.
+  not_on_paperwork String[] @default([])
   created_by_user_id String
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -5368,6 +5388,28 @@ model StockDisposal {
   /// NULL = nothing was written down, which is the ordinary case. A free-text aside for the awkward
   /// disposals — who it went to, why it came back — never a field anything reads or totals.
   note          String?
+  /// ── RECORDED, NOT INVOICED ─────────────────────────────────────────────────────────────────────
+  /// TRUE = a sale made BEFORE this tenant invoiced car sales through GreaseDesk, entered afterwards by
+  /// lib/stock-historical and nothing else. The buyer holds the garage's own receipt from the time
+  /// (receipt_ref); no GreaseDesk number was ever minted. WRITTEN AT ENTRY AND NEVER CHANGED — the
+  /// marker is what lets a reader tell no-invoice-by-design from a sale whose invoice is missing, and a
+  /// marker cannot be recovered after the fact (lib/historical-invoice learned that on 177 rows).
+  /// FALSE on every sale made through lib/stock-sale, which always mints.
+  recorded_not_invoiced Boolean @default(false)
+  /// The receipt the buyer was given at the time. NULL: see not_on_paperwork for which NULL it is.
+  receipt_ref   String?
+  /// THE BUYER AS THEY WERE AT THE SALE — frozen here, because a customer's name and address move on
+  /// and the stock book must say who the car went to THEN. NULL on a disposal that is not a sale, and on
+  /// a sale where the paperwork did not carry it (see not_on_paperwork).
+  /// buyer_customer_id has NO foreign key, like stock_disposal_id: ADD CONSTRAINT would cost a push.
+  /// @nulls: buyer_customer_id, buyer_name, buyer_address — NULL name = no buyer on the paperwork, or not a
+  /// sale; NULL customer id = no named buyer (both writers make a named buyer a customer, today).
+  buyer_customer_id String?
+  buyer_name        String?
+  buyer_address     String?
+  /// THE SALE-SIDE FIELDS A PERSON LOOKED FOR AND DID NOT FIND. Keys from lib/stock-paperwork
+  /// SALE_PAPERWORK_KEYS. Same rule as StockItem.not_on_paperwork: a fact about the record, not a blank.
+  not_on_paperwork String[] @default([])
   created_by_user_id String
   created_at DateTime @default(now())
 
@@ -5392,6 +5434,17 @@ model StockDisposal {
 /// as cost of sale. A car's delivery-in is part of the cost of an asset held for resale.
 ///
 /// LIVE while the car is in stock; frozen into StockCostSnapshot at disposal beside the prep-card rows.
+/// THE STOCK NUMBER COUNTER — one row per tenant. Same shape and guarantees as InvoiceSequence: a single
+/// upsert-increment Postgres row-locks on conflict, run INSIDE the transaction that creates the stock
+/// item, so a rolled-back intake gives its number back. A separate table rather than another column on
+/// InvoiceSequence, because a stock number is not an invoice number and a name that reads wrong is how
+/// the two get confused later.
+model StockNumberSequence {
+  group_id   String   @id
+  last_value Int      @default(0)
+  updated_at DateTime @default(now())
+}
+
 model StockCost {
   id            String @id @default(uuid())
   group_id      String

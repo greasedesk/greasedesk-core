@@ -103,33 +103,43 @@ export async function sellCar(a: {
       });
       if (!item) throw new SaleRefused('That stock record is not on this account.');
 
-      // 1 ─ THE DISPOSAL. Kind is fixed: this is the sale path, and it offers nothing else.
-      const disposal = await recordDisposalInTx(tx, {
-        groupId: a.groupId, userId: a.userId, stockItemId: item.id,
-        disposedAt: a.soldAt, kind: 'sold', salePence: price, note: a.note,
-      });
-      if ('refused' in disposal) throw new SaleRefused(disposal.refused);
-
-      // 2 ─ THE BUYER, and ownership moving to them.
+      // 1 ─ THE BUYER, resolved FIRST so the disposal can freeze who the car went to.
       const buyer = a.buyer as BuyerInput;
       let customerId: string;
+      let buyerName: string;
+      let buyerAddress: string;
       if ('customerId' in buyer) {
-        const found = await tx.customer.findFirst({ where: { id: buyer.customerId, group_id: a.groupId }, select: { id: true, address: true } });
+        const found = await tx.customer.findFirst({ where: { id: buyer.customerId, group_id: a.groupId }, select: { id: true, name: true, address: true } });
         if (!found) throw new SaleRefused('That customer is not on this account.');
         if (!found.address || !found.address.trim()) throw new SaleRefused(PICKED_BUYER_NO_ADDRESS);
         customerId = found.id;
+        buyerName = found.name;
+        buyerAddress = found.address;
       } else {
         const phone = customerPhoneFields(buyer.phone ?? undefined, dialCode);
+        buyerName = buyer.name.trim();
+        buyerAddress = buyer.address.trim();
         customerId = (await tx.customer.create({
           data: {
             group_id: a.groupId, site_id: a.siteId,
-            name: buyer.name.trim(), address: buyer.address.trim(),
+            name: buyerName, address: buyerAddress,
             phone: phone.phone, phone_e164: phone.phone_e164,
             email: typeof buyer.email === 'string' && buyer.email.trim() ? buyer.email.trim() : null,
           },
           select: { id: true },
         })).id;
       }
+
+      // 2 ─ THE DISPOSAL. Kind is fixed: this is the sale path, and it offers nothing else. The buyer is
+      // frozen onto it for the stock book; the invoice number is the sale's receipt, so no receipt_ref.
+      const disposal = await recordDisposalInTx(tx, {
+        groupId: a.groupId, userId: a.userId, stockItemId: item.id,
+        disposedAt: a.soldAt, kind: 'sold', salePence: price, note: a.note,
+        buyer: { customerId, name: buyerName, address: buyerAddress },
+      });
+      if ('refused' in disposal) throw new SaleRefused(disposal.refused);
+
+      // 3 ─ OWNERSHIP moves to the buyer.
       await tx.vehicleOwnership.updateMany({
         where: { vehicle_id: item.vehicle.id, is_current: true },
         data: { is_current: false, valid_to: a.soldAt },
@@ -143,7 +153,7 @@ export async function sellCar(a: {
         registration: item.vehicle.registration, vin: item.vehicle.vin,
       });
 
-      // 3 ─ THE SALE CARD. One line, built for the scheme (lib/stock-sale-rules::saleLine).
+      // 4 ─ THE SALE CARD. One line, built for the scheme (lib/stock-sale-rules::saleLine).
       const line = saleLine(price, item.vat_status);
       const card = await tx.jobCard.create({
         data: {
@@ -158,7 +168,7 @@ export async function sellCar(a: {
         select: { id: true },
       });
 
-      // 4 ─ THE INVOICE. Last, and it refuses to run on a car with no disposal.
+      // 5 ─ THE INVOICE. Last, and it refuses to run on a car with no disposal.
       const invoiceId = await mint(tx, card.id, a.groupId);
 
       await writeAudit(tx, {

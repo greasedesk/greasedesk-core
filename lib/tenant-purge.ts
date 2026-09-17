@@ -172,7 +172,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     invoices, invoiceLines, invoiceSequence, paymentMethods, payments, refunds,
     catalogueItems, catalogueComponents, catalogueTierPrices, serviceTiers, promos, promoTargets,
     costPeople, overheads, costAllocations, leaveRecords, publicHolidays, employmentEvents,
-    vinReadShadow, uploadTelemetry,
+    vinReadShadow, uploadTelemetry, stockNumberSequence,
   ] = await Promise.all([
     prisma.user.count({ where: { group_id: groupId } }),
     prisma.site.count({ where: { group_id: groupId } }),
@@ -219,6 +219,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     prisma.employmentEvent.count({ where: { group_id: groupId } }),
     prisma.vinReadShadow.count({ where: { group_id: groupId } }),
     prisma.uploadTelemetry.count({ where: { group_id: groupId } }),
+    prisma.stockNumberSequence.count({ where: { group_id: groupId } }),
   ]);
   const groups = await prisma.group.count({ where: { id: groupId } });
 
@@ -256,7 +257,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     ServiceTier: serviceTiers, Promo: promos, PromoTarget: promoTargets,
     CostPerson: costPeople, Overhead: overheads, CostAllocation: costAllocations,
     LeaveRecord: leaveRecords, PublicHoliday: publicHolidays, EmploymentEvent: employmentEvents,
-    VinReadShadow: vinReadShadow, UploadTelemetry: uploadTelemetry,
+    VinReadShadow: vinReadShadow, UploadTelemetry: uploadTelemetry, StockNumberSequence: stockNumberSequence,
     TwoFactorSecret: twoFactorSecrets, DeliveredCode: deliveredCodes, TwoFactorRecoveryCode: recoveryCodes,
     VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
     RepVisitAnswer: repVisitAnswers, RepLead: repLeads, RepVisitNote: repVisitNotes,
@@ -338,6 +339,7 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     await tx.user.deleteMany({ where: { group_id: groupId } });         // EXPLICIT (SetNull would orphan PII) → Account/Session/UserSite cascade
     await tx.uploadTelemetry.deleteMany({ where: { group_id: groupId } }); // no FK — cascade misses
     await tx.vinReadShadow.deleteMany({ where: { group_id: groupId } });   // no FK — cascade misses
+    await tx.stockNumberSequence.deleteMany({ where: { group_id: groupId } }); // no FK (a new table's FK is a second push) — cascade misses
 
     // ── SUBJECT-KEYED SWEEP. No FK to Group, so the cascade below never sees these. ────────────
     // In the SAME transaction as the rest: a purge that half-erased somebody would be worse than
