@@ -1273,8 +1273,8 @@ try {
   //  WHAT A CAR COST BESIDES ITS PARTS — and the credit that takes it back off
   // ════════════════════════════════════════════════════════════════════════════════════════════
   console.log('\n— the vocabulary is the DIRECT costs, and only those —');
-  check('delivery in, valeting, MOT and bought-in repairs',
-    JSON.stringify([...SCST.STOCK_COST_KINDS]) === JSON.stringify(['delivery_in', 'valeting', 'mot', 'bought_in_repairs']));
+  check('delivery in, valeting, MOT, bought-in repairs and a warranty policy BOUGHT',
+    JSON.stringify([...SCST.STOCK_COST_KINDS]) === JSON.stringify(['delivery_in', 'valeting', 'mot', 'bought_in_repairs', 'warranty_policy']));
   check('  …prep parts are NOT a live kind — a car in stock gets its parts from its cards',
     !SCST.isStockCostKind('prep_parts'), 'a typed row beside the card would count the same part twice, invisibly in a total');
   check('  …but a PAST sale may carry them, and every live kind besides',

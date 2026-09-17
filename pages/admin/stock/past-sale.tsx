@@ -47,8 +47,8 @@ export default function PastSalePage() {
 
   const [f, setF] = useState({
     registration: '', make: '', model: '', acquiredAt: '', arrivedAt: '', source: 'private', vatStatus: 'margin',
-    purchase: '', premium: '', sellerName: '', purchaseRef: '', mileage: '',
-    soldAt: '', sale: '', receiptRef: '',
+    purchase: '', premium: '', sellerName: '', purchaseRef: '', mileage: '', vin: '', colour: '',
+    soldAt: '', sale: '', receiptRef: '', saleMileage: '',
   });
   const [ticks, setTicks] = useState<Set<PaperworkKey>>(new Set());
   const [q, setQ] = useState('');
@@ -123,11 +123,12 @@ export default function PastSalePage() {
     ?? checkPaperwork(PURCHASE_PAPERWORK_KEYS, {
       seller_name: f.sellerName, purchase_ref: f.purchaseRef, mileage: f.mileage.trim() ? Number(f.mileage) : undefined,
       make_model: f.make.trim() && f.model.trim() ? `${f.make} ${f.model}` : undefined,
+      vin: f.vin, colour: f.colour,
     }, purchaseTicks)
     ?? (picked
-      ? checkPaperwork(['receipt_ref'], { receipt_ref: f.receiptRef }, saleTicks.filter((k) => k === 'receipt_ref'))
+      ? checkPaperwork(['receipt_ref', 'sale_mileage'], { receipt_ref: f.receiptRef, sale_mileage: f.saleMileage.trim() ? Number(f.saleMileage) : undefined }, saleTicks.filter((k) => k === 'receipt_ref' || k === 'sale_mileage'))
         ?? (!(picked.address ?? '').trim() && !ticked('buyer_address') ? 'That customer has no address on file. Add it to the customer, or tick “not on the paperwork” if the receipt did not carry one.' : null)
-      : checkPaperwork(SALE_PAPERWORK_KEYS, { buyer_name: nb.name, buyer_address: nb.address, receipt_ref: f.receiptRef }, saleTicks))
+      : checkPaperwork(SALE_PAPERWORK_KEYS, { buyer_name: nb.name, buyer_address: nb.address, receipt_ref: f.receiptRef, sale_mileage: f.saleMileage.trim() ? Number(f.saleMileage) : undefined }, saleTicks))
     ?? costs.map((c, i) => (!c.description.trim() || !(pence(c.amount) > 0) || !asDate(c.incurredOn)
       ? `Cost ${i + 1}: give it a description, an amount and the date you paid it.` : null)).find(Boolean) ?? null;
 
@@ -149,6 +150,7 @@ export default function PastSalePage() {
           acquiredAt: f.acquiredAt, arrivedAt: f.arrivedAt || null, source: f.source, vatStatus: f.vatStatus,
           purchasePence: pence(f.purchase), premiumPence: f.premium ? pence(f.premium) : 0,
           sellerName: f.sellerName, purchaseRef: f.purchaseRef, mileageMiles: f.mileage.trim() ? Number(f.mileage) : null,
+          vin: f.vin, colour: f.colour, saleMileageMiles: f.saleMileage.trim() ? Number(f.saleMileage) : null,
           soldAt: f.soldAt, salePence: pence(f.sale), receiptRef: f.receiptRef,
           buyer, notOnPaperwork: { purchase: purchaseTicks, sale: saleTicks },
           costs: costs.map((c) => ({ kind: c.kind, description: c.description, amountPence: pence(c.amount), incurredOn: c.incurredOn, vatTreatment: c.vatTreatment })),
@@ -264,6 +266,8 @@ export default function PastSalePage() {
             {paper('seller_name', <input className={input} disabled={ticked('seller_name')} value={f.sellerName} onChange={(e) => setF({ ...f, sellerName: e.target.value })} data-testid="ps-seller" />)}
             {paper('purchase_ref', <input className={input} disabled={ticked('purchase_ref')} value={f.purchaseRef} onChange={(e) => setF({ ...f, purchaseRef: e.target.value })} data-testid="ps-purchase-ref" />)}
             {paper('mileage', <input className={input} inputMode="numeric" disabled={ticked('mileage')} value={f.mileage} onChange={(e) => setF({ ...f, mileage: e.target.value })} data-testid="ps-mileage" />)}
+            {paper('vin', <input className={input} disabled={ticked('vin')} value={f.vin} onChange={(e) => setF({ ...f, vin: e.target.value })} data-testid="ps-vin" />)}
+            {paper('colour', <input className={input} disabled={ticked('colour')} value={f.colour} onChange={(e) => setF({ ...f, colour: e.target.value })} data-testid="ps-colour" />)}
           </div>
         </section>
 
@@ -300,6 +304,7 @@ export default function PastSalePage() {
               <input className={input} inputMode="decimal" value={f.sale} onChange={(e) => setF({ ...f, sale: e.target.value })} data-testid="ps-sale" />
             </label>
             {paper('receipt_ref', <input className={input} disabled={ticked('receipt_ref')} value={f.receiptRef} onChange={(e) => setF({ ...f, receiptRef: e.target.value })} data-testid="ps-receipt" />)}
+            {paper('sale_mileage', <input className={input} inputMode="numeric" disabled={ticked('sale_mileage')} value={f.saleMileage} onChange={(e) => setF({ ...f, saleMileage: e.target.value })} data-testid="ps-sale-mileage" />)}
           </div>
 
           <div className="mt-4">

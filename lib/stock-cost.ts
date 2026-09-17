@@ -21,6 +21,13 @@
  *   being a record. It belongs in the projection until a claim is PAID — at which point the payment
  *   is money out on a date, and enters here as an ordinary cost like any other. NOT BUILT.
  *
+ * ── A WARRANTY POLICY BOUGHT IS NOT A WARRANTY PROVISION ───────────────────────────────────────
+ *
+ * A policy the garage PAYS FOR — NU14KUF's 12 months of RAC Gold, included in its £4,500 — is money out,
+ * on a date, for one car. It passes the test above. What stays absent is the PROVISION, the estimate of
+ * claims to come, for the reason given there. Insurance is VAT-exempt, so a policy is entered as "no VAT
+ * on the invoice"; the kind does not force that, because the supplier's invoice is what says it.
+ *
  * ── BOUGHT-IN REPAIRS, ON ANY CAR; PREP PARTS, ONLY ON A PAST SALE ─────────────────────────────
  *
  * A BOUGHT-IN REPAIR is a supplier's bill for work done to the car elsewhere — a body shop, a trimmer,
@@ -34,7 +41,7 @@
  */
 import { VAT_TREATMENTS, costPosition, type VatTreatment } from '@/lib/purchase-model';
 
-export const STOCK_COST_KINDS = ['delivery_in', 'valeting', 'mot', 'bought_in_repairs'] as const;
+export const STOCK_COST_KINDS = ['delivery_in', 'valeting', 'mot', 'bought_in_repairs', 'warranty_policy'] as const;
 export type StockCostKind = (typeof STOCK_COST_KINDS)[number];
 
 export const STOCK_COST_LABELS: Record<StockCostKind, string> = {
@@ -42,6 +49,7 @@ export const STOCK_COST_LABELS: Record<StockCostKind, string> = {
   valeting: 'Valeting',
   mot: 'MOT',
   bought_in_repairs: 'Bought-in repairs',
+  warranty_policy: 'Warranty policy',
 };
 
 /** Only on a car recorded as sold before car sales were invoiced here. See the header. */

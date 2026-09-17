@@ -152,6 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         acquiredAt: parseDate(b.acquiredAt), arrivedAt: parseDate(b.arrivedAt),
         purchasePence: b.purchasePence, premiumPence: b.premiumPence, vatStatus: b.vatStatus, source: b.source,
         sellerName: b.sellerName, purchaseRef: b.purchaseRef, mileageMiles: b.mileageMiles,
+        vin: b.vin, colour: b.colour, saleMileageMiles: b.saleMileageMiles,
         soldAt: parseDate(b.soldAt), salePence: b.salePence,
         buyer: (b.buyer ?? null) as never, receiptRef: b.receiptRef,
         notOnPaperwork: (b.notOnPaperwork ?? { purchase: [], sale: [] }) as never,

@@ -32,7 +32,9 @@ import { writeAudit } from '@/lib/audit';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { ensureIdentityAndCurrentOwner } from '@/lib/vehicle-identity';
-import { findOrCreateVehicle, findVehicleByReg, recordDisposalInTx, recordIntakeMileage, takeIntoStockInTx } from '@/lib/stock-store';
+import { findOrCreateVehicle, findVehicleByReg, recordDisposalInTx, recordIntakeMileage, takeIntoStockInTx, vinCollision } from '@/lib/stock-store';
+import { vinAtIntake, parseMiles } from '@/lib/stock-intake';
+import { recordOdometerReadings } from '@/lib/odometer';
 import { isHistoricalCostKind, isVatTreatment } from '@/lib/stock-cost';
 import {
   PURCHASE_PAPERWORK_KEYS, SALE_PAPERWORK_KEYS, checkPaperwork,
@@ -56,6 +58,10 @@ export type HistoricalSaleInput = {
   purchasePence: unknown; premiumPence?: unknown; servicesPence?: unknown;
   vatStatus: unknown; source: unknown;
   sellerName?: unknown; purchaseRef?: unknown; mileageMiles?: unknown;
+  /** The car's description on the paperwork. Fill a blank on an existing car; never overwrite one. */
+  vin?: unknown; colour?: unknown;
+  /** The mileage on the sales receipt — a reading under source `sale`, on the sale date. */
+  saleMileageMiles?: unknown;
   soldAt: Date | null; salePence: unknown;
   /** A customer already on the books, a new one, or NULL when the paperwork names nobody (ticked). */
   buyer: { customerId: string } | { name: unknown; address?: unknown; phone?: unknown; email?: unknown } | null;
@@ -178,6 +184,7 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
     seller_name: a.sellerName, purchase_ref: a.purchaseRef,
     mileage: typeof a.mileageMiles === 'number' ? a.mileageMiles : (text(a.mileageMiles) ?? undefined),
     make_model: make && model ? `${make} ${model}` : undefined,
+    vin: a.vin, colour: a.colour,
   }, a.notOnPaperwork?.purchase);
   if (purchaseRefusal) return { refused: purchaseRefusal };
   const picked = a.buyer && 'customerId' in a.buyer ? a.buyer.customerId : null;
@@ -188,14 +195,27 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
     if (unknownTick !== undefined) return { refused: `“${String(unknownTick)}” is not a field that can be marked as not on the paperwork here.` };
   }
   // A PICKED customer's name is on the books; their address is checked once they are read, below.
-  const saleRefusal = checkPaperwork(picked ? ['receipt_ref'] : SALE_PAPERWORK_KEYS, {
-    buyer_name: newBuyer?.name, buyer_address: newBuyer?.address, receipt_ref: a.receiptRef,
-  }, picked && Array.isArray(saleTicks) ? saleTicks.filter((t) => t === 'receipt_ref') : saleTicks);
+  const saleMileageValue = typeof a.saleMileageMiles === 'number' ? a.saleMileageMiles : (text(a.saleMileageMiles) ?? undefined);
+  const saleRefusal = checkPaperwork(picked ? ['receipt_ref', 'sale_mileage'] : SALE_PAPERWORK_KEYS, {
+    buyer_name: newBuyer?.name, buyer_address: newBuyer?.address, receipt_ref: a.receiptRef, sale_mileage: saleMileageValue,
+  }, picked && Array.isArray(saleTicks) ? saleTicks.filter((t) => t === 'receipt_ref' || t === 'sale_mileage') : saleTicks);
   if (saleRefusal) return { refused: saleRefusal };
   if (picked && Array.isArray(saleTicks) && saleTicks.includes('buyer_name')) {
     return { refused: 'A customer is picked as the buyer AND the buyer is ticked as not on the paperwork. One of those is wrong.' };
   }
   const ticksSale = (Array.isArray(saleTicks) ? saleTicks : []) as string[];
+
+  // ── 2b. THE CAR'S DESCRIPTION AND THE TWO MILEAGES, checked before anything is written ──────────
+  const vin = vinAtIntake(a.vin);
+  if ('refused' in vin) return { refused: vin.refused };
+  const colour = text(a.colour, 40);
+  const purchaseMiles = parseMiles(a.mileageMiles);
+  if ('refused' in purchaseMiles) return { refused: `Mileage at purchase: ${purchaseMiles.refused}` };
+  const saleMiles = parseMiles(a.saleMileageMiles);
+  if ('refused' in saleMiles) return { refused: `Mileage at sale: ${saleMiles.refused}` };
+  if (purchaseMiles.miles !== null && saleMiles.miles !== null && saleMiles.miles < purchaseMiles.miles) {
+    return { refused: `The mileage at sale (${saleMiles.miles}) is lower than at purchase (${purchaseMiles.miles}). One of them is wrong — check the paperwork.` };
+  }
 
   // ── 3. THE COSTS, each a supplier bill ────────────────────────────────────────────────────────
   const costs: { kind: string; description: string; amountPence: number; incurredOn: Date; vatTreatment: string }[] = [];
@@ -243,7 +263,9 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
   // red-proved invisible — deleting it changed no clause — and it saved no write: a car with owners or
   // stock history already exists, so nothing would be created before the refusal.
   const known = await findVehicleByReg(a.groupId, registration);
-  const vehicle = known ?? await findOrCreateVehicle({ groupId: a.groupId, registration, make, model, acquiredAt });
+  // A car GreaseDesk has never seen is created with its VIN, as normal intake creates one. A KNOWN car is only
+  // touched inside the transaction, after its owners are checked — a refused entry changes nothing about it.
+  const vehicle = known ?? await findOrCreateVehicle({ groupId: a.groupId, registration, make, model, acquiredAt, vin: vin.vin });
   if ('refused' in vehicle) return vehicle;
 
   const group = await prisma.group.findUnique({ where: { id: a.groupId }, select: { country_code: true, ref: true } });
@@ -257,6 +279,21 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
       const conflicts = ownershipConflicts(edges, acquiredAt, soldAt);
       if (conflicts.length) throw new Refused(ownershipRefusal(conflicts));
       if (overlapsHeld(await heldPeriods(tx, a.groupId, vehicle.id), acquiredAt, soldAt)) throw new Refused(HELD_OVERLAP_REFUSAL);
+
+      // 0 ─ THE CAR'S DESCRIPTION: fill what is blank, never overwrite what is there. A different VIN is a
+      // different car and refuses; a different colour is left as recorded (a respray, or DVLA's word for it).
+      const car = await tx.vehicle.findUnique({ where: { id: vehicle.id }, select: { vin_normalized: true, colour: true, registration: true } });
+      const fill: Record<string, string> = {};
+      if (vin.vin) {
+        if (car?.vin_normalized && car.vin_normalized !== vin.vin) {
+          throw new Refused(`${car.registration} is already recorded with a different VIN. A past sale does not get to change which car this is — fix it on the vehicle record if the stored one is wrong.`);
+        }
+        const clash = await vinCollision(a.groupId, vin.vin, vehicle.id);
+        if (clash) throw new Refused(clash.refused);
+        if (!car?.vin_normalized) { fill.vin = vin.vin; fill.vin_normalized = vin.vin; }
+      }
+      if (colour && !car?.colour) fill.colour = colour;
+      if (Object.keys(fill).length) await tx.vehicle.update({ where: { id: vehicle.id }, data: fill });
 
       // 1 ─ THE STOCK ITEM, through the one intake writer, with its stock number.
       const item = await takeIntoStockInTx(tx, {
@@ -347,6 +384,10 @@ export async function recordHistoricalSale(a: HistoricalSaleInput): Promise<Hist
     }, { maxWait: 10_000, timeout: 30_000 });
 
     await recordIntakeMileage({ groupId: a.groupId, vehicleId: vehicle.id, acquiredAt, mileageMiles: a.mileageMiles });
+    // AFTER the commit, like the purchase reading: a reading is a fact about the car, not part of the sale.
+    if (saleMiles.miles !== null) {
+      await recordOdometerReadings(prisma, { groupId: a.groupId, vehicleId: vehicle.id, source: 'sale', readings: [{ date: soldAt, miles: saleMiles.miles }] });
+    }
     return out;
   } catch (e) {
     if (e instanceof Refused) return { refused: e.message };

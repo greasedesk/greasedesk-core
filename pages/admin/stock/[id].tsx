@@ -59,8 +59,9 @@ type Detail = {
   disposedAt: string | null; disposalKind: string | null; salePence: number | null;
   book: {
     stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
+    vin: string | null; colour: string | null;
     sale: null | { recordedNotInvoiced: boolean; receiptRef: string | null; invoiceNumber: string | null;
-      buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[] };
+      buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[]; saleMileage: number | null };
   };
 };
 
@@ -222,7 +223,9 @@ export default function StockCarPage() {
               const f = (v: string | null, k: PaperworkKey, ticks: string[]) => paperworkField(v, k, ticks);
               const rows: Array<[string, string, string, boolean]> = [
                 ['Stock number', bk.stockNumber !== null ? String(bk.stockNumber) : 'not recorded', 'sb-stock-number', bk.stockNumber === null],
-                ...([['Seller', f(bk.sellerName, 'seller_name', bk.notOnPaperwork), 'sb-seller'],
+                ...([['VIN', f(bk.vin, 'vin', bk.notOnPaperwork), 'sb-vin'],
+                  ['Colour', f(bk.colour, 'colour', bk.notOnPaperwork), 'sb-colour'],
+                  ['Seller', f(bk.sellerName, 'seller_name', bk.notOnPaperwork), 'sb-seller'],
                   ['Purchase invoice or receipt', f(bk.purchaseRef, 'purchase_ref', bk.notOnPaperwork), 'sb-purchase-ref']] as const)
                   .map(([label, fld, id]) => [label, paperworkText(fld), id, fld.state === 'not_recorded'] as [string, string, string, boolean]),
               ];
@@ -231,6 +234,8 @@ export default function StockCarPage() {
                 const addr = f(bk.sale.buyerAddress, 'buyer_address', bk.sale.notOnPaperwork);
                 rows.push(['Buyer', paperworkText(buyer), 'sb-buyer', buyer.state === 'not_recorded']);
                 rows.push(["Buyer's address", paperworkText(addr), 'sb-buyer-address', addr.state === 'not_recorded']);
+                const sm = f(bk.sale.saleMileage !== null ? bk.sale.saleMileage.toLocaleString('en-GB') : null, 'sale_mileage', bk.sale.notOnPaperwork);
+                rows.push(['Mileage at sale', paperworkText(sm), 'sb-sale-mileage', sm.state === 'not_recorded']);
                 if (bk.sale.recordedNotInvoiced) {
                   const rc = f(bk.sale.receiptRef, 'receipt_ref', bk.sale.notOnPaperwork);
                   rows.push(['Sale', `Recorded, not invoiced — receipt ${paperworkText(rc)}`, 'sb-sale-document', rc.state === 'not_recorded']);

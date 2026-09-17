@@ -55,7 +55,7 @@ try {
 
   console.log('\n— A BLANK IS NEVER SILENT —');
   const KP = PW.PURCHASE_PAPERWORK_KEYS;
-  const full = { seller_name: 'A Seller', purchase_ref: 'P-1', mileage: 81234, make_model: 'MINI Cooper' };
+  const full = { seller_name: 'A Seller', purchase_ref: 'P-1', mileage: 81234, make_model: 'MINI Cooper', vin: 'WBA1R12020J178500', colour: 'White' };
   check('everything filled passes', PW.checkPaperwork(KP, full, []) === null);
   check('everything ticked passes — "I looked and none of it was there" is an answer', PW.checkPaperwork(KP, {}, [...KP]) === null);
   const blank = PW.checkPaperwork(KP, { ...full, purchase_ref: '' }, []) ?? '';
@@ -66,6 +66,9 @@ try {
   check('a tick for a field this form does not have refuses', !!PW.checkPaperwork(KP, full, ['receipt_ref']));
   check('an unreadable tick list refuses rather than counting as none', !!PW.checkPaperwork(KP, full, 'seller_name'));
   check('mileage 0 is a value, not a blank', PW.checkPaperwork(['mileage'], { mileage: 0 }, []) === null);
+  check('the VIN and colour are stock-book fields: a blank VIN refuses, naming it', /^VIN is blank/.test(PW.checkPaperwork(KP, { ...full, vin: '' }, []) ?? ''),
+    PW.checkPaperwork(KP, { ...full, vin: '' }, []) ?? 'ACCEPTED');
+  check('  …and so does a blank mileage at sale', /^Mileage at sale is blank/.test(PW.checkPaperwork(PW.SALE_PAPERWORK_KEYS, { buyer_name: 'B', buyer_address: 'A', receipt_ref: 'R' }, []) ?? ''));
 
   console.log('\n— THE BOUNDARY IS DECLARED, AND IS THE EARLIER OF TWO LIMITS —');
   const decl = new Date('2026-09-17T00:00:00Z');
@@ -224,12 +227,19 @@ try {
   const NONE = '00000000-0000-0000-0000-000000000000';
   const got = (r) => (r && 'stockItemId' in r ? r : { stockItemId: NONE, disposalId: NONE, stockNumber: -1, customerId: NONE });
 
-  const entry = (over = {}) => ({
+  /** A VIN of this fixture's own, from its registration: 17 characters, no I, O or Q, never shared by two fixtures. */
+  const vinFor = (reg) => `${reg}`.toUpperCase().replace(/[IOQ]/g, '8').padEnd(17, '7').slice(0, 17);
+  const entry = (over = {}) => {
+    const e = entryBase(over);
+    if (!('vin' in over)) e.vin = vinFor(e.registration);
+    return e;
+  };
+  const entryBase = (over = {}) => ({
     groupId: ZZ_GROUP, userId: user.id, siteId: site.id,
     registration: `${PREFIX}10M`, make: 'MINI', model: 'Cooper',
     acquiredAt: new Date('2026-01-10T00:00:00Z'), soldAt: new Date('2026-02-20T00:00:00Z'),
     purchasePence: 150000, salePence: 260000, vatStatus: 'margin', source: 'private',
-    sellerName: 'Private seller, Dudley', purchaseRef: 'P-7781', mileageMiles: 81234,
+    sellerName: 'Private seller, Dudley', purchaseRef: 'P-7781', mileageMiles: 81234, colour: 'White', saleMileageMiles: 82000,
     buyer: { name: `${PREFIX} Past Buyer`, address: '4 Past Lane\nWalsall' },
     receiptRef: 'R-0042',
     notOnPaperwork: { purchase: [], sale: [] },
@@ -390,6 +400,50 @@ try {
   const lateBill = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}27M`, costs: [{ kind: 'prep_parts', description: 'Late part', amountPence: 5000, incurredOn: new Date('2026-03-01T00:00:00Z'), vatTreatment: 'no_vat' }] }));
   check('a bill dated after the sale refuses', 'refused' in lateBill && /after the car was sold/.test(lateBill.refused));
 
+  console.log('\n— THE CAR’S DESCRIPTION AND ITS MILEAGE AT SALE —');
+  const hCar = await prisma.vehicle.findFirst({ where: { group_id: ZZ_GROUP, registration: `${PREFIX}10M` }, select: { id: true, vin: true, colour: true } });
+  check('a new car is created with its VIN and colour from the paperwork', hCar?.vin === vinFor(`${PREFIX}10M`) && hCar?.colour === 'White', JSON.stringify(hCar));
+  const hSale = await prisma.vehicleOdometerReading.findFirst({ where: { vehicle_id: hCar?.id ?? NONE, source: 'sale' }, select: { miles: true, reading_date: true } });
+  check('the mileage at sale is a reading under source SALE, on the sale date', hSale?.miles === 82000 && hSale?.reading_date.toISOString() === '2026-02-20T00:00:00.000Z', JSON.stringify(hSale));
+  check('  …beside the purchase reading, not instead of it', (await prisma.vehicleOdometerReading.count({ where: { vehicle_id: hCar?.id ?? NONE } })) === 2);
+
+  const low = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}47M`, saleMileageMiles: 80000 }));
+  check('a mileage at sale LOWER than at purchase refuses, and writes no car', 'refused' in low && /lower than at purchase/.test(low.refused) && (await regCount(`${PREFIX}47M`)) === 0,
+    'refused' in low ? low.refused.slice(0, 80) : 'ACCEPTED');
+  const smTick = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}48M`, saleMileageMiles: null, notOnPaperwork: { purchase: [], sale: ['sale_mileage'] } }));
+  const smDisp = 'disposalId' in smTick ? await prisma.stockDisposal.findUnique({ where: { id: smTick.disposalId }, select: { not_on_paperwork: true } }) : null;
+  check('mileage at sale ticked "not on the paperwork" is stored as that, and no sale reading is invented',
+    JSON.stringify(smDisp?.not_on_paperwork) === '["sale_mileage"]'
+      && (await prisma.vehicleOdometerReading.count({ where: { vehicle: { registration: `${PREFIX}48M`, group_id: ZZ_GROUP }, source: 'sale' } })) === 0,
+    'refused' in smTick ? smTick.refused : JSON.stringify(smDisp));
+
+  const dv = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}45M`, registration_normalized: `${PREFIX}45M`, vin: 'ZZHS45M9999999999', vin_normalized: 'ZZHS45M9999999999' }, select: { id: true } });
+  const dvr = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}45M` }));
+  check('a KNOWN car with a DIFFERENT VIN refuses — the paperwork does not get to change which car this is',
+    'refused' in dvr && /different VIN/.test(dvr.refused) && (await prisma.stockItem.count({ where: { vehicle_id: dv.id } })) === 0
+      && (await prisma.vehicle.findUnique({ where: { id: dv.id }, select: { vin: true } }))?.vin === 'ZZHS45M9999999999',
+    'refused' in dvr ? dvr.refused.slice(0, 80) : 'ACCEPTED');
+  const clash = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}4AM`, vin: vinFor(`${PREFIX}10M`) }));
+  check('a VIN already on ANOTHER car refuses, naming it, and creates no car', 'refused' in clash && clash.refused.includes(`${PREFIX}10M`) && (await regCount(`${PREFIX}4AM`)) === 0,
+    'refused' in clash ? clash.refused.slice(0, 80) : 'ACCEPTED');
+  const kv = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}4BM`, registration_normalized: `${PREFIX}4BM` }, select: { id: true } });
+  const kvr = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}4BM`, vin: vinFor(`${PREFIX}10M`) }));
+  check('a KNOWN car given a VIN that is on another car refuses too, and is left without it', 'refused' in kvr && kvr.refused.includes(`${PREFIX}10M`)
+    && (await prisma.vehicle.findUnique({ where: { id: kv.id }, select: { vin: true } }))?.vin === null && (await prisma.stockItem.count({ where: { vehicle_id: kv.id } })) === 0,
+    'refused' in kvr ? kvr.refused.slice(0, 80) : 'ACCEPTED');
+  const cv = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}46M`, registration_normalized: `${PREFIX}46M`, colour: 'SILVER' }, select: { id: true } });
+  const cvr = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}46M` }));
+  const cvCar = await prisma.vehicle.findUnique({ where: { id: cv.id }, select: { colour: true, vin: true } });
+  check('a KNOWN car keeps the colour it has — a blank is filled, a value never overwritten', 'stockItemId' in cvr && cvCar?.colour === 'SILVER', JSON.stringify(cvCar));
+  check('  …while its blank VIN IS filled from the paperwork', cvCar?.vin === vinFor(`${PREFIX}46M`));
+
+  const wp = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}49M`, costs: [
+    { kind: 'warranty_policy', description: 'RAC Gold, 12 months', amountPence: 35000, incurredOn: new Date('2026-02-19T00:00:00Z'), vatTreatment: 'no_vat' },
+  ] }));
+  const wpSnap = 'stockItemId' in wp ? await prisma.stockCostSnapshot.findMany({ where: { stock_item_id: wp.stockItemId }, select: { kind: true, amount_pence: true } }) : [];
+  check('a WARRANTY POLICY paid for the car is a cost of the car: £350, VAT-exempt, frozen whole',
+    wpSnap.length === 1 && wpSnap[0].kind === 'warranty_policy' && wpSnap[0].amount_pence === 35000, 'refused' in wp ? wp.refused : JSON.stringify(wpSnap));
+
   console.log('\n— A BLANK REFUSES, AND WRITES NOTHING —');
   const bl = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}30M`, sellerName: '' }));
   check('a blank seller with no tick refuses, naming it', 'refused' in bl && /^Seller is blank/.test(bl.refused), 'refused' in bl ? bl.refused.slice(0, 50) : 'ACCEPTED');
@@ -425,6 +479,7 @@ try {
   await prisma.vehicleOwnership.create({ data: { vehicle_id: bv2.id, customer_id: cameBack.id, is_current: true, valid_from: new Date('2026-03-01T00:00:00Z') } });
   const same2 = await attempt(entry({ registration: `${PREFIX}43M`, buyer: { customerId: cameBack.id } }));
   const bv2Edges = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: bv2.id }, select: { customer_id: true, is_current: true, valid_from: true } });
+  check('  …and that car, recorded with no VIN, now carries the one on the paperwork', (await prisma.vehicle.findUnique({ where: { id: bv2.id }, select: { vin: true } }))?.vin === vinFor(`${PREFIX}43M`));
   check('the buyer who IS that later owner: recorded, and NO ownership written — their record stands, start date and all',
     'stockItemId' in same2 && bv2Edges.length === 1 && bv2Edges[0].customer_id === cameBack.id && bv2Edges[0].valid_from.toISOString() === '2026-03-01T00:00:00.000Z',
     'refused' in same2 ? same2.refused.slice(0, 80) : JSON.stringify(bv2Edges));
@@ -435,6 +490,7 @@ try {
   const ic = await attempt(entry({ registration: `${PREFIX}44M` }));
   check('an owner CURRENT since a date INSIDE our holding refuses and is shown', 'refused' in ic && ic.refused.includes(`${PREFIX} Owned It Meanwhile, from 1 Feb 2026 and still current`),
     'refused' in ic ? ic.refused.slice(0, 100) : ('threw' in ic ? `THREW ${ic.threw}` : 'ACCEPTED'));
+  check('  …and did NOT fill the VIN on that car — a refused entry changes nothing about it', (await prisma.vehicle.findUnique({ where: { id: iv.id }, select: { vin: true } }))?.vin === null);
   check('  …and wrote no stock item and no owner', (await prisma.stockItem.count({ where: { vehicle_id: iv.id } })) === 0
     && (await prisma.vehicleOwnership.count({ where: { vehicle_id: iv.id } })) === 1);
 
@@ -543,6 +599,9 @@ try {
     await page.$eval('[data-testid="ps-seller"]', (i) => i.disabled));
   await page.fill('[data-testid="ps-purchase-ref"]', 'P-UI-1');
   await page.fill('[data-testid="ps-mileage"]', '70000');
+  await page.fill('[data-testid="ps-vin"]', vinFor(`${PREFIX}70M`));
+  await page.fill('[data-testid="ps-colour"]', 'White');
+  await page.fill('[data-testid="ps-sale-mileage"]', '71500');
   await page.fill('[data-testid="ps-buyer-name"]', `${PREFIX} UI Buyer`);
   await page.fill('[data-testid="ps-buyer-address"]', '8 Screen Street\nDudley');
   check('a blank receipt number with no tick blocks, naming it', /^Sales receipt number is blank/.test(await blockerText()), (await blockerText()).slice(0, 60));
@@ -566,10 +625,12 @@ try {
     await Promise.all([page.waitForURL((u) => AM.underPath(u.pathname, '/admin/stock') && !AM.underPath(u.pathname, '/admin/stock/past-sale'), { timeout: 30000 }).catch(() => {}), page.click('[data-testid="ps-submit"]')]);
   }
   await page.waitForSelector('[data-testid="stock-book"]', { timeout: 25000 }).catch(() => {});
-  const shownBook = await page.evaluate(() => Object.fromEntries(['sb-stock-number', 'sb-seller', 'sb-purchase-ref', 'sb-buyer', 'sb-sale-document', 'stock-book-incomplete']
+  const shownBook = await page.evaluate(() => Object.fromEntries(['sb-stock-number', 'sb-seller', 'sb-purchase-ref', 'sb-buyer', 'sb-sale-document', 'stock-book-incomplete', 'sb-vin', 'sb-colour', 'sb-sale-mileage']
     .map((id) => [id, document.querySelector(`[data-testid="${id}"]`)?.textContent ?? null])));
   check('it lands on the car’s own page, with its stock number', /^\d+$/.test(shownBook['sb-stock-number'] ?? ''), JSON.stringify(shownBook));
   check('  …the ticked seller reads NOT SUPPLIED', shownBook['sb-seller'] === 'not supplied');
+  check('  …the VIN, colour and mileage at sale as typed', shownBook['sb-vin'] === vinFor(`${PREFIX}70M`) && shownBook['sb-colour'] === 'White' && shownBook['sb-sale-mileage'] === '71,500',
+    `${shownBook['sb-vin']} / ${shownBook['sb-colour']} / ${shownBook['sb-sale-mileage']}`);
   check('  …the sale reads recorded, not invoiced, receipt not supplied', shownBook['sb-sale-document'] === 'Recorded, not invoiced — receipt not supplied', shownBook['sb-sale-document']);
   check('  …the buyer as entered, and the row is not called incomplete — every field was answered',
     shownBook['sb-buyer'] === `${PREFIX} UI Buyer` && shownBook['stock-book-incomplete'] === null);
@@ -590,7 +651,7 @@ try {
   }));
   check('a car taken in the normal way reads NOT RECORDED — the LC09XFU case', lc.seller === 'not recorded', JSON.stringify(lc));
   check('  …and its row SAYS it is incomplete, naming what was never recorded',
-    (lc.incomplete ?? '').startsWith('Incomplete: Seller, Purchase invoice or receipt were never recorded'), lc.incomplete ?? 'LOOKS FINISHED');
+    (lc.incomplete ?? '').startsWith('Incomplete: VIN, Colour, Seller, Purchase invoice or receipt were never recorded'), lc.incomplete ?? 'LOOKS FINISHED');
 
   await page.goto(`${origin}/admin/stock/${bItem.id}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="stock-book"]', { timeout: 25000 }).catch(() => {});
@@ -600,6 +661,7 @@ try {
   const direct = await ctx.request.post(`${origin}/api/stock`, { data: {
     action: 'record-historical', registration: `${PREFIX}71M`, make: 'MINI', model: 'One', acquiredAt: '2026-03-01', soldAt: '2026-03-12',
     purchasePence: 90000, salePence: 150000, vatStatus: 'margin', source: 'private', sellerName: 'X', purchaseRef: 'Y', mileageMiles: 1,
+    vin: vinFor(`${PREFIX}71M`), colour: 'Blue', saleMileageMiles: 2,
     buyer: { name: `${PREFIX} API Buyer`, address: '1 Road' }, receiptRef: 'R', notOnPaperwork: { purchase: [], sale: [] }, costs: [],
   } });
   const directBody = await direct.json().catch(() => ({}));

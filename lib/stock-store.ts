@@ -627,7 +627,7 @@ type IntakeArgs = Parameters<typeof findOrCreateVehicle>[0];
  * Both refusals NAME the other car. "VIN already in use" sends someone hunting through a list; "that
  * VIN is on YE64 KLM" ends the question.
  */
-async function vinCollision(
+export async function vinCollision(
   groupId: string, vin: string | null, selfId: string | null,
 ): Promise<{ refused: string } | null> {
   if (!vin) return null;
@@ -853,8 +853,9 @@ export type StockDetail = {
    */
   book: {
     stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
+    vin: string | null; colour: string | null;
     sale: null | { recordedNotInvoiced: boolean; receiptRef: string | null; invoiceNumber: string | null;
-      buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[] };
+      buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[]; saleMileage: number | null };
   };
 };
 
@@ -869,7 +870,7 @@ export async function stockDetail(
       services_pence: true, vat_status: true, source: true, mileage_warranted: true,
       projected_sale_pence: true, arrived_at: true, status: true,
       stock_number: true, seller_name: true, purchase_ref: true, not_on_paperwork: true,
-      vehicle: { select: { registration: true, make: true, model: true } },
+      vehicle: { select: { registration: true, make: true, model: true, vin: true, colour: true } },
       disposal: { select: {
         id: true, disposed_at: true, kind: true, sale_pence: true, recorded_not_invoiced: true, receipt_ref: true,
         buyer_name: true, buyer_address: true, not_on_paperwork: true,
@@ -879,6 +880,10 @@ export async function stockDetail(
   if (!it) return null;
   const saleInvoice = it.disposal
     ? await prisma.invoice.findFirst({ where: { group_id: groupId, stock_disposal_id: it.disposal.id }, select: { invoice_number: true } })
+    : null;
+  // THE MILEAGE AT SALE is a reading, under source `sale`, on the day the car left.
+  const saleReading = it.disposal
+    ? await prisma.vehicleOdometerReading.findFirst({ where: { vehicle_id: it.vehicle_id, source: 'sale', reading_date: it.disposal.disposed_at }, select: { miles: true } })
     : null;
   const prep = await liveStockCosts(groupId, it.id);
   const costRows = await stockCostRows(groupId, it.id);
@@ -924,11 +929,13 @@ export async function stockDetail(
     book: {
       stockNumber: it.stock_number, sellerName: it.seller_name, purchaseRef: it.purchase_ref,
       notOnPaperwork: it.not_on_paperwork ?? [],
+      vin: it.vehicle?.vin ?? null, colour: it.vehicle?.colour ?? null,
       sale: it.disposal && hasSalePrice(it.disposal.kind as DisposalKind) ? {
         recordedNotInvoiced: it.disposal.recorded_not_invoiced, receiptRef: it.disposal.receipt_ref,
         invoiceNumber: saleInvoice?.invoice_number ?? null,
         buyerName: it.disposal.buyer_name, buyerAddress: it.disposal.buyer_address,
         notOnPaperwork: it.disposal.not_on_paperwork ?? [],
+        saleMileage: saleReading?.miles ?? null,
       } : null,
     },
   };

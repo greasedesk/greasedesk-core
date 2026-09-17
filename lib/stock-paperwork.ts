@@ -22,8 +22,8 @@
  * and the refusal names the field; filled-AND-ticked is refused too, because one of the two is wrong.
  */
 
-export const PURCHASE_PAPERWORK_KEYS = ['seller_name', 'purchase_ref', 'mileage', 'make_model'] as const;
-export const SALE_PAPERWORK_KEYS = ['buyer_name', 'buyer_address', 'receipt_ref'] as const;
+export const PURCHASE_PAPERWORK_KEYS = ['seller_name', 'purchase_ref', 'mileage', 'make_model', 'vin', 'colour'] as const;
+export const SALE_PAPERWORK_KEYS = ['buyer_name', 'buyer_address', 'receipt_ref', 'sale_mileage'] as const;
 export type PurchasePaperworkKey = (typeof PURCHASE_PAPERWORK_KEYS)[number];
 export type SalePaperworkKey = (typeof SALE_PAPERWORK_KEYS)[number];
 export type PaperworkKey = PurchasePaperworkKey | SalePaperworkKey;
@@ -33,9 +33,12 @@ export const PAPERWORK_LABELS: Record<PaperworkKey, string> = {
   purchase_ref: 'Purchase invoice or receipt number',
   mileage: 'Mileage at purchase',
   make_model: 'Make and model',
+  vin: 'VIN',
+  colour: 'Colour',
   buyer_name: 'Buyer',
   buyer_address: "Buyer's address",
   receipt_ref: 'Sales receipt number',
+  sale_mileage: 'Mileage at sale',
 };
 
 /** What the book prints. "Not supplied" says somebody looked; "not recorded" says nobody did. */
