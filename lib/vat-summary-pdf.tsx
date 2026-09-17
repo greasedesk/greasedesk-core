@@ -7,7 +7,7 @@ import React from 'react';
 import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
 import type { VatSummary } from '@/lib/vat-summary';
 import { formatMoney } from '@/lib/format-money';
-import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
+import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, recordedOutsideLine, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
 
 const S = StyleSheet.create({
   page: { padding: 48, fontSize: 10, fontFamily: 'Helvetica', color: '#111827' },
@@ -49,6 +49,14 @@ function VatSummaryPdf({ d }: { d: VatPdfInput }) {
           <View style={S.refused}>
             <Text style={{ fontFamily: 'Helvetica-Bold' }}>{unclassifiedHeadline(d.unclassified.length)} {UNCLASSIFIED_ACTION}</Text>
             {d.unclassified.map((u) => <Text key={u.invoiceNumber} style={{ marginTop: 3 }}>{u.invoiceNumber} — {u.reason}</Text>)}
+          </View>
+        )}
+
+        {/* LEFT OUT BY DESIGN, and said so on the copy that leaves the building. */}
+        {d.recordedNotInvoiced.count > 0 && (
+          <View style={{ marginBottom: 10 }}>
+            <Text style={{ fontFamily: 'Helvetica-Bold' }}>{recordedOutsideLine(d.recordedNotInvoiced.count)}</Text>
+            <Text style={[S.muted, { marginTop: 3 }]}>{d.recordedNotInvoiced.rows.map((r) => r.registration ?? '—').join(', ')}</Text>
           </View>
         )}
 

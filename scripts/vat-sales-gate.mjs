@@ -134,6 +134,22 @@ try {
   await prisma.stockItem.update({ where: { id: D.itemId }, data: { vat_status: 'qualifying' } });                  // the book disagrees with the invoice
   await prisma.stockDisposal.update({ where: { id: P.disposalId }, data: { sale_pence: 285000 } });               // the price disagrees
 
+  /**
+   * TWO SOLD CARS WITH NO INVOICE. Written as ROWS, not through lib/stock-historical: this gate tests the
+   * READER, and the writer is gated in historical-sale-gate — which needs a boundary sale dated BEFORE the
+   * past sale, and "this quarter" cannot guarantee a day before today inside it. The broken one (unmarked)
+   * has no writer at all by design; a direct row is the only way it can exist, which is the point.
+   */
+  const soldRow = async (sfx, marked) => {
+    const reg = `${PREFIX}${sfx}`;
+    const v = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: reg, registration_normalized: reg, make: 'MINI', model: 'One' }, select: { id: true } });
+    const it = await prisma.stockItem.create({ data: { group_id: ZZ_GROUP, vehicle_id: v.id, acquired_at: new Date('2026-03-01'), purchase_pence: 150000, vat_status: 'margin', source: 'private', created_by_user_id: user.id }, select: { id: true } });
+    await prisma.stockDisposal.create({ data: { group_id: ZZ_GROUP, stock_item_id: it.id, disposed_at: new Date(), kind: 'sold', sale_pence: 250000, recorded_not_invoiced: marked, receipt_ref: marked ? 'R-9' : null, created_by_user_id: user.id } });
+    return reg;
+  };
+  const H = await soldRow('07H', true);
+  const B = await soldRow('08B', false);
+
   const after = await VS.getVatSummary(ZZ_GROUP, siteIds, range.from, range.to);
 
   console.log('\n— QUALIFYING: ITS LINE, IN THE FIGURES —');
@@ -168,6 +184,20 @@ try {
   check('a sale whose invoice and recorded price disagree is named', /disagree/.test(named(P)?.reason ?? ''), named(P)?.reason ?? 'NOT NAMED');
   check('  …and none of the three is in the margin section or the lines', !row(U) && !row(D) && !row(P) && after.invoiceCount - before.invoiceCount === 1);
 
+  console.log('\n— A SALE WITH NO INVOICE: LEFT OUT BY DESIGN, OR BROKEN —');
+  check('a car RECORDED as sold outside GreaseDesk is counted as left out', after.recordedNotInvoiced.count - before.recordedNotInvoiced.count === 1
+    && after.recordedNotInvoiced.rows.some((r) => r.registration === H), `${before.recordedNotInvoiced.count} → ${after.recordedNotInvoiced.count}`);
+  check('  …and is in NO figure — the deltas above moved by the qualifying car alone, and it is not named as a refusal',
+    !after.unclassified.some((u) => u.invoiceNumber.startsWith(H)) && !after.marginScheme.rows.some((r) => r.registration === H));
+  const broken = after.unclassified.find((u) => u.invoiceNumber === `${B} (no invoice)`);
+  check('a sold car with NO invoice and NO marker is a broken sale, refused visibly and named', broken?.reason === W.NO_INVOICE_REASON, broken?.reason ?? 'NOT NAMED — a reader that walks only invoices cannot see it');
+  check('  …and is not counted as recorded outside', !after.recordedNotInvoiced.rows.some((r) => r.registration === B));
+  check('a sale that HAS its invoice is never called one without', [M, L, Q, U, D, P].every((x) => !after.unclassified.some((u) => u.invoiceNumber === `${x.reg} (no invoice)`)),
+    after.unclassified.filter((u) => u.invoiceNumber.endsWith('(no invoice)')).map((u) => u.invoiceNumber).join(', '));
+  const line = W.recordedOutsideLine(after.recordedNotInvoiced.count);
+  check('the words: the count, and that they are not included', W.recordedOutsideLine(1) === '1 car recorded as sold outside GreaseDesk, not included.'
+    && W.recordedOutsideLine(3) === '3 cars recorded as sold outside GreaseDesk, not included.', W.recordedOutsideLine(3));
+
   // ════════════════════════════════════════════════════════════════════════════════════════════
   console.log('\n— ON THE PAGE, THE CSV AND THE ACCOUNTANT’S PDF —');
   const ready = await serverReady();
@@ -190,7 +220,13 @@ try {
     margin: document.querySelector('[data-testid="vat-margin-scheme"]')?.textContent ?? '',
     marginTotal: document.querySelector('[data-testid="vat-margin-total"]')?.textContent ?? '',
     totalInc: document.querySelector('[data-testid="vat-total-including-margin"]')?.textContent ?? '',
+    outside: document.querySelector('[data-testid="vat-recorded-outside"]')?.textContent ?? '',
+    outsideTop: document.querySelector('[data-testid="vat-recorded-outside"]')?.getBoundingClientRect().top ?? null,
   }));
+  check('the page SAYS what it leaves out, naming the car', shown.outside.includes(line) && shown.outside.includes(H), shown.outside.slice(0, 100) || 'NOT SHOWN');
+  check('  …above the figures it is absent from', shown.outsideTop !== null && shown.figuresTop !== null && shown.outsideTop < shown.figuresTop,
+    `line at ${shown.outsideTop}, figures at ${shown.figuresTop}`);
+  check('  …and names the broken sale in the red block', shown.refused.includes(`${B} (no invoice)`));
   check('the page names every unclassified sale, in red, and says they must be classified before filing',
     [U, D, P].every((x) => shown.refused.includes(x.number)) && shown.refused.includes(W.UNCLASSIFIED_ACTION),
     shown.refused.slice(0, 100));
@@ -204,6 +240,8 @@ try {
   check('the CSV names the unclassified sales before any figure', [U, D, P].every((x) => csv.includes(x.number))
     && csv.indexOf('could not be classified') < csv.indexOf('Total sales ex-'), csv.split('\n').slice(4, 7).join(' | ').slice(0, 110));
   check('  …and carries the margin section with the auction car', csv.includes(W.MARGIN_SECTION_TITLE) && csv.includes(M.number));
+  check('  …and says what it leaves out, before the figures', csv.includes(line) && csv.includes(`Recorded outside,${H}`)
+    && csv.indexOf(line) < csv.indexOf('Total sales ex-'));
 
   const pdfRes = await ctx.request.get(`${origin}/api/reports/vat-summary-pdf?preset=this_quarter`);
   const { extractLayoutText } = await import(`${R}/lib/pdf-layout.ts`);
@@ -211,6 +249,7 @@ try {
   /** THE COPY THAT LEAVES THE BUILDING. A report whose PDF quietly lacked the refusal would be the one filed. */
   check('the accountant’s PDF carries the refusal and names the sales', /could not be classified/.test(pdfText) && [U, D, P].every((x) => pdfText.includes(x.number)),
     pdfRes.ok() ? `${pdfText.length} chars` : `HTTP ${pdfRes.status()}`);
+  check('  …and says what it leaves out, naming the car', pdfText.replace(/\s+/g, ' ').includes(line) && pdfText.includes(H), pdfRes.ok() ? 'looked' : `HTTP ${pdfRes.status()}`);
   // The PDF's label style UPPERCASES the heading, so the title is matched without case — the words are the
   // same words. The ROW is matched exactly, figures included: that is the part an accountant copies.
   const pdfLines = pdfText.split('\n');

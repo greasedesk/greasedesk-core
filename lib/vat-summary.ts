@@ -14,6 +14,8 @@ import { effectiveIssueDateWhere } from '@/lib/invoice';
 import { vatTreatment } from '@/lib/invoice-series-scope';
 import { bookRow, type DisposalKind } from '@/lib/stock';
 import { marginBaseFeePence, type PurchaseSource } from '@/lib/purchase-model';
+import { isSaleKind } from '@/lib/stock-sold';
+import { NO_INVOICE_REASON } from '@/lib/vat-summary-words';
 
 export type VatRateRow = { ratePercent: number; netPennies: number; vatPennies: number; lineCount: number };
 export type VatSummary = {
@@ -45,6 +47,13 @@ export type VatSummary = {
    * here by invoice number, because a return filed without them is wrong and one that guessed is worse.
    */
   unclassified: Array<{ invoiceNumber: string; reason: string }>;
+  /**
+   * CARS RECORDED AS SOLD BEFORE CAR SALES WERE INVOICED HERE, in the period — in NO figure, by design, and
+   * COUNTED so the report says so. Read from the disposals, not the invoices: these have none, so a summary
+   * that only walks invoices cannot name them (the same blindness that let a voided sale go silent).
+   * Tenant-wide, not site-scoped: a stock record has no site.
+   */
+  recordedNotInvoiced: { count: number; rows: Array<{ registration: string | null; stockNumber: number | null; soldISO: string }> };
 };
 
 const pennies = (d: unknown): number => Math.round(Number(d ?? 0) * 100);
@@ -180,6 +189,33 @@ export async function getVatSummary(groupId: string, siteIds: string[], from: Da
     margin.rows.push({ invoiceNumber: number, registration: d.stock_item.vehicle?.registration ?? null, salePennies: d.sale_pence, basePennies: base, marginPennies: row.marginPence, vatPennies: row.vatDuePence });
   }
 
+  // ── SALES WITH NO INVOICE: THE DISPOSALS SIDE ─────────────────────────────────────────────────────
+  // Every car SOLD in the period, read from the stock records. Marked recorded-not-invoiced → counted and
+  // stated as left out. Unmarked with no car-sale invoice anywhere (any site, any status) → a broken sale,
+  // refused visibly. An invoice outside this report's site scope still counts as the sale's invoice.
+  const soldInPeriod = (await prisma.stockDisposal.findMany({
+    where: { group_id: groupId, disposed_at: { gte: from, lt: to } },
+    select: {
+      id: true, kind: true, disposed_at: true, recorded_not_invoiced: true,
+      stock_item: { select: { stock_number: true, vehicle: { select: { registration: true } } } },
+    },
+    orderBy: { disposed_at: 'asc' },
+  })).filter((d) => isSaleKind(d.kind));
+  const invoiced = new Set((soldInPeriod.length ? await prisma.invoice.findMany({
+    where: { group_id: groupId, stock_disposal_id: { in: soldInPeriod.map((d) => d.id) } },
+    select: { stock_disposal_id: true },
+  }) : []).map((i) => i.stock_disposal_id));
+  const recordedNotInvoiced: VatSummary['recordedNotInvoiced'] = { count: 0, rows: [] };
+  for (const d of soldInPeriod) {
+    const registration = d.stock_item?.vehicle?.registration ?? null;
+    if (d.recorded_not_invoiced) {
+      recordedNotInvoiced.count += 1;
+      recordedNotInvoiced.rows.push({ registration, stockNumber: d.stock_item?.stock_number ?? null, soldISO: d.disposed_at.toISOString() });
+    } else if (!invoiced.has(d.id)) {
+      unclassified.push({ invoiceNumber: `${registration ?? 'a car'} (no invoice)`, reason: NO_INVOICE_REASON });
+    }
+  }
+
   return {
     fromISO: from.toISOString(), toISO: to.toISOString(),
     invoiceCount: invoices.length,
@@ -190,5 +226,6 @@ export async function getVatSummary(groupId: string, siteIds: string[], from: Da
     marginScheme: margin,
     totalOutputVatPennies: vatPennies + margin.vatPennies,
     unclassified,
+    recordedNotInvoiced,
   };
 }

@@ -9,7 +9,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { getVatSummary } from '@/lib/vat-summary';
-import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
+import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, recordedOutsideLine, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
 
 const money = (p: number) => (p / 100).toFixed(2);
 const dateOnly = (iso: string) => iso.slice(0, 10);
@@ -39,6 +39,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (summary.unclassified.length) {
       rows.push(`"${unclassifiedHeadline(summary.unclassified.length)} ${UNCLASSIFIED_ACTION}"`);
       for (const u of summary.unclassified) rows.push(`Not classified,${u.invoiceNumber},"${u.reason.replace(/"/g, "'")}"`);
+      rows.push('');
+    }
+    // LEFT OUT BY DESIGN, stated before the figures so nobody reads the totals as complete without it.
+    if (summary.recordedNotInvoiced.count) {
+      rows.push(`"${recordedOutsideLine(summary.recordedNotInvoiced.count)}"`);
+      for (const r of summary.recordedNotInvoiced.rows) rows.push(`Recorded outside,${r.registration ?? ''},${r.soldISO.slice(0, 10)}`);
       rows.push('');
     }
     rows.push(`Total sales ex-${T},` + money(summary.netPennies));

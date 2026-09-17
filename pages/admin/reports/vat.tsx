@@ -13,7 +13,7 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { getVatSummary, type VatSummary } from '@/lib/vat-summary';
 import { formatMoney, currencySymbol } from '@/lib/format-money';
-import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
+import { unclassifiedHeadline, UNCLASSIFIED_ACTION, MARGIN_SECTION_TITLE, marginSectionNote, recordedOutsideLine, totalIncludingMarginLabel } from '@/lib/vat-summary-words';
 
 type PageProps = {
   summary: VatSummary; periodLabel: string; preset: string; from: string; to: string;
@@ -93,6 +93,16 @@ export default function VatReport(props: PageProps) {
                 <li key={u.invoiceNumber}><span className="font-semibold tabular-nums">{u.invoiceNumber}</span> — {u.reason}</li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* ── LEFT OUT BY DESIGN, AND SAID SO — cars recorded as sold before car sales were invoiced here. ── */}
+        {(summary.recordedNotInvoiced?.count ?? 0) > 0 && (
+          <div className="bg-surface border border-line rounded-xl p-4 mb-5 text-sm text-ink" data-testid="vat-recorded-outside">
+            <p className="font-semibold">{recordedOutsideLine(summary.recordedNotInvoiced.count)}</p>
+            <p className="mt-1 text-muted tabular-nums">
+              {summary.recordedNotInvoiced.rows.map((r) => r.registration ?? '—').join(', ')}
+            </p>
           </div>
         )}
 

@@ -108,8 +108,32 @@ try {
   // Read as BYTES and decoded, never grepped: one NUL byte makes grep print nothing for a whole file.
   // Anchored through lib/anchored-match: `notInvoiced?:` in a type is a declaration, and hasKey does not
   // take the `?` form as a key — so the declaration in lib/stock-store is not counted as a caller.
-  const writesMarker = (src) => AM.hasKey(strip(src), 'notInvoiced') || AM.hasKey(strip(src), 'recorded_not_invoiced', 'true');
+  //
+  // A READ IS NOT A WRITE. `select: { recorded_not_invoiced: true }` carries the same key and value as a
+  // write, and the first version of this scan counted lib/vat-summary's select as a writer (the tier run
+  // went RED on it). So each occurrence is judged by the object it sits in: inside `select:` or `where:`
+  // it reads; anywhere else it writes.
+  const enclosingKey = (src, idx) => {
+    let depth = 0;
+    for (let i = idx; i >= 0; i -= 1) {
+      if (src[i] === '}') depth += 1;
+      else if (src[i] === '{') {
+        if (depth === 0) return (src.slice(Math.max(0, i - 40), i).match(/(\w+)\s*:\s*$/) ?? [])[1] ?? null;
+        depth -= 1;
+      }
+    }
+    return null;
+  };
+  const writesMarker = (raw) => {
+    const src = strip(raw);
+    if (AM.hasKey(src, 'notInvoiced')) return true;
+    return [...src.matchAll(AM.keyRegex('recorded_not_invoiced', 'true', 'g'))]
+      .some((m) => !['select', 'where'].includes(enclosingKey(src, m.index)));
+  };
   check('the scan finds a planted writer', writesMarker("await recordDisposalInTx(tx, { kind: 'sold', notInvoiced: { receiptRef: null } })"));
+  check('  …and a planted direct write', writesMarker("await tx.stockDisposal.create({ data: { kind: 'sold', recorded_not_invoiced: true } })"));
+  check('  …but not a READ of the same key', !writesMarker("await prisma.stockDisposal.findMany({ select: { id: true, recorded_not_invoiced: true } })")
+    && !writesMarker("await prisma.stockDisposal.count({ where: { recorded_not_invoiced: true } })"));
   check('  …and ignores one in a comment', !writesMarker('// notInvoiced: { receiptRef: null }'));
   const files = [];
   const walk = (d) => { for (const f of readdirSync(`${R}/${d}`)) { const p = `${d}/${f}`; if (statSync(`${R}/${p}`).isDirectory()) walk(p); else if (/\.(ts|tsx)$/.test(f)) files.push(p); } };
