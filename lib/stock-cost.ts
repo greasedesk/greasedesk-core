@@ -56,6 +56,13 @@ export const COST_KIND_LABELS: Record<StockCostKind | HistoricalOnlyCostKind, st
 export const costKindLabel = (k: string): string =>
   (COST_KIND_LABELS as Record<string, string>)[k] ?? k;
 
+/** The words for how a supplier charged VAT — one home, for the car page and the past-sale form. */
+export const VAT_TREATMENT_LABELS: Record<VatTreatment, string> = {
+  standard_recoverable: 'Standard rated — VAT reclaimable',
+  standard_not_recoverable: 'Standard rated — not reclaimable',
+  no_vat: 'No VAT on the invoice',
+};
+
 export const PREP_PARTS_LIVE_REFUSAL =
   'Prep parts on a car in stock come from its prep cards, and are counted from there when it sells. A '
   + 'typed prep-parts cost would count the same part twice. Put the parts on the prep card — or, for a '

@@ -14,14 +14,15 @@ import SellCarPanel from '@/components/stock/SellCarPanel';
 import type { OpenPrepCard } from '@/lib/stock-sale-rules';
 import Head from 'next/head';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
 import { SOURCE_RULES, type PurchaseSource } from '@/lib/purchase-model';
 import { LABOUR_AT_ZERO_NOTE } from '@/lib/stock';
 import { MISSING_COST_KINDS } from '@/lib/stock-projection';
-import { STOCK_COST_KINDS, STOCK_COST_LABELS, costKindLabel, type StockCostKind } from '@/lib/stock-cost';
+import { STOCK_COST_KINDS, STOCK_COST_LABELS, VAT_TREATMENT_LABELS, costKindLabel, type StockCostKind } from '@/lib/stock-cost';
+import { paperworkField, paperworkText, type PaperworkKey } from '@/lib/stock-paperwork';
 import { FROZEN_DETAIL_NOTE, PREP_EXPAND_THRESHOLD } from '@/lib/stock-prep';
 import { VAT_TREATMENTS } from '@/lib/purchase-model';
 
@@ -35,11 +36,7 @@ const iso = (d: string) => d.slice(0, 10);
  */
 const feeLabel = (source: string, slot: 'premium' | 'services'): string =>
   SOURCE_RULES[source as PurchaseSource]?.fees.find((f) => f.slot === slot)?.label ?? slot;
-const VAT_LABEL: Record<string, string> = {
-  standard_recoverable: 'Standard rated — VAT reclaimable',
-  standard_not_recoverable: 'Standard rated — not reclaimable',
-  no_vat: 'No VAT on the invoice',
-};
+const VAT_LABEL: Record<string, string> = VAT_TREATMENT_LABELS;
 
 
 type Detail = {
@@ -60,6 +57,11 @@ type Detail = {
     partsPence: number; missingCostKinds: string[]; note: string;
   };
   disposedAt: string | null; disposalKind: string | null; salePence: number | null;
+  book: {
+    stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
+    sale: null | { recordedNotInvoiced: boolean; receiptRef: string | null; invoiceNumber: string | null;
+      buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[] };
+  };
 };
 
 export default function StockCarPage() {
@@ -210,6 +212,52 @@ export default function StockCarPage() {
               <SellCarPanel stockItemId={id} registration={d.registration} description={d.description} vatStatus={d.vatStatus}
                 projectedSalePence={d.projectedSalePence} openPrepCards={openPrep} />
             )}
+
+            {/* ── THE STOCK BOOK'S ROW FOR THIS CAR ───────────────────────────────────────────────
+                Three states per field, from lib/stock-paperwork: a value; "not supplied" (somebody looked
+                and it was not on the paperwork); "not recorded" (nobody was asked). A row with anything
+                not recorded SAYS it is incomplete rather than looking finished. */}
+            {(() => {
+              const bk = d.book;
+              const f = (v: string | null, k: PaperworkKey, ticks: string[]) => paperworkField(v, k, ticks);
+              const rows: Array<[string, string, string, boolean]> = [
+                ['Stock number', bk.stockNumber !== null ? String(bk.stockNumber) : 'not recorded', 'sb-stock-number', bk.stockNumber === null],
+                ...([['Seller', f(bk.sellerName, 'seller_name', bk.notOnPaperwork), 'sb-seller'],
+                  ['Purchase invoice or receipt', f(bk.purchaseRef, 'purchase_ref', bk.notOnPaperwork), 'sb-purchase-ref']] as const)
+                  .map(([label, fld, id]) => [label, paperworkText(fld), id, fld.state === 'not_recorded'] as [string, string, string, boolean]),
+              ];
+              if (bk.sale) {
+                const buyer = f(bk.sale.buyerName, 'buyer_name', bk.sale.notOnPaperwork);
+                const addr = f(bk.sale.buyerAddress, 'buyer_address', bk.sale.notOnPaperwork);
+                rows.push(['Buyer', paperworkText(buyer), 'sb-buyer', buyer.state === 'not_recorded']);
+                rows.push(["Buyer's address", paperworkText(addr), 'sb-buyer-address', addr.state === 'not_recorded']);
+                if (bk.sale.recordedNotInvoiced) {
+                  const rc = f(bk.sale.receiptRef, 'receipt_ref', bk.sale.notOnPaperwork);
+                  rows.push(['Sale', `Recorded, not invoiced — receipt ${paperworkText(rc)}`, 'sb-sale-document', rc.state === 'not_recorded']);
+                } else {
+                  rows.push(['Sale', bk.sale.invoiceNumber ? `Invoice ${bk.sale.invoiceNumber}` : 'not recorded', 'sb-sale-document', !bk.sale.invoiceNumber]);
+                }
+              }
+              const missing = rows.filter((r) => r[3]).map((r) => r[0]);
+              return (
+                <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="stock-book">
+                  <h2 className="text-sm font-semibold text-ink">Stock book</h2>
+                  {missing.length > 0 && (
+                    <p className="mt-1 text-sm text-warn" data-testid="stock-book-incomplete">
+                      Incomplete: {missing.join(', ')} {missing.length === 1 ? 'was' : 'were'} never recorded for this car.
+                    </p>
+                  )}
+                  <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    {rows.map(([label, value, id]) => (
+                      <React.Fragment key={id}>
+                        <dt className="text-muted">{label}</dt>
+                        <dd className="text-ink whitespace-pre-line" data-testid={id}>{value}</dd>
+                      </React.Fragment>
+                    ))}
+                  </dl>
+                </section>
+              );
+            })()}
 
             {/* ── WHAT HAS GONE INTO IT ──────────────────────────────────────────────────────── */}
             <section className="mt-4 rounded-xl border border-line bg-surface p-4" data-testid="prep-section">

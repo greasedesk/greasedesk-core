@@ -1,6 +1,6 @@
 /**
  * File: scripts/historical-sale-gate.mjs
- * @gate-requires: db
+ * @gate-requires: db, server
  *
  * A CAR SOLD BEFORE CAR SALES WERE INVOICED HERE — recorded, not invoiced.
  *
@@ -21,8 +21,9 @@
  * Every expected money figure is worked BY HAND in the clause, never read back through the code under test.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync, readdirSync, statSync } = await import('node:fs');
 
 const out = [];
@@ -35,6 +36,7 @@ const AM = await import(`${R}/lib/anchored-match.ts`);
 const HR = await import(`${R}/lib/stock-historical-rules.ts`);
 
 let prisma;
+let browser = null;
 try {
   // ════════════════════════════════════════════════════════════════════════════════════════════
   // PURE — cheapest first
@@ -145,7 +147,7 @@ try {
     `${files.length} files scanned: ${writers.join(', ')}`);
   const storeSrc = strip(readFileSync(`${R}/lib/stock-store.ts`, 'utf8'));
   check('  …and the store sets it ONLY from that parameter, never unconditionally',
-    AM.countKey(storeSrc, 'recorded_not_invoiced', 'true') === 1
+    [...storeSrc.matchAll(AM.keyRegex('recorded_not_invoiced', 'true', 'g'))].filter((m) => !['select', 'where'].includes(enclosingKey(storeSrc, m.index))).length === 1
       && /\.\.\.\(a\.notInvoiced \? \{\s*recorded_not_invoiced: true/.test(storeSrc));
 
   // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -401,9 +403,117 @@ try {
   check('a picked customer with no address refuses unless the address is ticked', 'refused' in na && /no address on file/.test(na.refused));
   const naT = await HS.recordHistoricalSale(entry({ registration: `${PREFIX}52M`, buyer: { customerId: noAddr.id }, notOnPaperwork: { purchase: [], sale: ['buyer_address'] } }));
   check('  …and completes when it is', 'stockItemId' in naT, 'refused' in naT ? naT.refused : '');
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // THE WAY A PERSON DOES IT: from the sold dashboard, through the form, to the car's own page
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— ON SCREEN —');
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status}`);
+  const origin = gateOrigin();
+  browser = await chromium.launch({ channel: 'chrome' });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
+  const page = await ctx.newPage();
+  await page.goto(`${origin}/admin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', 'owner@zzgategarage.test');
+  await page.fill('input[type="password"]', 'GateGarage!2026');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
+
+  await page.goto(`${origin}/admin/stock`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="tab-gone"]', { timeout: 25000 });
+  await page.click('[data-testid="tab-gone"]');
+  const link = await page.waitForSelector('[data-testid="record-past-sale"]', { timeout: 15000 }).catch(() => null);
+  check('the sold dashboard offers "Record a past sale"', !!link);
+  if (link) await Promise.all([page.waitForURL((u) => AM.underPath(u.pathname, '/admin/stock/past-sale'), { timeout: 30000 }), link.click()]);
+  else await page.goto(`${origin}/admin/stock/past-sale`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="past-sale-boundary"]', { timeout: 25000 });
+  const bText = await page.textContent('[data-testid="past-sale-boundary"]');
+  check('the page states the boundary: the date, and the invoice that set it',
+    bText.includes('before 12 Mar 2026') && bText.includes(bInv?.invoice_number ?? 'NONE'), bText.slice(0, 120));
+
+  const blockerText = async () => ((await page.$('[data-testid="ps-blocker"]')) ? await page.textContent('[data-testid="ps-blocker"]') : '');
+  const reviewEnabled = async () => page.$eval('[data-testid="ps-review"]', (b) => !b.disabled).catch(() => false);
+  await page.fill('[data-testid="ps-registration"]', `${PREFIX}70M`);
+  await page.fill('[data-testid="ps-make"]', 'MINI');
+  await page.fill('[data-testid="ps-model"]', 'One');
+  await page.fill('[data-testid="ps-acquired"]', '2026-01-05');
+  await page.fill('[data-testid="ps-purchase"]', '900');
+  await page.fill('[data-testid="ps-sold"]', '2026-03-12');
+  await page.fill('[data-testid="ps-sale"]', '1500');
+  check('a sale dated ON the boundary is refused before it can be sent', /on or after 12 Mar 2026/.test(await blockerText()) && !(await reviewEnabled()), (await blockerText()).slice(0, 80));
+  await page.fill('[data-testid="ps-sold"]', '2026-02-10');
+  check('a blank seller with no tick blocks, naming the field', /^Seller is blank/.test(await blockerText()) && !(await reviewEnabled()), (await blockerText()).slice(0, 60));
+  await page.check('[data-testid="nop-seller_name"]');
+  check('  …ticking "not on the paperwork" disables the field rather than leaving a blank to fill later',
+    await page.$eval('[data-testid="ps-seller"]', (i) => i.disabled));
+  await page.fill('[data-testid="ps-purchase-ref"]', 'P-UI-1');
+  await page.fill('[data-testid="ps-mileage"]', '70000');
+  await page.fill('[data-testid="ps-buyer-name"]', `${PREFIX} UI Buyer`);
+  await page.fill('[data-testid="ps-buyer-address"]', '8 Screen Street\nDudley');
+  check('a blank receipt number with no tick blocks, naming it', /^Sales receipt number is blank/.test(await blockerText()), (await blockerText()).slice(0, 60));
+  await page.check('[data-testid="nop-receipt_ref"]');
+  await page.click('[data-testid="ps-add-cost"]');
+  const kinds = await page.$$eval('[data-testid="ps-cost-kind-0"] option', (os) => os.map((o) => o.value));
+  check('a bill on a past sale may be prep parts or bought-in repairs', kinds.includes('prep_parts') && kinds.includes('bought_in_repairs'), kinds.join(', '));
+  await page.fill('[data-testid="ps-cost-description-0"]', 'Clutch, supplier bill 5512');
+  await page.fill('[data-testid="ps-cost-amount-0"]', '120');
+  await page.fill('[data-testid="ps-cost-date-0"]', '2026-01-08');
+  check('with every field filled or ticked, review opens', await reviewEnabled(), await blockerText());
+  // CLICKED ONLY WHEN ENABLED: a click on a disabled button waits 30s and THROWS, ending the run at the
+  // prefix it reached (108 of 118 when red-proved). A refused form must stay a failed clause, not a throw.
+  if (await reviewEnabled()) await page.click('[data-testid="ps-review"]');
+  const sentence = await page.waitForSelector('[data-testid="ps-confirm-sentence"]', { timeout: 10000 }).then((e) => e.textContent()).catch(() => '');
+  check('the review reads the whole record back as a sentence, and says nothing is invoiced',
+    sentence === `${PREFIX}70M, bought 5 Jan 2026 for £900.00, sold 10 Feb 2026 to ${PREFIX} UI Buyer for £1,500.00, with 1 cost totalling £120.00. Recorded, not invoiced — no GreaseDesk number is issued.`,
+    sentence);
+  const vsBefore = (await counters()).vs;
+  if (await page.$('[data-testid="ps-submit"]')) {
+    await Promise.all([page.waitForURL((u) => AM.underPath(u.pathname, '/admin/stock') && !AM.underPath(u.pathname, '/admin/stock/past-sale'), { timeout: 30000 }).catch(() => {}), page.click('[data-testid="ps-submit"]')]);
+  }
+  await page.waitForSelector('[data-testid="stock-book"]', { timeout: 25000 }).catch(() => {});
+  const shownBook = await page.evaluate(() => Object.fromEntries(['sb-stock-number', 'sb-seller', 'sb-purchase-ref', 'sb-buyer', 'sb-sale-document', 'stock-book-incomplete']
+    .map((id) => [id, document.querySelector(`[data-testid="${id}"]`)?.textContent ?? null])));
+  check('it lands on the car’s own page, with its stock number', /^\d+$/.test(shownBook['sb-stock-number'] ?? ''), JSON.stringify(shownBook));
+  check('  …the ticked seller reads NOT SUPPLIED', shownBook['sb-seller'] === 'not supplied');
+  check('  …the sale reads recorded, not invoiced, receipt not supplied', shownBook['sb-sale-document'] === 'Recorded, not invoiced — receipt not supplied', shownBook['sb-sale-document']);
+  check('  …the buyer as entered, and the row is not called incomplete — every field was answered',
+    shownBook['sb-buyer'] === `${PREFIX} UI Buyer` && shownBook['stock-book-incomplete'] === null);
+  const uiDisp = await prisma.stockDisposal.findFirst({ where: { stock_item: { vehicle: { registration: `${PREFIX}70M`, group_id: ZZ_GROUP } } },
+    select: { recorded_not_invoiced: true, not_on_paperwork: true, stock_item: { select: { not_on_paperwork: true, costs: { select: { amount_pence: true } } } } } });
+  check('what the screen sent is what was stored: the marker, both ticks, and the £120 bill whose VAT was not reclaimed',
+    uiDisp?.recorded_not_invoiced === true && JSON.stringify(uiDisp.not_on_paperwork) === '["receipt_ref"]'
+      && JSON.stringify(uiDisp.stock_item.not_on_paperwork) === '["seller_name"]' && uiDisp.stock_item.costs.reduce((t, c) => t + c.amount_pence, 0) === 12000,
+    JSON.stringify(uiDisp));
+  check('  …and no car-sale number was spent', (await counters()).vs === vsBefore);
+
+  const lcPage = 'id' in live ? live.id : NONE;
+  await page.goto(`${origin}/admin/stock/${lcPage}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stock-book"]', { timeout: 25000 }).catch(() => {});
+  const lc = await page.evaluate(() => ({
+    seller: document.querySelector('[data-testid="sb-seller"]')?.textContent ?? null,
+    incomplete: document.querySelector('[data-testid="stock-book-incomplete"]')?.textContent ?? null,
+  }));
+  check('a car taken in the normal way reads NOT RECORDED — the LC09XFU case', lc.seller === 'not recorded', JSON.stringify(lc));
+  check('  …and its row SAYS it is incomplete, naming what was never recorded',
+    (lc.incomplete ?? '').startsWith('Incomplete: Seller, Purchase invoice or receipt were never recorded'), lc.incomplete ?? 'LOOKS FINISHED');
+
+  await page.goto(`${origin}/admin/stock/${bItem.id}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="stock-book"]', { timeout: 25000 }).catch(() => {});
+  const liveDoc = await page.textContent('[data-testid="sb-sale-document"]').catch(() => null);
+  check('a car sold through "Sell this car" names its invoice as the sale document', liveDoc === `Invoice ${bInv?.invoice_number}`, liveDoc ?? 'NOT SHOWN');
+
+  const direct = await ctx.request.post(`${origin}/api/stock`, { data: {
+    action: 'record-historical', registration: `${PREFIX}71M`, make: 'MINI', model: 'One', acquiredAt: '2026-03-01', soldAt: '2026-03-12',
+    purchasePence: 90000, salePence: 150000, vatStatus: 'margin', source: 'private', sellerName: 'X', purchaseRef: 'Y', mileageMiles: 1,
+    buyer: { name: `${PREFIX} API Buyer`, address: '1 Road' }, receiptRef: 'R', notOnPaperwork: { purchase: [], sale: [] }, costs: [],
+  } });
+  const directBody = await direct.json().catch(() => ({}));
+  check('the API refuses a boundary-day sale on its own, not only the page', direct.status() === 409 && /on or after 12 Mar 2026/.test(directBody.message ?? ''),
+    `HTTP ${direct.status()} ${String(directBody.message ?? '').slice(0, 60)}`);
 } catch (err) {
   check('run completed', false, describeError(err).slice(0, 300));
 } finally {
+  await browser?.close().catch(() => {});
   if (prisma) {
     try {
       const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } }, select: { id: true, identity_id: true } });

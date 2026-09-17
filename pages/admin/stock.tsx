@@ -315,6 +315,10 @@ export default function StockPage({ vatRegistered }: { vatRegistered: boolean })
         {tab === 'gone' && (
           <section className="mt-3" data-testid="sold-dashboard">
             <div className="flex flex-wrap items-center gap-2">
+              {/* Past sales feed exactly these figures, so the way in sits beside them. */}
+              <a href="/admin/stock/past-sale" className="text-sm text-accent underline mr-2" data-testid="record-past-sale">
+                Record a past sale
+              </a>
               <label className="text-sm text-muted">Period
                 <select value={soldPreset} onChange={(e) => setSoldPreset(e.target.value)}
                   data-testid="sold-period"

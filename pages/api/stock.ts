@@ -26,6 +26,7 @@ import { getTaxProfile } from '@/lib/tenant-vat';
 import { MUST_CHOOSE_REFUSAL, isReacquisition } from '@/lib/stock-reacquisition';
 import { parseStatedDate } from '@/lib/stock-intake';
 import { sellCar, openPrepCards } from '@/lib/stock-sale';
+import { historicalBoundary, recordHistoricalSale } from '@/lib/stock-historical';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const scope = await requireTenantApi(req, res);
@@ -40,6 +41,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
      * differently, so anything here that leaned either way would be wrong half the time and silent
      * about it. The person says which; see lib/stock-reacquisition.
      */
+    // THE BOUNDARY for recording a past sale: the first car sale invoiced here. The page shows it and
+    // refuses early; lib/stock-historical refuses again, because the page is not the rule.
+    if (req.query.historicalBoundary === '1') {
+      const b = await historicalBoundary(scope.groupId);
+      return res.status(200).json({ boundary: b ? { date: b.date.toISOString(), invoiceNumber: b.invoiceNumber } : null });
+    }
     if (typeof req.query.priorSaleFor === 'string' && req.query.priorSaleFor.trim()) {
       // findVehicleByReg, NOT find-or-create: asking whether a car has been here before must not
       // create it. A lookup with a side effect is how a typo becomes a vehicle record.
@@ -108,6 +115,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         groupId: scope.groupId, userId: scope.userId, siteId,
         stockItemId: String(b.stockItemId ?? ''), soldAt, salePence: b.salePence,
         buyer: (b.buyer ?? null) as never, note: b.note,
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, ...out });
+    }
+
+    /**
+     * A PAST SALE — recorded, not invoiced (lib/stock-historical). Nothing is minted; the boundary, the
+     * paperwork and ownership are all decided there. The site is resolved exactly as a sale's is, because a
+     * new buyer becomes a customer and a customer belongs to a location.
+     */
+    if (b.action === 'record-historical') {
+      const vis = scope.vis;
+      const siteId = vis.primarySiteId && vis.activeSiteIds.includes(vis.primarySiteId) ? vis.primarySiteId
+        : vis.activeSiteIds.length === 1 ? vis.activeSiteIds[0] : null;
+      if (!siteId) return res.status(400).json({ message: 'Say which location this sale belongs to.' });
+      const out = await recordHistoricalSale({
+        groupId: scope.groupId, userId: scope.userId, siteId,
+        registration: b.registration, make: b.make, model: b.model,
+        acquiredAt: parseDate(b.acquiredAt), arrivedAt: parseDate(b.arrivedAt),
+        purchasePence: b.purchasePence, premiumPence: b.premiumPence, vatStatus: b.vatStatus, source: b.source,
+        sellerName: b.sellerName, purchaseRef: b.purchaseRef, mileageMiles: b.mileageMiles,
+        soldAt: parseDate(b.soldAt), salePence: b.salePence,
+        buyer: (b.buyer ?? null) as never, receiptRef: b.receiptRef,
+        notOnPaperwork: (b.notOnPaperwork ?? { purchase: [], sale: [] }) as never,
+        costs: (Array.isArray(b.costs) ? b.costs : []).map((c: Record<string, unknown>) => ({
+          kind: c.kind, description: c.description, amountPence: c.amountPence,
+          incurredOn: parseDate(c.incurredOn), vatTreatment: c.vatTreatment,
+        })),
+        note: b.note,
       });
       if ('refused' in out) return res.status(409).json({ message: out.refused });
       return res.status(200).json({ ok: true, ...out });
