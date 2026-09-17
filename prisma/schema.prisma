@@ -5441,7 +5441,9 @@ model StockCostSnapshot {
   /// a later kind is a deploy rather than a two-push cycle.
   kind          String
   description   String
-  /// GROSS, like every money figure in this product.
+  /// WHAT THE CAR BORE, frozen — the figure its page charged the moment before disposal. NOT always
+  /// gross: a delivery, valet or MOT row is net of credits AND of the VAT the garage could reclaim at
+  /// disposal (lib/stock-cost::frozenCostRows). A prep row is parts at trade cost as the card held them.
   amount_pence  Int
   /// The prep card this came from. NULL = it came from no card — a delivery invoice or an MOT typed
   /// straight onto the car — which is a real and common way for a cost to arrive, not a missing link.

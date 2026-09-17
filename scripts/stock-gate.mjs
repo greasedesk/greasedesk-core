@@ -1308,6 +1308,31 @@ try {
   check('an uncredited standard-rated cost DOES reclaim, so the clause above is not vacuous',
     SCST.netCosts([target], true).reclaimablePence === Math.round(41000 / 6));
 
+  console.log('\n— what FREEZES is what the car showed: net of credits AND of reclaimable VAT —');
+  /**
+   * HAND-COMPUTED, never read back through netCosts. The freeze goes through netCosts, so a clause
+   * comparing the two agrees with itself whatever netCosts does. £54 standard-rated holds £9 of VAT.
+   */
+  const mot = { id: 'm1', kind: 'mot', description: 'MOT', amountPence: 5400, incurredOn: bought, vatTreatment: 'standard_recoverable', reversesId: null };
+  const fz = (rows, reg) => SCST.frozenCostRows(rows, reg).map((r) => r.amountPence);
+  check('a VAT-registered garage freezes a £54 recoverable MOT at £45',
+    JSON.stringify(fz([mot], true)) === '[4500]', `${JSON.stringify(fz([mot], true))} — the page charged the car £45`);
+  check('  …an UNREGISTERED one at £54, because it reclaims nothing',
+    JSON.stringify(fz([mot], false)) === '[5400]', JSON.stringify(fz([mot], false)));
+  check('  …a supplier VAT that cannot be recovered freezes gross',
+    JSON.stringify(fz([{ ...mot, amountPence: 6000, vatTreatment: 'standard_not_recoverable' }], true)) === '[6000]');
+  check('  …and a no-VAT supplier freezes what was paid',
+    JSON.stringify(fz([{ ...mot, amountPence: 25000, vatTreatment: 'no_vat' }], true)) === '[25000]');
+  const partCredit = SCST.frozenCostRows([mot, { ...mot, id: 'm2', amountPence: 1200, reversesId: 'm1' }], true);
+  check('a part credit comes off NET too — £45 less £10 is £35',
+    partCredit.length === 1 && partCredit[0].amountPence === 3500,
+    `${partCredit.map((r) => r.amountPence)} — £12 back holds £2 of VAT the garage no longer reclaims`);
+  check('  …and the frozen line says how much came back, in cash',
+    /net of £12\.00 credited back/.test(partCredit[0]?.description ?? ''), partCredit[0]?.description);
+  check('a cost credited in full freezes as NOTHING, where a £0 line invites “why is this here”',
+    SCST.frozenCostRows([{ ...mot, vatTreatment: 'no_vat', amountPence: 9000 },
+      { ...mot, id: 'm2', vatTreatment: 'no_vat', amountPence: 9000, reversesId: 'm1' }], true).length === 0);
+
   console.log('\n— through the real writer, on a real car —');
   const regC = `ZZYARD${Math.floor(Math.random() * 900 + 100)}C`;
   const vC = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regC, acquiredAt: bought });
@@ -1400,9 +1425,61 @@ try {
     where: { stock_item_id: itemC.id, job_card_id: null },
     select: { amount_pence: true, description: true, kind: true },
   });
-  check('disposal froze the costs NET of the credit',
-    frozen.length === 1 && frozen[0].amount_pence === 5400,
-    `${frozen.length} row(s): ${frozen.map((f) => `${f.kind} ${f.amount_pence}p`).join(', ')} — the fully credited delivery froze as nothing at all`);
+  /**
+   * THIS CLAUSE USED TO ASSERT 5400 — and was green on a defect. ZZ is VAT registered, so the page
+   * charged the car £45 for its £54 MOT and the freeze wrote £54: the car changed cost by being sold,
+   * and the clause pinned the wrong number. £45 is hand-computed; the comparison below it is not enough
+   * on its own, because both sides now go through netCosts.
+   */
+  check('disposal froze the costs NET of the credit AND of the VAT ZZ reclaims',
+    frozen.length === 1 && frozen[0].amount_pence === 4500,
+    `${frozen.length} row(s): ${frozen.map((f) => `${f.kind} ${f.amount_pence}p`).join(', ')} — £54 MOT less £9 reclaimable; the fully credited delivery froze as nothing at all`);
+  check('THE CAR DID NOT CHANGE COST BY BEING SOLD',
+    frozen.reduce((t, f) => t + f.amount_pence, 0) === projBefore.costs.costPence,
+    `the page charged ${projBefore.costs.costPence}p the moment before; the freeze wrote ${frozen.reduce((t, f) => t + f.amount_pence, 0)}p`);
+
+  /**
+   * THE WRITER READS THE TENANT'S REGISTRATION — it is not a constant that happens to match ZZ. Proved
+   * inside ONE transaction that flips ZZ to unregistered, disposes, reads, and ROLLS BACK: nothing is
+   * committed, so no other gate can see ZZ unregistered, and an abandoned run leaves nothing behind.
+   */
+  const regU = `ZZYARD${Math.floor(Math.random() * 900 + 100)}U`;
+  const vU = await ST.findOrCreateVehicle({ groupId: ZZ_GROUP, registration: regU, acquiredAt: bought });
+  if ('refused' in vU) throw new Error(vU.refused);
+  made.vehicles.push(vU.id);
+  const itemU = await ST.takeIntoStock({
+    groupId: ZZ_GROUP, userId: owner.id, vehicleId: vU.id, acquiredAt: bought,
+    purchasePence: 100000, vatStatus: 'margin', source: 'trade',
+  });
+  if ('refused' in itemU) throw new Error(itemU.refused);
+  made.items.push(itemU.id);
+  const motU = await ST.addStockCost({
+    groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemU.id, kind: 'mot',
+    description: 'MOT', amountPence: 5400, incurredOn: bought, vatTreatment: 'standard_recoverable',
+  });
+  if ('refused' in motU) throw new Error(motU.refused);
+  const ROLLBACK = 'stock-gate: rollback on purpose';
+  let unregFrozen = null;
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.group.update({ where: { id: ZZ_GROUP }, data: { vat_registered: false } });
+      const d = await ST.recordDisposalInTx(tx, {
+        groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemU.id,
+        disposedAt: new Date('2026-09-01T12:00:00Z'), kind: 'sold', salePence: 150000, costs: [],
+      });
+      if ('refused' in d) throw new Error(d.refused);
+      unregFrozen = (await tx.stockCostSnapshot.findMany({
+        where: { stock_item_id: itemU.id, job_card_id: null }, select: { amount_pence: true },
+      })).map((r) => r.amount_pence);
+      throw new Error(ROLLBACK);
+    });
+  } catch (e) { if (!String(e?.message).includes(ROLLBACK)) throw e; }
+  check('an UNREGISTERED tenant freezes the same MOT at £54 — the writer read the tenant',
+    JSON.stringify(unregFrozen) === '[5400]', JSON.stringify(unregFrozen));
+  check('  …and the flip rolled back: ZZ is still registered and that car is still in stock',
+    (await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { vat_registered: true } })).vat_registered === true
+      && !(await prisma.stockDisposal.findFirst({ where: { stock_item_id: itemU.id } })),
+    'a committed flip would change every later ZZ gate');
   const lateCost = await ST.addStockCost({
     groupId: ZZ_GROUP, userId: owner.id, stockItemId: itemC.id, kind: 'valeting',
     description: 'Late valet', amountPence: 5000, incurredOn: new Date('2026-09-10T12:00:00Z'), vatTreatment: 'no_vat',
@@ -1783,7 +1860,9 @@ try {
   check('  …and the net total shows the credit came back',
     /net of credits/.test((await page.textContent('[data-testid="costs-total"]')) ?? ''));
   check('  …and vanishes from the FROZEN snapshot, where a £0 line invites “why is this here”',
-    /\.filter\(\(r\) => r\.amount_pence > 0\)/.test(readFileSync('lib/stock-store.ts', 'utf8')));
+    SCST.frozenCostRows((await ST.stockCostRows(ZZ_GROUP, itemS.id)), true)
+      .every((r) => r.costId !== costOnS.id),
+    'this car’s own rows through the function the freeze calls — it replaced a scan for a .filter in the source');
   check('every line links to the card it came from',
     /href=\{`\/admin\/jobcards\/\$\{grp\.cardId\}`\}/.test(pageSrc),
     'a reference nobody can follow is decoration');

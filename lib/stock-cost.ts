@@ -145,6 +145,42 @@ export function netCosts(rows: CostRow[], vatRegistered: boolean): CostTotals {
 }
 
 /**
+ * ── WHAT FREEZES AT DISPOSAL: THE SAME FIGURE THE CAR SHOWED THE MOMENT BEFORE ─────────────────
+ *
+ * A CAR MUST NOT CHANGE COST BY BEING SOLD. While in stock the car's page charges it `costPence` from
+ * netCosts — gross less the VAT the garage can reclaim. The freeze used to copy `amount_pence` minus
+ * credits, which is GROSS: a VAT-registered garage's £54 recoverable MOT cost the car £45 on Monday and
+ * £54 on the sold dashboard on Tuesday, with nothing but the sale in between.
+ *
+ * So each cost is frozen THROUGH netCosts, together with the credits against it, and nothing here does
+ * its own VAT arithmetic. One row per cost; a cost credited in full freezes as nothing at all, because a
+ * £0 line invites "why is this here". The treatment is not carried onto the snapshot — the snapshot
+ * holds the ANSWER, which is the point of a freeze.
+ *
+ * `vatRegistered` is the tenant's status AT DISPOSAL, read by the writer, never a constant.
+ */
+export type FrozenCost = { costId: string; kind: string; description: string; amountPence: number };
+
+export function frozenCostRows(rows: CostRow[], vatRegistered: boolean): FrozenCost[] {
+  const out: FrozenCost[] = [];
+  for (const r of rows) {
+    if (r.reversesId) continue;
+    const credits = rows.filter((c) => c.reversesId === r.id);
+    const t = netCosts([r, ...credits], vatRegistered);
+    if (t.costPence <= 0) continue;
+    out.push({
+      costId: r.id,
+      kind: r.kind,
+      description: t.creditedPence > 0
+        ? `${r.description} (net of £${(t.creditedPence / 100).toFixed(2)} credited back)`
+        : r.description,
+      amountPence: t.costPence,
+    });
+  }
+  return out;
+}
+
+/**
  * A CREDIT THAT ARRIVES AFTER THE CAR IS SOLD DOES NOT BELONG TO THE CAR.
  *
  * Its costs froze at disposal, and the quarter that reported them must go on reporting them: the car

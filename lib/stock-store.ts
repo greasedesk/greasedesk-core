@@ -22,7 +22,7 @@ import {
 import { projectStock, type Projection } from '@/lib/stock-projection';
 import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
 import {
-  CREDIT_AFTER_DISPOSAL_REFUSAL, checkCredit, isStockCostKind, isVatTreatment, netCosts,
+  CREDIT_AFTER_DISPOSAL_REFUSAL, checkCredit, frozenCostRows, isStockCostKind, isVatTreatment, netCosts,
   type CostRow, type CostTotals,
 } from '@/lib/stock-cost';
 import {
@@ -251,35 +251,26 @@ export async function recordDisposalInTx(tx: Prisma.TransactionClient, a: {
    * same reason the prep cards are: the book is a query, and re-running last year's quarter must
    * give what it gave then.
    *
-   * ONE ROW PER COST, and credits FOLD INTO the cost they reverse rather than arriving as separate
-   * negative snapshots. StockCostSnapshot.amount_pence has no negative convention and a reader
-   * summing it would otherwise have to know about reversal — so the netting happens HERE, once.
-   * A cost credited in full freezes as nothing at all rather than a zero row, because a £0 line
-   * invites "why is this here".
+   * THE FIGURE IS THE ONE THE CAR'S PAGE SHOWED: net of credits AND net of the VAT the garage can
+   * reclaim, through lib/stock-cost::frozenCostRows, which goes through the same netCosts the page
+   * does. This used to freeze gross, so a car changed cost by being sold. The tenant's registration
+   * is read HERE, at disposal, in this transaction — a caller-supplied flag is one a caller can get wrong.
    */
+  const reg = await tx.group.findUnique({ where: { id: a.groupId }, select: { vat_registered: true } });
   const liveRows = await tx.stockCost.findMany({
     where: { group_id: a.groupId, stock_item_id: a.stockItemId },
-    select: { id: true, kind: true, description: true, amount_pence: true, reverses_id: true },
+    select: {
+      id: true, kind: true, description: true, amount_pence: true, incurred_on: true,
+      vat_treatment: true, reverses_id: true,
+    },
   });
-  const creditedBy = new Map();
-  for (const r of liveRows) {
-    if (!r.reverses_id) continue;
-    creditedBy.set(r.reverses_id, (creditedBy.get(r.reverses_id) ?? 0) + r.amount_pence);
-  }
-  const costRows = liveRows
-    .filter((r) => !r.reverses_id)
-    .map((r) => {
-      const back = creditedBy.get(r.id) ?? 0;
-      return {
-        group_id: a.groupId, stock_item_id: a.stockItemId, kind: r.kind,
-        description: back > 0
-          ? `${r.description} (net of £${(back / 100).toFixed(2)} credited back)`
-          : r.description,
-        amount_pence: r.amount_pence - back,
-        job_card_id: null,
-      };
-    })
-    .filter((r) => r.amount_pence > 0);
+  const costRows = frozenCostRows(liveRows.map((r) => ({
+    id: r.id, kind: r.kind, description: r.description, amountPence: r.amount_pence,
+    incurredOn: r.incurred_on, vatTreatment: r.vat_treatment, reversesId: r.reverses_id,
+  })), !!reg?.vat_registered).map((f) => ({
+    group_id: a.groupId, stock_item_id: a.stockItemId, kind: f.kind,
+    description: f.description, amount_pence: f.amountPence, job_card_id: null,
+  }));
   if (costRows.length) await tx.stockCostSnapshot.createMany({ data: costRows });
   return { id: d.id };
 }
