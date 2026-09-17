@@ -34,6 +34,7 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const CLIENT_DIR = path.join(ROOT, 'node_modules', '.prisma', 'client');
 const SCHEMA_COPY = path.join(CLIENT_DIR, 'schema.prisma');
 import { DEV_PORT } from './_dev-port.mjs';
+import { replaceServer } from './_dev-restart.mjs';
 
 const args = process.argv.slice(2);
 
@@ -126,13 +127,9 @@ function restart(why) {
   if (restarting || stopping) return;
   restarting = true;
   console.log(`\n  [dev] ${why} — restarting next dev so it loads the new client.\n`);
-  const done = () => { restarting = false; start(); };
-  if (!child) return done();
-  child.once('exit', done);
-  child.kill('SIGTERM');
-  // A server wedged mid-compile does not always take SIGTERM; do not leave a half-dead process
-  // holding port 3000, because the next thing anyone sees is "port in use" and a fresh hunt.
-  setTimeout(() => { try { child?.kill('SIGKILL'); } catch { /* already gone */ } }, 4000);
+  // THROUGH _dev-restart: its SIGKILL fallback is bound to the OLD server. The inline version read
+  // `child` when the timer fired — by then the NEW server — and killed the replacement (2026-09-17).
+  replaceServer(child, { onGone: () => { restarting = false; start(); } });
 }
 
 start();
