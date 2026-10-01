@@ -122,6 +122,30 @@ export const canMoveBooking = (status: JobStatus | string): boolean =>
   !SLOT_IS_HISTORY.includes(status as JobStatus);
 
 /**
+ * ── AND WHICH DOOR DOES WORK ────────────────────────────────────────────────────────────────────
+ * A refusal that does not say what to do instead is a refusal somebody retries. A card whose slot
+ * is a record can still be made bookable again — but only through the transition that reopens it,
+ * and which one that is depends on the status:
+ *
+ *   'accept'  declined — Accept reopens it to `accepted` AND books in the same transaction
+ *   'reopen'  cancelled, no_show — back to `draft` first, then book it
+ *   null      invoiced, paid, done — the work is finished. There is no door, and inventing words
+ *             for one would send a person looking for a button that does not exist.
+ *
+ * DERIVED FROM THE TRANSITION TABLE, never a second list: add an exit to a status and the sentence
+ * follows. A hand-kept map would be the copy that goes stale the first time the lifecycle moves.
+ */
+export type ReBookingDoor = 'accept' | 'reopen' | null;
+
+export function reBookingDoor(status: JobStatus | string): ReBookingDoor {
+  if (canMoveBooking(status)) return null;  // already movable — there is nothing to reopen
+  const exits = nextTransitions(status as JobStatus).map((tr) => tr.to);
+  if (exits.includes('accepted')) return 'accept';
+  if (exits.includes('draft')) return 'reopen';
+  return null;
+}
+
+/**
  * IS THIS CARD IN THE DIARY? The booking fact is `resource_id + start_at + end_at` — a lift and a
  * planned time. It is NOT a status and must never become one: the card already holds it, and a
  * second copy is a second thing to keep in step.

@@ -4,7 +4,7 @@
  * start_at / end_at are the scheduling source of truth (half-open interval [start, end)).
  * Tenant-scoped to the caller's group; a card may only be placed on a Resource of its OWN site.
  *
- *   PATCH  { jobCardId, resourceId, startAt, workingMinutes }  → move  (endAt: legacy bridge)
+ *   PATCH  { jobCardId, resourceId, startAt, workingMinutes }  → move
  *   DELETE { jobCardId }                                        → unplace
  *
  * ── THIS ROUTE IS A MOVE, ALWAYS (2026-10-01) ───────────────────────────────────────────────────
@@ -29,6 +29,7 @@ import { Prisma } from '@prisma/client';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite } from '@/lib/admin-guard';
 import { placeJobCard } from '@/lib/diary-booking';
+import { reBookingDoor } from '@/lib/jobcard-status';
 import { writeAudit } from '@/lib/audit';
 
 function parseDateTime(s: unknown): Date | null {
@@ -53,24 +54,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // implements it. lib/modules stays intact and in use — it is simply not this route's concern.
 
   if (req.method === 'PATCH') {
-    const { jobCardId, resourceId, startAt, endAt, workingMinutes: wmIn } = (req.body || {}) as {
-      jobCardId?: string; resourceId?: string; startAt?: string; endAt?: string; workingMinutes?: number;
+    const { jobCardId, resourceId, startAt, workingMinutes } = (req.body || {}) as {
+      jobCardId?: string; resourceId?: string; startAt?: string; workingMinutes?: number;
     };
     if (!jobCardId || !resourceId) {
       return res.status(400).json({ message: 'jobCardId and resourceId are required.' });
     }
     const start = parseDateTime(startAt);
     if (!start) return res.status(400).json({ message: 'startAt must be a valid datetime.' });
-    // DURATION IS THE SOURCE OF TRUTH, and the drag sends it: a card dragged across a lunch break
-    // must keep its length, and an end time cannot say that — (end − start) counts the break as
-    // work and the job quietly grows.
+    // DURATION IS THE ONLY THING THIS ROUTE ACCEPTS. An end time cannot say how long a job is:
+    // (end − start) counts a lunch break and the hours the garage is shut as work, so a 09:00–17:00
+    // booking at a site that closes for lunch becomes eight WORKING hours and runs to 18:00.
     //
-    // The endAt bridge remains for ONE caller, components/jobcard/JobCardBooking, whose form asks
-    // for a start and an end. It inherits exactly that error on a span crossing a break or a close,
-    // which is a pre-existing defect in that form and not something this route can fix for it —
-    // the fix is asking it for a duration. Nothing new is routed through it.
-    const workingMinutes = wmIn ?? (endAt ? Math.round((Date.parse(endAt) - start.getTime()) / 60000) : NaN);
-    if (!(workingMinutes > 0)) return res.status(400).json({ message: 'A valid duration is required.' });
+    // The endAt bridge that used to sit here is gone. It existed for the card page's old booking
+    // block (components/jobcard/JobCardBooking), which has had no callers since the six-tab
+    // workspace replaced it — and the workspace sends workingMinutes. A bridge for a caller that
+    // no longer exists is a door nothing uses and the next form might.
+    if (!(typeof workingMinutes === 'number' && workingMinutes > 0)) {
+      return res.status(400).json({ message: 'A valid duration is required. Send workingMinutes — an end time cannot say how long a job is.' });
+    }
 
     let from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null } | null = null;
     try {
@@ -100,10 +102,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
       // 409, not 400: the request is well formed and the card's state refuses it. The words name
-      // the status, because "you cannot move this" without saying why is what a person retries.
+      // the status AND THE DOOR THAT WORKS — "you cannot move this" without saying what to do
+      // instead is what a person retries. The door comes from the transition table
+      // (lib/jobcard-status::reBookingDoor), so a lifecycle change moves the sentence with it, and
+      // a status with no way back says nothing rather than pointing at a button that is not there.
       if (m.startsWith('SLOT_IS_HISTORY:')) {
-        return res.status(409).json({ code: 'SLOT_IS_HISTORY', status: m.split(':')[1],
-          message: `That job is ${m.split(':')[1].replace('_', ' ')} — its slot is a record of what happened, not a plan, so it cannot be moved.` });
+        const status = m.split(':')[1];
+        const door = reBookingDoor(status);
+        const next = door === 'accept' ? ' Accept it to re-book the car.'
+          : door === 'reopen' ? ' Reopen it to a draft first, then book it.'
+          : '';
+        return res.status(409).json({ code: 'SLOT_IS_HISTORY', status, door,
+          message: `That job is ${status.replace('_', ' ')} — its slot is a record of what happened, not a plan, so it cannot be moved.${next}` });
+      }
+      if (m === 'SPAN_TOO_LONG') {
+        return res.status(400).json({ code: 'SPAN_TOO_LONG',
+          message: 'That duration would stretch the booking over more than a fortnight of calendar time, which the double-booking check cannot see past. Split it into separate jobs.' });
       }
       if (m === 'NOT_WORKING_TIME') {
         return res.status(400).json({ code: 'NOT_WORKING_TIME',

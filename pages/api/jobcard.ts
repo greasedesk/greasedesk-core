@@ -53,7 +53,8 @@ type CreateJobCardBody = {
   siteId?: string;
   resourceId?: string;
   startAt?: string;
-  endAt?: string;
+  /** WORKING minutes. Not an end time: see the scheduling block below. */
+  workingMinutes?: number;
 };
 
 // Coerce an optional numeric field (year / engine cc) to a clean non-negative integer, else null.
@@ -122,15 +123,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const grpForPhone = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
     const tenantDialCode = resolveTenantProfile(grpForPhone).dialCode;
 
-    // Optional scheduling (create + place). Resource allocation → manager/admin only.
-    const scheduling = !!(body.resourceId && body.startAt && body.endAt);
-    let start: Date | null = null, end: Date | null = null;
+    // ── OPTIONAL SCHEDULING (create + place). Resource allocation → manager/admin only. ────────
+    // THE DURATION IS WHAT ARRIVES, not an end time. This route used to take endAt and derive
+    // `(end − start)`, with a comment saying the diary's create form is within-day so the two
+    // agree. They do agree — because that form builds its end FROM a number of hours — but the
+    // route was stating a property of its caller and never checking it, and the next caller to
+    // send a real clock end time (a person picking 09:00 and 17:00 at a site that closes for
+    // lunch) would have booked eight working hours for a seven-hour day.
+    const minutesIn = Number(body.workingMinutes);
+    const scheduling = !!(body.resourceId && body.startAt && Number.isFinite(minutesIn) && minutesIn > 0);
+    // A HALF-GIVEN BOOKING IS REFUSED, not quietly dropped. A lift and a time with no duration used
+    // to fall through `scheduling` and create the card UNSCHEDULED — the card exists, the booking
+    // the person asked for does not, and nothing says so. Same family as a financial edit lost
+    // behind a booking guard: if part of a request cannot be honoured, say so.
+    if (!scheduling && (body.resourceId || body.startAt)) {
+      return res.status(400).json({ message: 'A booking needs a lift, a start time and a duration. Nothing was scheduled.' });
+    }
+    let start: Date | null = null, workingMinutes = 0;
     if (scheduling) {
       const perms = await getTenantPermissions(groupId);
       if (!canCreateDiaryEntry(vis, targetSiteId, perms)) return res.status(403).json({ message: 'You do not have permission to create a scheduled job.' });
-      start = new Date(body.startAt as string); end = new Date(body.endAt as string);
-      if (isNaN(start.getTime()) || isNaN(end.getTime()) || start >= end) {
-        return res.status(400).json({ message: 'Invalid start/end time.' });
+      start = new Date(body.startAt as string);
+      workingMinutes = Math.round(minutesIn);
+      if (isNaN(start.getTime()) || !(workingMinutes > 0)) {
+        return res.status(400).json({ message: 'Invalid start time or duration.' });
       }
     }
 
@@ -275,9 +291,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         }
         // Create + schedule atomically through the shared booking guard (double-booking refused).
-        // Diary drag-create is within-day, so working-minutes = (end - start).
         if (scheduling) {
-          const workingMinutes = Math.round(((end as Date).getTime() - (start as Date).getTime()) / 60000);
           // 'book': a card being created cannot have a slot to rewrite.
           await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.activeSiteIds, act: 'book' }); // placement = new work
         }
@@ -296,6 +310,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
       if (m.startsWith('CLASH:')) return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
+      if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
+      if (m === 'SPAN_TOO_LONG') return res.status(400).json({ code: 'SPAN_TOO_LONG', message: 'That duration would stretch the booking over more than a fortnight of calendar time, which the double-booking check cannot see past. Split it into separate jobs.' });
       console.error('Job Card Create Error:', error); // real detail stays in the server log, never the user
       return res.status(500).json({ message: 'Something went wrong — please try again.' });
     }

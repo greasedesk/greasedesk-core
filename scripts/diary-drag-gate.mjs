@@ -26,6 +26,18 @@
  * declined card being reopened and booked still holds the slot data of the booking it lost, and
  * that is exactly what the act replaces. Both directions are asserted against the chokepoint.
  *
+ * ── AND DURATION IS THE ONLY THING EITHER DOOR ACCEPTS (2026-10-01) ─────────────────────────────
+ * Both routes that reach placeJobCard are covered here, because the rule is about the chokepoint
+ * rather than the gesture: /api/diary moves and /api/jobcard creates, and neither takes an end
+ * time any more. (end − start) counts a lunch break and the hours the garage is shut as work, so a
+ * 09:00–17:00 booking at a site that closes for lunch would be recorded as eight WORKING hours and
+ * run to 18:00. The create route used to derive minutes that way with a comment asserting its
+ * caller was within-day — a premise about another file that nothing checked.
+ *
+ * A REFUSAL ALSO NAMES THE DOOR THAT WORKS, from the transition table: a declined card is re-booked
+ * through Accept, a cancelled or no-show one by reopening it to a draft, and a finished one not at
+ * all — so it says nothing rather than pointing at a button that is not there.
+ *
  * Fixtures on ZZ Gate Garage only, prefix ZZDRAG, swept before and after. Never TMBS.
  */
 import './_gate-preflight.mjs';
@@ -87,6 +99,23 @@ try {
     'statusSubset means a new status fails to compile until somebody decides; this says the gate knows them all too');
   check('a car ON THE LIFT can still be moved to another lift', ST.canMoveBooking('in_progress'),
     'it happens physically, so it must happen on the board');
+  console.log('\n— and the refusal names the door that works —');
+  const WANT_DOOR = { invoiced: null, paid: null, done: null, declined: 'accept', cancelled: 'reopen', no_show: 'reopen' };
+  for (const [st, want] of Object.entries(WANT_DOOR)) {
+    check(`${st} → ${want ?? 'no door: the work is finished'}`, ST.reBookingDoor(st) === want, String(ST.reBookingDoor(st)));
+  }
+  check('every status whose slot is a record has an answer here', ST.SLOT_IS_HISTORY.every((st) => st in WANT_DOOR),
+    ST.SLOT_IS_HISTORY.join(', '));
+  check('a MOVABLE card has no door — there is nothing to reopen',
+    ['draft', 'quoted', 'accepted', 'in_progress'].every((st) => ST.reBookingDoor(st) === null));
+  check('the premise each door rests on: declined REACHES accepted, cancelled and no_show reach draft',
+    ST.nextTransitions('declined').some((tr) => tr.to === 'accepted')
+    && ST.nextTransitions('cancelled').some((tr) => tr.to === 'draft')
+    && ST.nextTransitions('no_show').some((tr) => tr.to === 'draft'),
+    'the door is READ from the table, so this is what makes the sentences true');
+  check('  …and a finished status reaches neither', ['invoiced', 'paid', 'done'].every((st) =>
+    !ST.nextTransitions(st).some((tr) => tr.to === 'accepted' || tr.to === 'draft')));
+
   check('THE INVARIANT: a status that frees its slot cannot be moved — there is no plan left, only a record',
     ST.FREES_THE_SLOT.every((s) => ST.SLOT_IS_HISTORY.includes(s)),
     `${ST.FREES_THE_SLOT.join(', ')} ⊆ ${ST.SLOT_IS_HISTORY.join(', ')}`);
@@ -254,6 +283,36 @@ try {
     check(`  …and the ${status} card did not move`, row.resource_id === lift1.id && row.start_at.getTime() === at(hour).getTime(),
       row.start_at.toISOString());
   }
+  // THE DOOR, THROUGH THE ENDPOINT. The declined fixture is still declined (it was BOOKED above,
+  // which is the act that is allowed) so it refuses a MOVE and must say which door works.
+  const declRes = await api({ jobCardId: declined, resourceId: lift3.id, startAt: at(13).toISOString(), workingMinutes: 60 });
+  check('a declined card refuses the move and points at ACCEPT',
+    declRes.status === 409 && declRes.body?.door === 'accept' && /Accept it to re-book the car\./.test(declRes.body?.message ?? ''),
+    `${declRes.status} ${JSON.stringify(declRes.body)}`);
+  const invDoor = await api({ jobCardId: invCard, resourceId: lift3.id, startAt: at(13).toISOString(), workingMinutes: 60 });
+  check('  …and a finished one names NO door rather than inventing one',
+    invDoor.body?.door === null && !/Accept|Reopen/.test(invDoor.body?.message ?? ''),
+    JSON.stringify(invDoor.body));
+
+  // AN END TIME IS NO LONGER ACCEPTED, and the refusal says what to send instead.
+  const endOnly = await pg.evaluate(async (b) => {
+    const r = await fetch('/api/diary', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { jobCardId: liveCard, resourceId: lift3.id, startAt: at(13).toISOString(), endAt: at(15).toISOString() });
+  const unmoved = await prisma.jobCard.findUnique({ where: { id: liveCard }, select: { resource_id: true, start_at: true } });
+  check('an end time with no duration is refused, and the words say to send a duration',
+    endOnly.status === 400 && /an end time cannot say how long a job is/.test(endOnly.body?.message ?? ''),
+    `${endOnly.status} ${JSON.stringify(endOnly.body)}`);
+  check('  …and nothing was placed from it', unmoved.resource_id === lift1.id && unmoved.start_at.getTime() === at(8).getTime());
+
+  // NO BOOKING MAY OUTRUN THE CLASH PREFILTER. The bound is read from the constant it protects.
+  const tooLong = Math.round(DB.PREFILTER_LOOKBACK_MS / 60000) + 24 * 60;
+  const spanRes = await api({ jobCardId: liveCard, resourceId: lift3.id, startAt: at(9).toISOString(), workingMinutes: tooLong });
+  check(`a booking longer than the prefilter looks back (${Math.round(DB.PREFILTER_LOOKBACK_MS / 86_400_000)} days) is refused`,
+    spanRes.status === 400 && spanRes.body?.code === 'SPAN_TOO_LONG', `${spanRes.status} ${JSON.stringify(spanRes.body)}`);
+  check('  …because a clash beyond that window is invisible to the guard, not absent',
+    /double-booking check cannot see past/.test(spanRes.body?.message ?? ''), spanRes.body?.message ?? '');
+
   const closedRes = await api({ jobCardId: liveCard, resourceId: lift3.id, startAt: at(CLOSE + 2).toISOString(), workingMinutes: 60 });
   check('a drop out of hours is refused 400, in words that say it will not be nudged',
     closedRes.status === 400 && closedRes.body?.code === 'NOT_WORKING_TIME' && /not be nudged/.test(closedRes.body?.message ?? ''),
@@ -266,6 +325,42 @@ try {
   check('dropping onto an occupied lift is refused 409 CLASH', clashRes.status === 409 && clashRes.body?.code === 'CLASH', `${clashRes.status} ${JSON.stringify(clashRes.body)}`);
   check('  …and the card stays exactly where it was — there is nothing to snap back',
     clashRow.resource_id === lift1.id && clashRow.start_at.getTime() === at(8).getTime(), JSON.stringify(clashRow));
+
+  // ── THE OTHER DOOR: CREATE-AND-PLACE ─────────────────────────────────────────────────────────
+  console.log('\n— the create route takes a duration too —');
+  const createCard = (body) => pg.evaluate(async (b) => {
+    const r = await fetch('/api/jobcard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, body);
+  const cardsBefore = await prisma.jobCard.count({ where: { group_id: ZZ_GROUP, vehicle: { registration: { startsWith: PREFIX } } } });
+  const made = await createCard({
+    siteId: site.id, registration: `${PREFIX}NEW`, customerName: `${PREFIX} Fixture`,
+    // 13:00 on lift3: free. WRAP was moved to 16:00 earlier in this run and BLOCK still holds
+    // 09:00–11:00 — the fixture grid again, read before choosing a slot.
+    resourceId: lift3.id, startAt: at(13).toISOString(), workingMinutes: 90,
+  });
+  check('a card created WITH a booking lands', made.status === 200 || made.status === 201, `${made.status} ${JSON.stringify(made.body).slice(0, 160)}`);
+  const newCard = await prisma.jobCard.findFirst({
+    where: { group_id: ZZ_GROUP, vehicle: { registration: `${PREFIX}NEW` } },
+    select: { id: true, booking_duration_minutes: true, start_at: true, resource_id: true, vehicle_id: true },
+  });
+  if (newCard) { fix.cardIds.push(newCard.id); fix.vehIds.push(newCard.vehicle_id); }
+  check('  …with the duration IT WAS GIVEN, not one derived from an end time',
+    newCard?.booking_duration_minutes === 90 && newCard?.start_at?.getTime() === at(13).getTime() && newCard?.resource_id === lift3.id,
+    JSON.stringify(newCard));
+  // A HALF-GIVEN BOOKING IS REFUSED, AND NO CARD IS LEFT BEHIND. It used to fall through and create
+  // the card unscheduled: the card exists, the booking does not, and nothing says so.
+  const half = await createCard({
+    siteId: site.id, registration: `${PREFIX}HALF`, customerName: `${PREFIX} Fixture`,
+    // 15:00, also free: with the refusal removed this must fail by CREATING an unscheduled card,
+    // not by colliding with another fixture.
+    resourceId: lift3.id, startAt: at(15).toISOString(),
+  });
+  const cardsAfter = await prisma.jobCard.count({ where: { group_id: ZZ_GROUP, vehicle: { registration: { startsWith: PREFIX } } } });
+  check('a lift and a time with no duration is REFUSED', half.status === 400 && /needs a lift, a start time and a duration/.test(half.body?.message ?? ''),
+    `${half.status} ${JSON.stringify(half.body).slice(0, 140)}`);
+  check('  …and no card was created unscheduled behind the refusal', cardsAfter === cardsBefore + 1,
+    `${cardsBefore} before, ${cardsAfter} after — one new card, from the booking that WAS complete`);
 
   // ── THE GESTURE, WITH A REAL MOUSE ───────────────────────────────────────────────────────────
   // ON ITS OWN DAY, a week later, holding exactly two cards: the one being dragged and a ghost.
@@ -398,15 +493,28 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (prisma && fix) {
-    await prisma.jobCard.deleteMany({ where: { id: { in: fix.cardIds }, group_id: ZZ_GROUP } });
-    await prisma.vehicle.deleteMany({ where: { id: { in: fix.vehIds } } });
-    await prisma.customer.delete({ where: { id: fix.custId } }).catch(() => {});
-    await prisma.resource.deleteMany({ where: { id: { in: fix.lifts } } }).catch(() => {});
-    const left = await prisma.jobCard.count({ where: { id: { in: fix.cardIds } } })
-      + await prisma.vehicle.count({ where: { id: { in: fix.vehIds } } })
-      + await prisma.customer.count({ where: { id: fix.custId } })
-      + await prisma.resource.count({ where: { id: { in: fix.lifts } } });
-    check('teardown removed every fixture row (audit rows stay — append-only)', left === 0, `${left} left`);
+    /**
+     * BY PREFIX, NOT BY THE LIST OF IDS THIS GATE KEPT. The create-route clauses make a card
+     * through /api/jobcard, which creates its OWN customer and vehicle — rows this gate never
+     * learned the ids of. An id-list teardown removed the cards and left a ZZDRAG vehicle and two
+     * ZZDRAG customers on the tenant, found by a residue sweep after a red-proof run.
+     *
+     * A teardown can only remove what it knows about, so it asks the same question the opening
+     * sweep asks: everything under this prefix, however it got there.
+     */
+    const cards = await prisma.jobCard.findMany({
+      where: { group_id: ZZ_GROUP, OR: [{ id: { in: fix.cardIds } }, { vehicle: { registration: { startsWith: PREFIX } } }, { customer: { name: { startsWith: PREFIX } } }] },
+      select: { id: true },
+    });
+    await prisma.jobCard.deleteMany({ where: { id: { in: cards.map((c) => c.id) } } });
+    await prisma.vehicle.deleteMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } } });
+    await prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: PREFIX } } });
+    await prisma.resource.deleteMany({ where: { site: { group_id: ZZ_GROUP }, name: { startsWith: PREFIX } } }).catch(() => {});
+    const left = await prisma.jobCard.count({ where: { group_id: ZZ_GROUP, vehicle: { registration: { startsWith: PREFIX } } } })
+      + await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: { startsWith: PREFIX } } })
+      + await prisma.customer.count({ where: { group_id: ZZ_GROUP, name: { startsWith: PREFIX } } })
+      + await prisma.resource.count({ where: { site: { group_id: ZZ_GROUP }, name: { startsWith: PREFIX } } });
+    check('teardown removed every fixture row, INCLUDING what the API created (audit rows stay — append-only)', left === 0, `${left} left`);
   }
   if (prisma) await prisma.$disconnect();
 }

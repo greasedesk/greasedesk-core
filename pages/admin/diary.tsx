@@ -1565,9 +1565,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     if (r.mot) setMot(r.mot);
     setLookMsg({ text: t(r.source === 'records' ? 'create.lookupRecord' : 'create.lookupDvsa'), ok: true });
   }
-  // Start: seeded from the clicked cell, or user-picked (pickWhen). End is naive start + hours (the
-  // /api/jobcard bridge → workingMinutes = end-start = hours*60; the footprint re-expands correctly
-  // around close/breaks). Duration is the source of truth.
+  // Start: seeded from the clicked cell, or user-picked (pickWhen). DURATION is what the job
+  // create sends — hours × 60, straight through, with no end time in the middle to be re-derived
+  // from. `endAt` below is naive start + hours and is for the NOTE path, where an end genuinely is
+  // the fact: a note is a span on the board, not a job with a working length.
   const startAt = pickWhen ? (whenTime ? `${whenDate}T${whenTime}:00.000Z` : '') : info.startAt;
   const endAt = startAt ? new Date(Date.parse(startAt) + Math.round(Number(hours || 0) * 60) * 60000).toISOString() : '';
   const when = pickWhen ? '' : `${info.date} · ${info.startAt.slice(11, 16)} · ${hours} hr`;
@@ -1597,7 +1598,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
           motExpiry: mot.motExpiry ?? undefined,
           lastMotMileage: mot.lastMotMileage ?? undefined,
           lastMotDate: mot.lastMotDate ?? undefined,
-          siteId, resourceId: liftId, startAt, endAt,
+          siteId, resourceId: liftId, startAt, workingMinutes: Math.round(Number(hours || 0) * 60),
         }),
       });
       const data = await res.json().catch(() => ({}));

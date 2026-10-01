@@ -34,7 +34,7 @@
  * answer is at the call site where somebody is thinking about it.
  *
  * Throws: CARD_NOT_FOUND | RESOURCE_NOT_FOUND | CROSS_SITE | EMPTY_FOOTPRINT | CLASH:<reg>
- *       | BILLING_RESTRICTED | SLOT_IS_HISTORY:<status> | NOT_WORKING_TIME
+ *       | BILLING_RESTRICTED | SLOT_IS_HISTORY:<status> | NOT_WORKING_TIME | SPAN_TOO_LONG
  */
 import { Prisma } from '@prisma/client';
 import { computeFootprint, footprintsClash, parseBreaks, isWorkingMoment } from '@/lib/occupancy';
@@ -60,11 +60,13 @@ export type PlaceParams = {
 export type Placement = { resourceId: string | null; startAt: string | null; workingMinutes: number | null };
 export type PlacedResult = { from: Placement; to: Placement };
 
-// Candidate prefilter lookback: safely larger than the max spill a single booking can produce. The
-// booking form caps duration at 5 WORKING days (~1 calendar week even with a couple of closed days),
-// so 14 days is conservative. RAISE THIS if the duration cap ever exceeds 5 working days (or if sites
-// with very few open-days-per-week are introduced, where 5 working days spans more calendar days).
-const PREFILTER_LOOKBACK_MS = 14 * 24 * 3600000;
+// Candidate prefilter lookback, and THE BOUND ON WHAT MAY BE WRITTEN. It used to be only the first,
+// with a comment asking the reader to keep a form's duration cap below it — a premise about another
+// file that nothing checked. Now placeJobCard refuses any booking whose footprint spans longer than
+// this, so the window can never be smaller than the thing it is searching for. EXPORTED so the gate
+// reads the bound rather than restating the number.
+// Raising it is safe; LOWERING it narrows what the garage may book, which is a product decision.
+export const PREFILTER_LOOKBACK_MS = 14 * 24 * 3600000;
 
 export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams): Promise<PlacedResult> {
   const card = await tx.jobCard.findFirst({
@@ -109,6 +111,17 @@ export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams)
   const newFp = computeFootprint(p.start.toISOString(), p.workingMinutes, openHour, closeHour, openDays, breaks);
   if (newFp.segments.length === 0) throw new Error('EMPTY_FOOTPRINT');
   const newEnd = new Date(Date.parse(newFp.endISO));
+
+  // ── NO BOOKING MAY SPAN MORE CALENDAR TIME THAN THE CLASH PREFILTER LOOKS BACK ──────────────
+  // The prefilter below finds candidates by `start_at >= newStart − LOOKBACK`. A booking longer
+  // than that window could be missed entirely: its start would sit outside the window while its
+  // footprint reached into the new one, and the double-booking guard would pass on a real clash.
+  //
+  // The comment on PREFILTER_LOOKBACK_MS has always said "raise this if the duration cap ever
+  // exceeds 5 working days" — a premise about a cap that lives in a FORM, which the server never
+  // checked and a form cannot promise. Enforced here instead, against the constant it protects, so
+  // the two cannot disagree: what is written can never exceed what is searched.
+  if (newEnd.getTime() - p.start.getTime() > PREFILTER_LOOKBACK_MS) throw new Error('SPAN_TOO_LONG');
 
   // Superset prefilter (indexed on resource_id, start_at): any existing booking that could overlap
   // must START within [newStart - LOOKBACK, newFootprintEnd]. end_at is NOT trusted here — the exact
