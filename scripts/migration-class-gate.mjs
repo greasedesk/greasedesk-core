@@ -243,10 +243,23 @@ try {
   check('  …and a rename yields the NEW path', parsed[3] === 'new/name.ts', parsed[3]);
   check('  …so the exclusions actually match', !R.comparedByDeployCheck(parsed[0]) && R.comparedByDeployCheck(parsed[1]),
     'schema.prisma excluded, app code compared — which the mangled path defeated');
-  // AGAINST THE REAL THING: every path this repo's own status produces must exist on disk.
-  const live = R.uncommittedPaths(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }));
-  check('  …and every path from THIS repo\'s status exists on disk', live.every((f) => existsSync(f)),
-    live.filter((f) => !existsSync(f)).join(', ') || `${live.length} path(s) checked`);
+  // AGAINST THE REAL THING: every path this repo's own status produces must be a path a human can
+  // go and look at — which is the property the mangled `risma/schema.prisma` broke.
+  //
+  // A DELETION IS THE ONE LEGITIMATE EXCEPTION, and it went red the first time a file was deleted
+  // (components/jobcard/JobCardBooking.tsx, 2026-10-01). A deleted file is still an uncommitted
+  // change that must be deployed, so it belongs in the list; its absence from disk is the point of
+  // it rather than a parse fault. So the clause asks for existence OR a deletion status, and the
+  // deleted set is read from the same porcelain rather than inferred from the file being missing —
+  // "it is not there" is exactly what a mangled path looks like too.
+  const porcelain = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
+  const live = R.uncommittedPaths(porcelain);
+  const deleted = new Set(porcelain.split('\n')
+    .filter((l) => /^(D.|.D)[ \t]/.test(l))
+    .flatMap((l) => R.uncommittedPaths(l)));
+  const unreal = live.filter((f) => !existsSync(f) && !deleted.has(f));
+  check('  …and every path from THIS repo\'s status is one you can go and look at', unreal.length === 0,
+    unreal.join(', ') || `${live.length} path(s) checked, ${deleted.size} of them deleted`);
 
   // ── 8. THE HOOK: THE LAYER THAT WORKS AT 11PM ────────────────────────────────────────────────
   // The wrapper only protects the database if it is the thing that runs, and at eleven at night the

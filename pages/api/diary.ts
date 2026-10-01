@@ -66,10 +66,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // (end − start) counts a lunch break and the hours the garage is shut as work, so a 09:00–17:00
     // booking at a site that closes for lunch becomes eight WORKING hours and runs to 18:00.
     //
-    // The endAt bridge that used to sit here is gone. It existed for the card page's old booking
-    // block (components/jobcard/JobCardBooking), which has had no callers since the six-tab
-    // workspace replaced it — and the workspace sends workingMinutes. A bridge for a caller that
-    // no longer exists is a door nothing uses and the next form might.
+    // The endAt bridge that used to sit here is gone. Its one caller was the card page's original
+    // booking block, which asked for a start and an end; it had had no callers of its own since the
+    // six-tab workspace replaced it (the workspace sends workingMinutes), and it was deleted in the
+    // same slice. A bridge for a caller that no longer exists is a door nothing uses and the next
+    // form might.
     if (!(typeof workingMinutes === 'number' && workingMinutes > 0)) {
       return res.status(400).json({ message: 'A valid duration is required. Send workingMinutes — an end time cannot say how long a job is.' });
     }
