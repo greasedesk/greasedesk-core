@@ -46,34 +46,13 @@
  *   line id / invoice_id                   — surrogate; position + description order the lines
  */
 import { PrismaClient } from '@prisma/client';
-import crypto from 'crypto';
+import { juneGolden } from './_june-golden.mjs';
 
+// THE COMPUTATION MOVED to scripts/_june-golden.mjs so the nightly backup verification can hash a
+// RESTORED copy with the same field list. Two copies of that list would drift, which is the failure
+// this golden exists to catch. This script stays the way a person runs it by hand.
 const prisma = new PrismaClient();
-const TMBS = '854d38e7-6dd4-4836-af61-a0d169639a78';
-
-const INVOICE_FIELDS = {
-  sequence_value: true, invoice_number: true, series: true, status: true,
-  date_issued: true, date_paid: true,
-  is_imported: true, external_ref: true,
-  vat_registered_at_issue: true, company_vat_number_snapshot: true, company_name_snapshot: true,
-  customer_name_snapshot: true, vehicle_reg_snapshot: true,
-};
-const LINE_FIELDS = {
-  position: true, description: true, item_type: true,
-  qty: true, unit_price: true, unit_cost: true, vat_rate: true,
-  line_total: true, line_vat: true,
-  labour_hours: true, labour_outsourced: true,
-};
-
-const invoices = await prisma.invoice.findMany({
-  where: { group_id: TMBS, date_issued: { gte: new Date('2026-06-01'), lt: new Date('2026-07-01') } },
-  orderBy: [{ series: 'asc' }, { sequence_value: 'asc' }],
-  select: { ...INVOICE_FIELDS, lines: { select: LINE_FIELDS, orderBy: [{ position: 'asc' }, { description: 'asc' }] } },
-});
-
-const lineCount = invoices.reduce((n, i) => n + i.lines.length, 0);
-const money = invoices.reduce((n, i) => n + i.lines.reduce((m, l) => m + Number(l.line_total) + Number(l.line_vat), 0), 0);
-
-console.log('invoices:', invoices.length, 'lines:', lineCount, 'gross: £' + money.toFixed(2));
-console.log('sha256:', crypto.createHash('sha256').update(JSON.stringify(invoices)).digest('hex'));
+const g = await juneGolden(prisma);
+console.log('invoices:', g.invoices, 'lines:', g.lines, 'gross: £' + (g.grossPence / 100).toFixed(2));
+console.log('sha256:', g.sha256);
 await prisma.$disconnect();

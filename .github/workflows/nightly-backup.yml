@@ -1,0 +1,156 @@
+name: nightly-backup
+
+# A COPY OF THE DATABASE THAT NEON CANNOT TAKE AWAY, AND A RESTORE TEST EVERY NIGHT.
+#
+# On 2026-09-30 the Neon project hit an account quota and refused EVERY query for a day. The database
+# was unreachable and so was Neon's own restore — a copy inside the account that locks you out is not
+# a second copy. This job keeps one outside it, and proves it restores.
+#
+# WHAT IT DOES, in order:
+#   1. pg_dump the live database (direct endpoint — never the pooler)
+#   2. write a manifest beside it: every table's row count, the applied-migration count, and the June
+#      2026 ledger golden (scripts/_june-golden) — what the source contained at dump time
+#   3. encrypt both with a passphrase that lives in GitHub, never in the bucket
+#   4. upload to R2 under nightly/ weekly/ monthly/ (scripts/_backup-compare::retentionPrefix)
+#   5. RESTORE the encrypted dump into a throwaway Postgres 18 and verify it reproduces the manifest
+#      exactly — same tables, same row counts, same June hash. A backup nobody has restored is a
+#      hypothesis, so every night is a restore test and a failure here fails the job.
+#
+# THIS REPOSITORY IS PUBLIC, so its Actions logs are public. Nothing here echoes a connection string,
+# a passphrase or a row: the log prints table counts, byte sizes and a hash prefix, and that is all.
+# Secrets are masked by GitHub, but the rule is not to print them in the first place.
+#
+# SECRETS REQUIRED (Settings → Secrets and variables → Actions):
+#   BACKUP_DATABASE_URL   the DIRECT (unpooled) Neon connection string, read-only role if you make one
+#   BACKUP_PASSPHRASE     symmetric key for the dump; keep a copy somewhere that is NOT R2 and NOT GitHub
+#   R2_ACCOUNT_ID         Cloudflare account id
+#   R2_ACCESS_KEY_ID      scoped to the backup bucket ONLY — not the photos bucket, not account-wide
+#   R2_SECRET_ACCESS_KEY  its secret
+#   R2_BUCKET             e.g. greasedesk-db-backups, with versioning ON and lifecycle per prefix
+#
+# RETENTION is R2 lifecycle, by prefix, not this workflow's business: nightly/ 14 days, weekly/ 8
+# weeks, monthly/ 12 months. Versioning on, so a leaked key cannot erase history by overwriting.
+#
+# RESTORING FOR REAL: docs/RESTORE.md.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'   # 02:17 UTC — after the garage's day, before anyone's morning
+  workflow_dispatch:        # and on demand, which is also how you rehearse it
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      # The restore target. Postgres 18 because the source is 18.6 — a dump restored by an older
+      # server is not the thing we are promising to be able to restore.
+      verify_db:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: verify
+          POSTGRES_DB: verify
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Postgres 18 client
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          pg_dump --version
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Dump and describe the source
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          # --no-owner/--no-privileges: the restore target has different roles, and a dump that only
+          # restores onto an identically-roled server is a dump that does not restore.
+          pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file="db-$STAMP.dump"
+          node scripts/backup-manifest.mjs "manifest-$STAMP.json"
+          ls -l "db-$STAMP.dump" | awk '{print "dump bytes:", $5}'
+
+      - name: Encrypt
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          # The passphrase reaches gpg on a file descriptor, never as an argument — argv is visible
+          # to every process on the runner.
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --quiet --symmetric --cipher-algo AES256 \
+            --passphrase-fd 0 --output "db-$STAMP.dump.gpg" "db-$STAMP.dump"
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --quiet --symmetric --cipher-algo AES256 \
+            --passphrase-fd 0 --output "manifest-$STAMP.json.gpg" "manifest-$STAMP.json"
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          PREFIX="$(node -e "import('./scripts/_backup-compare.mjs').then(m => console.log(m.retentionPrefix(new Date())))")"
+          echo "landing under: $PREFIX/"
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          aws s3 cp "db-$STAMP.dump.gpg"        "s3://$R2_BUCKET/$PREFIX/db-$STAMP.dump.gpg"        --endpoint-url "$ENDPOINT" --only-show-errors
+          aws s3 cp "manifest-$STAMP.json.gpg"  "s3://$R2_BUCKET/$PREFIX/manifest-$STAMP.json.gpg"  --endpoint-url "$ENDPOINT" --only-show-errors
+          echo "uploaded $PREFIX/db-$STAMP.dump.gpg"
+
+      - name: Restore the UPLOADED copy, and verify it
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          # The RESTORED copy, not the source. Nothing in this step can reach Neon.
+          DATABASE_URL: postgresql://postgres:verify@localhost:5432/verify
+        run: |
+          set -euo pipefail
+          PREFIX="$(node -e "import('./scripts/_backup-compare.mjs').then(m => console.log(m.retentionPrefix(new Date())))")"
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          # PULLED BACK DOWN deliberately: verifying the local file would prove the dump good and say
+          # nothing about what reached the bucket — the transfer is part of what can break.
+          rm -f "db-$STAMP.dump" "db-$STAMP.dump.gpg"
+          aws s3 cp "s3://$R2_BUCKET/$PREFIX/db-$STAMP.dump.gpg" "roundtrip.dump.gpg" --endpoint-url "$ENDPOINT" --only-show-errors
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --quiet --decrypt --passphrase-fd 0 --output roundtrip.dump roundtrip.dump.gpg
+          pg_restore --no-owner --no-privileges --dbname "$DATABASE_URL" roundtrip.dump
+          node scripts/backup-verify.mjs "manifest-$STAMP.json"
+
+      - name: Keep the manifests when something went wrong
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-manifests-${{ env.STAMP }}
+          path: |
+            manifest-*.json
+            restored-manifest.json
+          if-no-files-found: ignore
+          retention-days: 14
