@@ -33,6 +33,21 @@
 /** Four weeks. The window in which it is worth doing while the car is already in. */
 export const MOT_SOON_DAYS = 28;
 
+/**
+ * ── ONE WEEK: THE POINT AT WHICH THE DATE ITSELF GOES RED ───────────────────────────────────────
+ * A SECOND window, beside the first, and deliberately not a replacement for it. The three windows
+ * in this product answer three different questions and collapsing them would be one number
+ * pretending to answer all three (owner's decision, 2026-10-01):
+ *
+ *   MOT_SOON_DAYS  28   worth doing while the car is already in       — the banner, and the move to Hot
+ *   MOT_URGENT_DAYS 7   the date is now the problem                   — printed red on the leads list
+ *   WINDOW_DAYS    30   what the leads board shows at all             — lib/marketing-lists
+ *
+ * It lives here, beside MOT_SOON_DAYS, because both are statements about how close an MOT is and a
+ * reader comparing them must find them in one place.
+ */
+export const MOT_URGENT_DAYS = 7;
+
 /** A car's first MOT falls due three years after it is first registered. */
 const FIRST_MOT_YEARS = 3;
 
@@ -145,3 +160,45 @@ export const againstLabel = (b: { against: 'booking' | 'today'; asOf: Date }): s
   b.against === 'booking'
     ? `judged against the booking on ${b.asOf.toISOString().slice(0, 10)}, not today`
     : 'judged against today';
+
+/**
+ * ── HOW HARD TO PRINT AN MOT DATE ───────────────────────────────────────────────────────────────
+ * For a surface that shows the DATE rather than a sentence — the leads list's own column. Three
+ * states, plus NULL for "we hold no date", which is not the same thing and must not render as a
+ * date that is fine:
+ *
+ *   'expired'  already gone — the car is off the road
+ *   'urgent'   within MOT_URGENT_DAYS, today included
+ *   'plain'    a real date, far enough away to be ordinary
+ *   null       no date held at all. The caller says which absence it is; this function will not
+ *              guess, and a missing date must never read as a passing one.
+ *
+ * Calendar days, through the same dayDiff the banner uses — a date that expires today is urgent,
+ * not plain, and the two surfaces must not disagree about which day it falls on.
+ */
+export type MotDateEmphasis = 'expired' | 'urgent' | 'plain';
+
+/**
+ * ── HOW MANY DAYS, COUNTED IN DAYS ──────────────────────────────────────────────────────────────
+ * Whole CALENDAR days to an MOT expiry; negative once it has passed, NULL when we hold no date.
+ *
+ * `Vehicle.mot_expiry` is `@db.Date`, so it reads back as MIDNIGHT. Subtracting instants and
+ * rounding therefore UNDER-COUNTS by up to a day: a car whose MOT runs out on the 30th, read at
+ * two in the afternoon on the 1st, came out as 28.4 days and printed "MOT due in 28 days" to a
+ * garage looking at a date 29 days away. Harmless-looking while it was only a sentence; it became
+ * a boundary the day four weeks started moving cars into Hot.
+ *
+ * So both surfaces count the same way, through this one function and the same dayDiff the banner
+ * uses. A car that is 28 days out on the banner is 28 days out on the leads board.
+ */
+export function motDaysUntil(expiry: Date | string | null | undefined, now: Date): number | null {
+  const d = asDate(expiry ?? null);
+  return d ? dayDiff(now, d) : null;
+}
+
+export function motDateEmphasis(expiry: Date | string | null | undefined, now: Date): MotDateEmphasis | null {
+  const days = motDaysUntil(expiry, now);
+  if (days === null) return null;
+  if (days < 0) return 'expired';
+  return days <= MOT_URGENT_DAYS ? 'urgent' : 'plain';
+}

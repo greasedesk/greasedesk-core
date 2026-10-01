@@ -66,6 +66,39 @@ const CHANNEL_SUFFIX: Record<string, string> = { sms: ' by text', email: ' by em
  * recorded a contact saying the call was about its MOT. The row already knows what it is: its own
  * strongest reason, the same one printed on the line the caller is reading.
  */
+/**
+ * ── THE MOT DATE, IN ITS OWN COLUMN ─────────────────────────────────────────────────────────────
+ * A FACT, not a sentence. It used to exist on this screen only inside the reason text ("MOT due in
+ * 12 days"), which meant the one date a garage scans for could not be scanned for: it sat at a
+ * different place on every row, in prose, beside other prose. A fixed-width right-aligned cell
+ * makes the dates line up down the list, which is the whole point of a column.
+ *
+ * RED IS THE SERVER'S ANSWER (row.motEmphasis, from lib/mot-banner::motDateEmphasis against the
+ * request's clock). This component picks words and a colour; it holds no threshold, so there is
+ * nowhere here for a fourth window to appear.
+ *
+ * NO DATE IS NOT A PASSING MOT. The dash carries WHICH absence it is — DVSA answered and has none,
+ * or nobody has ever looked — because those have different remedies and the row already offers the
+ * second one as a button.
+ */
+function MotCell({ row }: { row: BoardRow }) {
+  const red = row.motEmphasis === 'expired' || row.motEmphasis === 'urgent';
+  const text = row.motExpiry
+    ? new Date(`${row.motExpiry}T00:00:00.000Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+    : '—';
+  const absence = row.motCheckedAt
+    ? 'DVSA answered and has no MOT for this car'
+    : 'Nobody has looked this car up with DVSA, so we do not know';
+  return (
+    <span className="ml-2 shrink-0 w-[128px] text-right text-xs tabular-nums"
+      data-testid={`lead-mot-${row.vehicleId}`} data-emphasis={row.motEmphasis ?? 'none'}
+      title={row.motExpiry ? 'MOT expiry' : absence}>
+      <span className="text-muted">MOT </span>
+      <span className={red ? 'text-danger font-semibold' : row.motExpiry ? 'text-ink' : 'text-muted'}>{text}</span>
+    </span>
+  );
+}
+
 function Row({ row, onDone, onOpen, selected }: { row: BoardRow; onDone: () => void; onOpen?: (id: string) => void; selected?: boolean }) {
   const [busy, setBusy] = useState(false);
   // ── THE CHECK LIVES IN THE ROW, AND THE ROW DOES NOT MOVE ─────────────────────────────────────
@@ -157,6 +190,7 @@ function Row({ row, onDone, onOpen, selected }: { row: BoardRow; onDone: () => v
         {row.noContact && (
           <span className="text-xs font-medium text-warn" data-testid="marketing-no-contact">{row.noContact}</span>
         )}
+        <MotCell row={row} />
         <span className="ml-auto text-xs text-muted">
           {/* THROUGH dueLabel, never the raw column. This showed "2026-11-01" to a garage, and once
               schedule rows carry month precision the raw value would also imply a day nobody chose. */}

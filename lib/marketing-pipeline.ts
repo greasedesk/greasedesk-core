@@ -6,9 +6,15 @@
  *   Warm   due within the window, plausible, not urgent.
  *   Later  declined, snoozed, or genuinely distant.
  *
+ * An MOT within MOT_SOON_DAYS is HOT (owner's decision, 2026-10-01): four weeks out is the window
+ * in which the work is worth doing while the car is already in, it is the window the card's and
+ * the diary's banner already use, and Hot is the stack the garage actually works from. Warm keeps
+ * the rest of the board's window — the cars between MOT_SOON_DAYS and WINDOW_DAYS — so the two
+ * numbers stay two questions: "worth ringing about now" and "on the list at all".
+ *
  * ── COMPUTED, NEVER STORED ──────────────────────────────────────────────────────────────────────
  * There is no `stack` column and there must not be one. Every input is a stored DATE or a stored
- * READING compared against `now`, so time promotes for free: an MOT thirty-one days out is Warm at
+ * READING compared against `now`, so time promotes for free: an MOT twenty-nine days out is Warm at
  * four o'clock and Hot tomorrow morning, with no job to run and nothing to sweep. A stored stack is
  * wrong between writes and needs something to notice — which is the whole failure this shape
  * avoids. Same derived-not-stamped rule as the tab spine and the due-item bands.
@@ -31,6 +37,7 @@
  * obvious; a value model built before the ordering is a forecast nobody made.
  */
 import { LEGAL_MIN_TENTHS } from '@/lib/tyres';
+import { MOT_SOON_DAYS } from '@/lib/mot-banner';
 import type { BatteryState } from '@/lib/battery';
 
 export type Stack = 'hot' | 'warm' | 'later';
@@ -212,9 +219,17 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
   }
 
   // ── WARM ─────────────────────────────────────────────────────────────────────────────────────
+  // …EXCEPT THE NEAR MOT, WHICH IS HOT. One kind spanning two stacks, exactly as quote_open does:
+  // the state is "MOT due" either way and the STACK is its urgency, so a call recorded against it
+  // still says what it was about. Reading MOT_SOON_DAYS — the banner's own constant — rather than a
+  // number of its own, because "close enough to do while the car is in" is one question.
+  //
+  // motDays NULL with a band set cannot happen (both derive from mot_expiry) and is handled anyway:
+  // with no clock we cannot claim it is within four weeks, so it stays Warm rather than being
+  // promoted on an absence.
   if (s.motBand === 'due') {
     const days = s.motDays == null ? null : Math.round(s.motDays);
-    out.push({ kind: 'mot_due', stack: 'warm',
+    out.push({ kind: 'mot_due', stack: days != null && days <= MOT_SOON_DAYS ? 'hot' : 'warm',
       text: days == null ? 'MOT due' : `MOT due in ${plural(days, 'day', 'days')}` });
   }
   // ITS OWN WORDING, and the reason is the whole point of the refusal it comes from: the car may
@@ -226,7 +241,7 @@ export function leadReasons(s: LeadSignals, now: Date = new Date()): LeadReason[
     out.push({ kind: 'battery_retest', stack: 'warm', text: 'Charging fault suspected — the battery held up, the charging did not' });
   }
   // ── PAST IT IS HOT; COMING UP IS WARM ────────────────────────────────────────────────────────
-  // Exactly the pair this file already draws for the MOT — mot_expired Hot, mot_due Warm — and it
+  // Exactly the pair this file already draws for the MOT — past is Hot, coming up is nearer — and it
   // was missing here only because serviceDue dropped `alreadyPassed`, so nothing downstream could
   // see the difference. A car months past its service is not a car due in three weeks, and it was
   // sitting in the same stack.

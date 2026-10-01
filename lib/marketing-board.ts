@@ -19,6 +19,7 @@ import { deriveQuoteStatus, deriveVersionlessStatus, quoteExpiry, QUOTE_CLOSED_C
 import { isBookedCard } from '@/lib/jobcard-status';
 import { leadStack, unansweredPrompt, type Stack, type LeadReason } from '@/lib/marketing-pipeline';
 import { CUSTOMER_CARS } from '@/lib/customer-car';
+import { motDateEmphasis, motDaysUntil, type MotDateEmphasis } from '@/lib/mot-banner';
 
 export type BoardRow = {
   vehicleId: string;
@@ -37,6 +38,25 @@ export type BoardRow = {
   motCheckedAt: string | null;
   /** The trigger a contact record is recorded against. Machine-readable; never rendered raw. */
   dueDate: string | null;
+  /**
+   * THE CAR'S MOT EXPIRY, and nothing else — the leads list prints it in its own column.
+   *
+   * SEPARATE FROM `dueDate` ON PURPOSE. That field falls back to the nearest dated service hit
+   * when there is no MOT, which is right for recording what a call was about and wrong for a
+   * column headed MOT: a service date printed under that heading is a confident lie. NULL means we
+   * hold no MOT date, which is not the same as the car being fine — `motCheckedAt` beside it says
+   * which absence it is.
+   */
+  motExpiry: string | null;
+  /**
+   * HOW HARD TO PRINT IT — 'expired' | 'urgent' | 'plain', or NULL when there is no date.
+   *
+   * Decided HERE, against the same `now` as every band on this row, rather than in the component:
+   * one request, one clock. Computed in the browser it would also be a hydration mismatch waiting
+   * for a day boundary — the server's HTML and the client's first render disagreeing about a
+   * colour. See lib/mot-banner::motDateEmphasis for the rule and the three windows.
+   */
+  motEmphasis: MotDateEmphasis | null;
   /** Why it is where it is, strongest first. */
   reasons: LeadReason[];
   /** Lower rings sooner; 0 is a measured fault. See lib/marketing-pipeline::urgencyOf. */
@@ -332,7 +352,9 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       : null;
 
     const band = motBand(v.mot_expiry, now);
-    const motDays = v.mot_expiry ? (v.mot_expiry.getTime() - now.getTime()) / 86_400_000 : null;
+    // CALENDAR days, through the banner's own counter. mot_expiry is a DATE (midnight), so the
+    // instant subtraction this replaced under-counted by up to a day — see motDaysUntil.
+    const motDays = motDaysUntil(v.mot_expiry, now);
 
     const { stack, reasons, urgency } = leadStack({
       motBand: band, motDays, serviceDueDays, battery, lowestTreadTenths, findings,
@@ -357,6 +379,8 @@ export async function buildBoard(groupId: string, now: Date = new Date()): Promi
       state: rec?.state ?? null, channel: rec?.channel ?? null,
       motCheckedAt: v.mot_checked_at ? v.mot_checked_at.toISOString() : null,
       dueDate: (v.mot_expiry ?? hits.find((h: { date: Date | null }) => h.date)?.date ?? null)?.toISOString().slice(0, 10) ?? null,
+      motExpiry: v.mot_expiry ? v.mot_expiry.toISOString().slice(0, 10) : null,
+      motEmphasis: motDateEmphasis(v.mot_expiry, now),
       reasons, stack, urgency,
     });
   }

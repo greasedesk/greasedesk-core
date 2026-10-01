@@ -18,6 +18,8 @@ const { readFileSync } = await import('node:fs');
 const { chromium } = await import('playwright-core');
 const P = await import('../lib/marketing-pipeline.ts');
 const B = await import('../lib/marketing-board.ts');
+const { MOT_SOON_DAYS } = await import('../lib/mot-banner.ts');
+const { WINDOW_DAYS } = await import('../lib/marketing-lists.ts');
 const prisma = new PrismaClient();
 
 const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
@@ -374,9 +376,19 @@ try {
   // column.
   console.log('\n— a garage-recorded answer moves the car —');
   const answerCar = await mk('ZZ76ANS');
-  // MOT four days out, so the car sits in WARM on its own. Whatever the finding does has to be
-  // visible against that: "leaves the car's other reasons standing" needs another reason to stand.
-  await prisma.vehicle.update({ where: { id: answerCar }, data: { mot_expiry: new Date(NOW.getTime() + 4 * 86_400_000) } });
+  // AN MOT JUST OUTSIDE THE HOT WINDOW, so the car sits in WARM on its own. Whatever the finding
+  // does has to be visible against that: "leaves the car's other reasons standing" needs another
+  // reason to stand, and "declined takes it OUT of Hot" needs the car not to be Hot for some other
+  // reason.
+  //
+  // It was four days out and that stopped working on 2026-10-01, when an MOT within
+  // MOT_SOON_DAYS started moving a car to Hot by decision: the car was then Hot before the finding
+  // was touched, and both clauses read as defects in the endpoint. Written as the CONSTANT + 1 so
+  // it keeps meaning "just outside" if the window moves — with the premise checked, because
+  // outside WINDOW_DAYS the reason disappears altogether and the clause would pass by absence.
+  check(`premise: MOT_SOON_DAYS + 1 (${MOT_SOON_DAYS + 1}) is still inside the ${WINDOW_DAYS}-day board window`,
+    MOT_SOON_DAYS + 1 <= WINDOW_DAYS, 'otherwise this car has no MOT reason at all and the clauses below prove nothing');
+  await prisma.vehicle.update({ where: { id: answerCar }, data: { mot_expiry: new Date(NOW.getTime() + (MOT_SOON_DAYS + 1) * 86_400_000) } });
   const finding = await prisma.vehicleDueItem.create({
     data: { group_id: ZZ, vehicle_id: answerCar, description: 'Rear discs corroded',
       due_basis: 'mileage', due_mileage: 90000, due_date_precision: 'day',
