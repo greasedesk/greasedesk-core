@@ -183,6 +183,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // which the wizard prevents — a real duration is required before commit.
         workingMinutes: staged.planned_working_minutes ?? 60,
         siteIds: vis.activeSiteIds,
+        // 'book': a historical card being recorded for the first time. Its start is BACKDATED and
+        // may sit outside the hours this site keeps today, which the move-only working-moment
+        // refusal would reject — and rightly refuses for a drag, where somebody chose the time.
+        act: 'book',
       });
 
       // 5) STAGES — the attestation is an AUDITED SKIP, not a bypassed gate. The existing

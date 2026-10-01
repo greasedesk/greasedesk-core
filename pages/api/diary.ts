@@ -4,8 +4,18 @@
  * start_at / end_at are the scheduling source of truth (half-open interval [start, end)).
  * Tenant-scoped to the caller's group; a card may only be placed on a Resource of its OWN site.
  *
- *   PATCH  { jobCardId, resourceId, startAt, endAt }  (ISO datetimes) → place/move
- *   DELETE { jobCardId }                                              → unplace
+ *   PATCH  { jobCardId, resourceId, startAt, workingMinutes }  → move  (endAt: legacy bridge)
+ *   DELETE { jobCardId }                                        → unplace
+ *
+ * ── THIS ROUTE IS A MOVE, ALWAYS (2026-10-01) ───────────────────────────────────────────────────
+ * Both of its callers — the diary's drag and Reschedule dialog, and the card page's Booking block —
+ * change the slot of a card that already exists without touching its status. So it declares
+ * `act: 'move'` to placeJobCard, which refuses a slot that has become a RECORD (invoiced, paid,
+ * done, cancelled, declined, no-show) and refuses a start that is not a working moment.
+ *
+ * The act is NOT taken from the request body. A guard a client can downgrade by sending a
+ * different word is not a guard. The one legitimate way to re-book a declined card is to reopen it
+ * — /api/jobcard-accept, which declares 'book' because it decides the status in the same breath.
  *
  * HARD RULE: never silently overwrite. Placement runs an interval-overlap guard inside a
  * transaction and REFUSES (409) if [startAt, endAt) overlaps any other card on the same
@@ -51,22 +61,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const start = parseDateTime(startAt);
     if (!start) return res.status(400).json({ message: 'startAt must be a valid datetime.' });
-    // Duration = source of truth. Bridge: a caller sending endAt (diary drag, old form) yields the
-    // same working-minutes via (end - start).
+    // DURATION IS THE SOURCE OF TRUTH, and the drag sends it: a card dragged across a lunch break
+    // must keep its length, and an end time cannot say that — (end − start) counts the break as
+    // work and the job quietly grows.
+    //
+    // The endAt bridge remains for ONE caller, components/jobcard/JobCardBooking, whose form asks
+    // for a start and an end. It inherits exactly that error on a span crossing a break or a close,
+    // which is a pre-existing defect in that form and not something this route can fix for it —
+    // the fix is asking it for a duration. Nothing new is routed through it.
     const workingMinutes = wmIn ?? (endAt ? Math.round((Date.parse(endAt) - start.getTime()) / 60000) : NaN);
     if (!(workingMinutes > 0)) return res.status(400).json({ message: 'A valid duration is required.' });
 
+    let from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null } | null = null;
     try {
       await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Scheduling = resource allocation = commercial: manager/admin only (one rule for diary + card).
         const card = await tx.jobCard.findFirst({ where: { id: jobCardId, site_id: { in: vis.siteIds } }, select: { site_id: true } });
         if (!card) throw new Error('CARD_NOT_FOUND');
         if (!canManageSite(vis, card.site_id)) throw new Error('FORBIDDEN');
-        // Shared guard (scope + footprint-overlap + update) — the one place placement happens.
-        await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds }); // placement = new work (card lookup above stays broad)
-        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { resourceId, startAt, workingMinutes } });
+        // Shared guard (scope + status + working-moment + footprint-overlap + update) — the one
+        // place placement happens. It returns BOTH positions, read inside this transaction.
+        const moved = await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds, act: 'move' }); // placement = new work (card lookup above stays broad)
+        // ── THE AUDIT ROW CARRIES WHERE IT CAME FROM, NOT ONLY WHERE IT WENT ──────────────────
+        // It used to record the destination alone, which cannot answer the question anybody asks
+        // of a moved booking ("where was it?") and cannot support an undo. Two facts, from the
+        // transaction that wrote them.
+        await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.moved', diff: { from: moved.from, to: moved.to } });
+        from = moved.from;
       });
-      return res.status(200).json({ message: 'Job card placed.' });
+      // `from` goes back to the caller so the diary can offer UNDO — which is a second move, with
+      // its own refusals and its own audit row, never an erasure of the first.
+      return res.status(200).json({ message: 'Job card placed.', from });
     } catch (err: any) {
       const m = err?.message || '';
       if (m === 'CARD_NOT_FOUND') return res.status(404).json({ message: 'Job card not found.' });
@@ -74,6 +99,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
+      // 409, not 400: the request is well formed and the card's state refuses it. The words name
+      // the status, because "you cannot move this" without saying why is what a person retries.
+      if (m.startsWith('SLOT_IS_HISTORY:')) {
+        return res.status(409).json({ code: 'SLOT_IS_HISTORY', status: m.split(':')[1],
+          message: `That job is ${m.split(':')[1].replace('_', ' ')} — its slot is a record of what happened, not a plan, so it cannot be moved.` });
+      }
+      if (m === 'NOT_WORKING_TIME') {
+        return res.status(400).json({ code: 'NOT_WORKING_TIME',
+          message: 'The garage is closed then. Drop it inside opening hours — it will not be nudged to the next open slot.' });
+      }
       if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
       if (m.startsWith('CLASH:')) {
         return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. Double-booking refused.', clash: true });

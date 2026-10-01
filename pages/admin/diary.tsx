@@ -62,7 +62,8 @@ import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
-import { computeFootprint, parseBreaks, Segment, Break } from '@/lib/occupancy';
+import { computeFootprint, parseBreaks, isWorkingMoment, Segment, Break } from '@/lib/occupancy';
+import { canMoveBooking } from '@/lib/jobcard-status';
 import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { resolveLeaveColours } from '@/lib/leave-types';
@@ -122,6 +123,45 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const snap15 = (min: number) => Math.round(min / 15) * 15;
 const menuBtn = 'w-full text-left px-3 py-2.5 hover:bg-surface-muted text-ink';
 const HOUR_OPTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 0.5); // 0.5 … 8.0 hrs
+
+/**
+ * ── DRAG AND DROP: HOW THE GESTURE IS RESOLVED ──────────────────────────────────────────────────
+ *
+ * LONG-PRESS WAS ALREADY TAKEN. On a touch screen a 500ms hold opens the context menu — book a
+ * job, add a note, reschedule, unbook — and a diary is a surface people SCROLL constantly, on a
+ * phone and on a wall screen. A drag that competes for either of those is worse than no drag: it
+ * either steals the scroll or steals the menu.
+ *
+ * So there are two gestures for one act, each native to its own input:
+ *
+ *   MOUSE / PEN   press and drag, past a 4px threshold. Nothing else uses it: a plain click
+ *                 opens the card, a right-click opens the menu, and neither moves.
+ *   TOUCH         PICK UP AND PLACE. The long-press menu gains "Pick up and move", which arms the
+ *                 card; the next tap on the diary is the drop. The finger is never captured, so
+ *                 scrolling between picking up and dropping works exactly as it does now — and
+ *                 the two ends of the move can be on different days, which a one-finger drag
+ *                 across a scrolling surface cannot do at all.
+ *
+ * NOTHING MOVES UNTIL THE SERVER SAYS SO. The dragged block stays where it is and a PREVIEW is
+ * drawn at the target, computed through the same computeFootprint the clash guard uses, so what
+ * is shown is the real footprint including a lunch break. On drop the card is marked pending; a
+ * refusal leaves it exactly where it was and prints the server's own words. There is no
+ * optimistic move to snap back from, which is why a failure cannot leave the board lying.
+ */
+const DRAG_THRESHOLD_PX = 4;
+type DropTarget = { date: string; resourceId: string; atMin: number };
+type DragState = {
+  card: DiaryCard;
+  /** 'pointer' = following a mouse; 'armed' = picked up on touch, waiting for the drop tap. */
+  mode: 'pointer' | 'armed';
+  x0: number; y0: number;
+  moved: boolean;
+  target: DropTarget | null;
+};
+/** A booking's WORKING minutes, from the footprint it already carries — never (end − start),
+ *  which counts lunch as work. The same figure the Reschedule dialog defaults to. */
+const workingMinutesOf = (c: DiaryCard) =>
+  Math.max(15, Math.round(c.segments.reduce((a, sg) => a + (Date.parse(sg.endISO) - Date.parse(sg.startISO)), 0) / 60000));
 
 // ---- Dynamic mini-month day-picker (module scope so state survives parent re-renders) ----
 // Clicking a day jumps the diary to it (day view → that day; week view → that day's week — SSR derives
@@ -549,6 +589,128 @@ export default function DiaryPage(props: PageProps) {
   }
   async function unbook(card: DiaryCard) { setMenu(null); await fetch(`/api/diary?jobCardId=${card.id}`, { method: 'DELETE' }); refresh(); }
 
+  // ---- DRAG AND DROP (see DragState at the top of this file for how the gesture is resolved) ----
+  const [drag, setDrag] = useState<DragState | null>(null);
+  // The same gesture in a ref, for the window listeners: they are registered once and must not
+  // close over a stale render's copy.
+  const dragRef = useRef<DragState | null>(null);
+  const putDrag = (d: DragState | null) => { dragRef.current = d; setDrag(d); };
+  const [moving, setMoving] = useState<string | null>(null);   // card id, while the server decides
+  const [moveMsg, setMoveMsg] = useState<{ text: string; ok: boolean; undo?: { card: DiaryCard; from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null } } } | null>(null);
+  // A drag ends in a `pointerup`, which the browser follows with a `click`. Without this the card
+  // would open the moment it was dropped.
+  const swallowClick = useRef(false);
+
+  /** Which column, and what time, is under this point. NULL anywhere that is not a day column. */
+  function targetFromPoint(cx: number, cy: number, card: DiaryCard): DropTarget | null {
+    const el = typeof document === 'undefined' ? null : (document.elementFromPoint(cx, cy) as HTMLElement | null);
+    const colEl = el?.closest('[data-diary-col]') as HTMLElement | null;
+    if (!colEl) return null;
+    const date = colEl.getAttribute('data-col-date');
+    if (!date) return null;
+    // WEEK VIEW COLUMNS ARE DAYS, not lifts, so a drag there changes WHEN and never WHICH LIFT —
+    // the card keeps its own. Day view columns are lifts and change both.
+    const resourceId = colEl.getAttribute('data-col-resource') || card.resourceId;
+    const y = cy - colEl.getBoundingClientRect().top;
+    return { date, resourceId, atMin: atMinFromY(y) };
+  }
+
+  /** The footprint a drop would produce — the SAME function the server's clash guard uses. */
+  const previewFootprint = (card: DiaryCard, target: DropTarget) =>
+    computeFootprint(minToISO(target.date, target.atMin), workingMinutesOf(card), openHour, closeHour, openDays, breaks);
+  const targetIsOpen = (target: DropTarget) =>
+    isWorkingMoment(minToISO(target.date, target.atMin), openHour, closeHour, openDays, breaks);
+
+  async function patchBooking(card: DiaryCard, resourceId: string, startAt: string, workingMinutes: number) {
+    const res = await fetch('/api/diary', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobCardId: card.id, resourceId, startAt, workingMinutes }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data } as { ok: boolean; data: any };
+  }
+
+  async function commitMove(card: DiaryCard, target: DropTarget) {
+    const startAt = minToISO(target.date, target.atMin);
+    // REFUSED HERE, NOT CLAMPED. The server refuses it too (NOT_WORKING_TIME) — this is so the
+    // answer arrives without a round trip, not instead of the rule.
+    if (!targetIsOpen(target)) { setMoveMsg({ text: t('drag.closed'), ok: false }); return; }
+    if (target.resourceId === card.resourceId && startAt === card.startAt) return; // nothing moved
+    setMoving(card.id); setMoveMsg(null);
+    try {
+      const { ok, data } = await patchBooking(card, target.resourceId, startAt, workingMinutesOf(card));
+      if (!ok) { setMoveMsg({ text: data?.message || t('drag.failed'), ok: false }); return; }
+      setMoveMsg({
+        text: t('drag.moved', {
+          reg: card.reg,
+          lift: resources.find((r) => r.id === target.resourceId)?.name ?? card.resourceName,
+          when: `${new Date(`${target.date}T00:00:00.000Z`).toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })} ${hhmm(startAt)}`,
+        }),
+        ok: true,
+        // UNDO IS A SECOND MOVE, not an erasure: it goes through the same endpoint, meets the same
+        // refusals (the old slot may have been taken in the meantime) and writes its own audit row.
+        undo: data?.from?.resourceId && data?.from?.startAt && data?.from?.workingMinutes ? { card, from: data.from } : undefined,
+      });
+      refresh();
+    } catch { setMoveMsg({ text: t('drag.failed'), ok: false }); }
+    finally { setMoving(null); }
+  }
+
+  async function undoMove(card: DiaryCard, from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null }) {
+    if (!from.resourceId || !from.startAt || !from.workingMinutes) return;
+    setMoving(card.id);
+    try {
+      const { ok, data } = await patchBooking(card, from.resourceId, from.startAt, from.workingMinutes);
+      setMoveMsg(ok
+        ? { text: t('drag.undone', { reg: card.reg }), ok: true }
+        : { text: t('drag.undoGone', { reason: data?.message ?? '' }), ok: false });
+      if (ok) refresh();
+    } catch { setMoveMsg({ text: t('drag.undoGone', { reason: '' }), ok: false }); }
+    finally { setMoving(null); }
+  }
+
+  // ONE registration, reading the ref. Pointer events cover mouse and pen; touch never reaches
+  // here, because a touch gesture is the armed pick-up instead.
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const g = dragRef.current;
+      if (!g || g.mode !== 'pointer') return;
+      if (!g.moved && Math.abs(e.clientX - g.x0) < DRAG_THRESHOLD_PX && Math.abs(e.clientY - g.y0) < DRAG_THRESHOLD_PX) return;
+      e.preventDefault();
+      putDrag({ ...g, moved: true, target: targetFromPoint(e.clientX, e.clientY, g.card) });
+    };
+    const onUp = (e: PointerEvent) => {
+      const g = dragRef.current;
+      if (!g || g.mode !== 'pointer') return;
+      putDrag(null);
+      if (!g.moved) return;                      // a press that never travelled is a click
+      swallowClick.current = true;
+      const target = targetFromPoint(e.clientX, e.clientY, g.card) ?? g.target;
+      if (target) void commitMove(g.card, target);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && dragRef.current) putDrag(null); };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', () => putDrag(null));
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** A tap or click on the diary while a card is ARMED is the drop. */
+  function dropIfArmed(cx: number, cy: number): boolean {
+    const g = dragRef.current;
+    if (!g || g.mode !== 'armed') return false;
+    const target = targetFromPoint(cx, cy, g.card);
+    putDrag(null);
+    if (target) void commitMove(g.card, target);
+    return true;
+  }
+
   // ---- DOUBLE-click an EMPTY slot → open the booking form pre-filled (calendar-native gesture) ----
   // The ONE guarded gesture→create handler. Single-click deliberately does NOT create — on a dense
   // diary that would fire the modal every time someone clicks to inspect. Guards, so no phantom can
@@ -624,10 +786,28 @@ export default function DiaryPage(props: PageProps) {
     const ghost = c.status === 'no_show';
     const liftColour = ghost ? GHOST_COLOUR : resolveColour(c.resourceColour); // lift colour → OUTLINE
     const fill = ghost ? null : cardFill(c);                                   // status band → FILL
+    // ONE PREDICATE, SHARED WITH THE SERVER (lib/jobcard-status::canMoveBooking). A card whose
+    // slot is a record does not start the gesture at all — being refused after dropping it teaches
+    // nothing, and the refusal exists on the endpoint anyway for everything that bypasses this.
+    const movable = canManage && !ghost && canMoveBooking(c.status);
+    const dragging = drag?.card.id === c.id && drag.moved;
+    const armed = drag?.card.id === c.id && drag.mode === 'armed';
+    const pending = moving === c.id;
     return (
       <div
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => onBlockClick(c, e)}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          // TOUCH IS DELIBERATELY NOT HERE: the finger keeps the scroll and the long-press menu,
+          // and a touch move is the armed pick-up instead.
+          if (!movable || pending || e.pointerType === 'touch' || e.button !== 0) return;
+          putDrag({ card: c, mode: 'pointer', x0: e.clientX, y0: e.clientY, moved: false, target: null });
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (dropIfArmed(e.clientX, e.clientY)) return;      // a tap on a card is also a drop
+          if (swallowClick.current) { swallowClick.current = false; return; }
+          onBlockClick(c, e);
+        }}
         onDoubleClick={(e) => { if (!ghost) onBlockDbl(c, e); }}
         onContextMenu={(e) => { if (ghost) e.preventDefault(); else onBlockMenu(c, col, e); }}
         onTouchStart={(e) => { if (!ghost) onBlockLongPress(c, col, e); }}
@@ -639,7 +819,10 @@ export default function DiaryPage(props: PageProps) {
            feet is lightness, not hue — see lib/diary-colours for why that decides it. The 2px LIFT
            border is kept: it still separates against a solid ground. */
         style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : (c.isStock ? STOCK_FILL : blockTint(fill as string)), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
-        className={`diary-block absolute rounded-md overflow-hidden shadow-sm cursor-pointer select-none ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
+        data-reg={c.reg}
+        data-movable={movable ? '1' : '0'}
+        data-pending={pending ? '1' : undefined}
+        className={`diary-block absolute rounded-md overflow-hidden shadow-sm select-none ${movable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${dragging || armed ? 'opacity-40' : ''} ${pending ? 'animate-pulse ring-2 ring-accent' : ''} ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
         title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}${ghost ? ` · ${t('ghost.title')}` : ''}`}
       >
         <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : c.isStock ? '' : 'text-ink'}`}
@@ -679,6 +862,47 @@ export default function DiaryPage(props: PageProps) {
           </span>
         )}
       </div>
+    );
+  }
+  /**
+   * THE PREVIEW. Nothing is committed while this is on screen: the dragged block is still in its
+   * old place at 40% opacity and this outline says where it would go. Both are deliberate — a
+   * board that moves the card and then fails has lied, and there is no way to un-lie it that the
+   * person watching will believe.
+   */
+  function DropPreview({ col }: { col: { date: string; resourceId?: string } }) {
+    const target = drag?.target;
+    if (!drag || !target || !drag.moved && drag.mode !== 'armed') return null;
+    if (target.date !== col.date) return null;
+    if (col.resourceId && target.resourceId !== col.resourceId) return null;
+    const open = targetIsOpen(target);
+    const mins = workingMinutesOf(drag.card);
+    // CLOSED: no footprint is drawn, because computeFootprint would advance the start to the next
+    // working moment and the preview would show the card somewhere nobody pointed at.
+    if (!open) {
+      return (
+        <div data-testid="drop-preview-closed" className="absolute left-0 right-0 pointer-events-none border-y-2 border-dashed border-danger bg-danger-soft/60 flex items-start"
+          style={{ top: target.atMin * PX_PER_MIN, height: Math.max(22, Math.min(mins, 60) * PX_PER_MIN) }}>
+          <span className="text-[10px] font-semibold text-danger px-1">{t('drag.closed')}</span>
+        </div>
+      );
+    }
+    const fp = previewFootprint(drag.card, target);
+    const boxes = segmentsForDay({ startAt: fp.segments[0]?.startISO ?? '', endAt: fp.endISO, segments: fp.segments }, col.date);
+    return (
+      <>
+        {boxes.map((b, i) => (
+          <div key={i} data-testid="drop-preview" data-at={hhmm(fp.segments[0]?.startISO ?? '')}
+            className="absolute pointer-events-none rounded-md border-2 border-dashed border-accent bg-accent-soft/70"
+            style={{ top: b.top, height: b.height, left: 0, width: 'calc(100% - 3px)' }}>
+            {i === 0 && (
+              <span className="block text-[10px] font-semibold text-accent px-1 pt-0.5 truncate">
+                {drag.card.reg} {hhmm(fp.segments[0].startISO)}–{hhmm(fp.endISO)}
+              </span>
+            )}
+          </div>
+        ))}
+      </>
     );
   }
   function NoteBlock({ n, top, height, leftPct, widthPct }: { n: DiaryNoteView; top: number; height: number; leftPct: number; widthPct: number }) {
@@ -822,6 +1046,30 @@ export default function DiaryPage(props: PageProps) {
                 <span className="w-5 h-5 mx-0.5 rounded-full bg-white shadow" />
               </span>
             </button>
+          </div>
+        )}
+
+        {/* ── A MOVE IN FLIGHT, AND WHAT CAME OF IT ─────────────────────────────────────────────
+            Above the grid rather than floating over it: a message that covers the diary while
+            somebody is looking for the slot they just freed is a message in the way. The armed
+            banner says the diary HAS NOT CHANGED yet, which is the thing a person needs to know
+            between picking a card up and putting it down. */}
+        {drag?.mode === 'armed' && (
+          <div className="flex items-center gap-3 p-2 rounded-lg mb-3 text-sm bg-accent-soft text-accent" data-testid="drag-armed">
+            <span>{t('drag.armed', { reg: drag.card.reg })}</span>
+            <button onClick={() => putDrag(null)} className="underline font-semibold">{t('drag.cancel')}</button>
+          </div>
+        )}
+        {moveMsg && (
+          <div className={`flex items-center gap-3 p-2 rounded-lg mb-3 text-sm ${moveMsg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}
+            data-testid="move-result" data-ok={moveMsg.ok ? '1' : '0'}>
+            <span>{moveMsg.text}</span>
+            {moveMsg.undo && (
+              <button data-testid="move-undo" disabled={moving !== null}
+                onClick={() => { const u = moveMsg.undo!; setMoveMsg(null); void undoMove(u.card, u.from); }}
+                className="underline font-semibold disabled:opacity-50">{t('drag.undo')}</button>
+            )}
+            <button onClick={() => setMoveMsg(null)} className="ml-auto text-xs underline">{t('drag.cancel')}</button>
           </div>
         )}
 
@@ -1003,7 +1251,14 @@ export default function DiaryPage(props: PageProps) {
                         ); })()}
                         <div
                           className="relative bg-surface"
+                          /* The drop zone. Hit-tested by coordinate (targetFromPoint) rather than
+                             by handler, so a drop that lands on a BOOKING still resolves to the
+                             column underneath it — a full column would otherwise be undroppable. */
+                          data-diary-col=""
+                          data-col-date={col.date}
+                          data-col-resource={col.resourceId ?? ''}
                           style={{ height: DAY_MIN * PX_PER_MIN, cursor: canManage ? 'context-menu' : undefined }}
+                          onClick={(e) => { dropIfArmed(e.clientX, e.clientY); }}
                           onDoubleClick={(e) => onColDblClick(col, e)}
                           onContextMenu={(e) => onColContext(col, e)}
                           onTouchStart={(e) => onColTouchStart(col, e)}
@@ -1032,6 +1287,10 @@ export default function DiaryPage(props: PageProps) {
                           {placed.map((x) => x.kind === 'job'
                             ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
                             : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
+                          {/* WHERE IT WOULD LAND — drawn from computeFootprint, so a job dropped
+                              before lunch shows as two bands exactly as it will once saved, and a
+                              drop the garage is closed for says so instead of being nudged. */}
+                          <DropPreview col={col} />
                         </div>
                       </div>
                     );
@@ -1039,7 +1298,7 @@ export default function DiaryPage(props: PageProps) {
                 </div>
               </div>
             </div>
-            {canManage && <p className="text-xs text-muted mt-2">{t('menu.hint')}</p>}
+            {canManage && <p className="text-xs text-muted mt-2">{t('drag.hint')} {t('menu.hint')}</p>}
 
             {/* INLINE JOB CARD (desktop day view): the full six-tab workspace below the grid — the
                 same component + data builder as the routed page (via /api/jobcard-pane), so the day
@@ -1125,6 +1384,17 @@ export default function DiaryPage(props: PageProps) {
                 <button className={menuBtn} onClick={() => { const m = menu!; setCreate({ date: m.date!, startAt: minToISO(m.date!, m.atMin!), resourceId: m.resourceId, mode: 'job' }); setMenu(null); }}>{t('menu.book')}</button>
                 <div className="border-t border-line" />
                 <button className={menuBtn} onClick={() => { const c = menu.card!; setMenu(null); openCard(c.id); }}>{t('menu.open')}</button>
+                {/* THE TOUCH PATH. Long-press is this menu, so the drag is entered from it: this
+                    arms the card and the next tap on the diary is the drop. The finger is never
+                    captured, so the scroll keeps working and the two ends of the move can be days
+                    apart. Hidden on a card whose slot is a record — the same predicate the server
+                    refuses with. */}
+                {canMoveBooking(menu.card!.status) && (
+                  <button className={menuBtn} data-testid="menu-pick-up"
+                    onClick={() => { putDrag({ card: menu.card!, mode: 'armed', x0: 0, y0: 0, moved: false, target: null }); setMenu(null); }}>
+                    {t('drag.pickUp')}
+                  </button>
+                )}
                 <button className={menuBtn} onClick={() => { setMove({ card: menu.card! }); setMenu(null); }}>{t('menu.reschedule')}</button>
                 <button className={menuBtn} onClick={() => unbook(menu.card!)}>{t('menu.unbook')}</button>
                 <button className={menuBtn} onClick={() => { const c = menu.card!; setCreate({ date: c.startAt.slice(0, 10), startAt: c.startAt, resourceId: c.resourceId, mode: 'note' }); setMenu(null); }}>{t('menu.addNote')}</button>

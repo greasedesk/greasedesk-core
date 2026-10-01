@@ -234,5 +234,19 @@
   "ghost": {
     "tag": "No-show",
     "title": "No-show — the slot was free to rebook"
+  },
+  "drag": {
+    "pickUp": "Pick up and move",
+    "armed": "Moving {{reg}} — tap the new time, or press Escape. The diary has not changed yet.",
+    "cancel": "Cancel",
+    "closed": "The garage is closed then. Nothing was moved.",
+    "failed": "Could not move it — nothing has changed.",
+    "moved": "{{reg}} moved to {{lift}}, {{when}}.",
+    "undo": "Undo",
+    "undone": "{{reg}} put back.",
+    "undoGone": "Could not put it back — nothing has changed. {{reason}}",
+    "pending": "Moving…",
+    "locked": "That job cannot be moved — its slot is a record of what happened.",
+    "hint": "Drag a booking to move it. Right-click for everything else."
   }
 }

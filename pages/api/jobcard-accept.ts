@@ -65,7 +65,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // 1) book first — throws CLASH:<reg> / CROSS_SITE / RESOURCE_NOT_FOUND → rolls the whole thing back
-      await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds }); // booking on accept = new work
+      // 'book': this path DECIDES the card's live status in the same transaction — including the
+      // declined → accepted reopen, where the card still holds the slot data of the booking it
+      // lost. That stale slot is what is being replaced, so the move-only SLOT_IS_HISTORY refusal
+      // must not apply here.
+      await placeJobCard(tx, { jobCardId, resourceId, start, workingMinutes, siteIds: vis.activeSiteIds, act: 'book' }); // booking on accept = new work
       // 2) only then advance the lifecycle — through the ONE acceptance rule. This used to write
       //    the card status directly and never touch QuoteVersion, so accepting a card that had a
       //    live quote out left that version reading `sent` forever: orphaned, and still listed as

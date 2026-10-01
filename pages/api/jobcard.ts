@@ -278,7 +278,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Diary drag-create is within-day, so working-minutes = (end - start).
         if (scheduling) {
           const workingMinutes = Math.round(((end as Date).getTime() - (start as Date).getTime()) / 60000);
-          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.activeSiteIds }); // placement = new work
+          // 'book': a card being created cannot have a slot to rewrite.
+          await placeJobCard(tx, { jobCardId: created.id, resourceId: body.resourceId as string, start: start as Date, workingMinutes, siteIds: vis.activeSiteIds, act: 'book' }); // placement = new work
         }
         return created;
       });

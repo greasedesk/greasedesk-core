@@ -91,6 +91,30 @@ export function computeFootprint(
   return { segments, endISO: new Date(lastEnd).toISOString() };
 }
 
+/**
+ * ── IS THIS INSTANT ITSELF A WORKING MOMENT? ────────────────────────────────────────────────────
+ * computeFootprint deliberately ADVANCES a start that is not: a job typed at 17:30 with two hours
+ * on it fills what is left of today and resumes tomorrow morning, which is the right answer for an
+ * END. Applied to a START it is silent relocation — a drop at eight in the evening becomes a
+ * booking at eight tomorrow morning, and nobody asked for that.
+ *
+ * So a surface that lets someone CHOOSE a start asks this first and refuses, rather than being
+ * quietly corrected. Returns false outside opening hours, on a closed day, and inside a break.
+ */
+export function isWorkingMoment(
+  startISO: string,
+  openHour: number,
+  closeHour: number,
+  openDays: number[],
+  breaks: Break[] = [],
+): boolean {
+  const ms = Date.parse(startISO);
+  if (!Number.isFinite(ms)) return false;
+  if (!openDays || !openDays.includes(dow(ms))) return false;
+  const t = todMin(ms);
+  return dayBands(openHour * 60, closeHour * 60, breaks).some(([s, e]) => t >= s && t < e);
+}
+
 /** Half-open overlap between two segments. */
 export function segmentsOverlap(a: Segment, b: Segment): boolean {
   return Date.parse(a.startISO) < Date.parse(b.endISO) && Date.parse(a.endISO) > Date.parse(b.startISO);

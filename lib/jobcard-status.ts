@@ -85,6 +85,43 @@ for (const s of HIDDEN_FROM_DIARY) {
 }
 
 /**
+ * ── CAN THIS BOOKING STILL BE MOVED? ───────────────────────────────────────────────────────────
+ * The slot of a finished or abandoned job is a RECORD OF WHAT HAPPENED, not a plan. Moving it
+ * rewrites history: an invoiced job was done at a time, a no-show wasted a particular hour, and a
+ * cancelled card keeps its slot precisely so the diary can say what had been booked.
+ *
+ * Nothing refused this before, because the only way to move a card was a dialog opened from a
+ * context menu — two deliberate presses nobody reaches by accident. A DRAG makes it a thumb-slip,
+ * so the rule has to exist rather than being implied by how hard the gesture was.
+ *
+ * `in_progress` is NOT here: a car on the lift genuinely does get moved to another lift.
+ *
+ * IT GOVERNS THE MOVE, NOT THE BOOKING. A declined card being reopened and booked is a BOOK, and
+ * its stale slot data is exactly what that act replaces — see lib/diary-booking's `act`.
+ */
+export const SLOT_IS_HISTORY: JobStatus[] = statusSubset({
+  draft: false, quoted: false, accepted: false, in_progress: false,
+  invoiced: true, paid: true, done: true,        // the work is finished; when it happened is a fact
+  declined: true, cancelled: true,               // the slot is kept as the record of what was booked
+  no_show: true,                                 // that hour died at that hour
+});
+
+// FAIL AT BOOT, not at the first card that moves when it should not. A status that no longer
+// occupies its slot has nothing left to move: there is no plan, only a record. Stated as a
+// SUBSET relation rather than two lists hoping to stay in step.
+for (const s of FREES_THE_SLOT) {
+  if (!SLOT_IS_HISTORY.includes(s)) {
+    throw new Error(`MOVABLE_RECORD: status '${s}' frees its slot but is still movable. `
+      + 'FREES_THE_SLOT must be a subset of SLOT_IS_HISTORY — a freed slot is a record, not a plan.');
+  }
+}
+
+/** Whether a booking on a card in this status may be MOVED. One predicate, so the server's refusal
+ *  and the diary's "do not start the gesture" cannot drift apart. */
+export const canMoveBooking = (status: JobStatus | string): boolean =>
+  !SLOT_IS_HISTORY.includes(status as JobStatus);
+
+/**
  * IS THIS CARD IN THE DIARY? The booking fact is `resource_id + start_at + end_at` — a lift and a
  * planned time. It is NOT a status and must never become one: the card already holds it, and a
  * second copy is a second thing to keep in step.
