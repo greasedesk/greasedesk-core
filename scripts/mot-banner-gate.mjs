@@ -37,7 +37,16 @@ const { motBanner, againstLabel, MOT_SOON_DAYS } = MB;
 const NOW = new Date('2026-09-16T10:00:00.000Z');
 const day = (n) => new Date(NOW.getTime() + n * 86_400_000);
 const iso = (d) => d.toISOString().slice(0, 10);
-const BOOK_DAY = new Date(new Date('2026-09-16T10:00:00.000Z').getTime() + 20 * 86_400_000).toISOString().slice(0, 10);
+/**
+ * TWO CLOCKS, ON PURPOSE. NOW above is this gate's fixed clock and governs the PURE clauses, where a
+ * fixed date is what makes them reproducible. Everything the APP reads — fixtures in the database, the
+ * day typed into the booking form — must come from the REAL clock, because the app has no other one.
+ * Dated from NOW, the 40-day car became a 25-day car on 2026-10-01 and the suite went red with nothing
+ * changed; BOOK_DAY became a date in the past on the same morning.
+ */
+const REAL = new Date();
+const realDay = (n) => new Date(REAL.getTime() + n * 86_400_000);
+const BOOK_DAY = realDay(20).toISOString().slice(0, 10);
 const src = (f) => readFileSync(`/Users/hugh/Developer/greasedesk-core/${f}`, 'utf8');
 
 let prisma;
@@ -186,18 +195,29 @@ try {
     data: { group_id: ZZ_GROUP, registration: reg, registration_normalized: reg, make: 'ZZ', model: 'Gate', ...v },
     select: { id: true },
   });
+  /**
+   * THE FIXTURES THE APP READS ARE DATED FROM THE REAL CLOCK, not this gate's fixed NOW.
+   *
+   * They were dated from NOW (2026-09-16) and the clause went red on 2026-10-01 with nothing changed:
+   * day(40) is 26 October, which is 25 days from the real today — inside the 28-day window the PAGE
+   * judges against. The gate's clock governs the pure clauses; the page has only its own. A fixed date
+   * in a fixture the app reads is a clause with an expiry date on it.
+   */
+  check('fixture premise: 40 days out really is outside the window on the REAL clock',
+    (realDay(40).getTime() - REAL.getTime()) / 86_400_000 > MOT_SOON_DAYS,
+    `${MOT_SOON_DAYS}-day window — if this ever fails, the fixture has been re-pinned to a fixed date`);
   // Expires in 40 days — SILENT today, and the card below is booked 20 days out.
-  const vFar = await mk(`${PREFIX}FAR`, { mot_expiry: day(40), mot_checked_at: NOW, year: 2018 });
+  const vFar = await mk(`${PREFIX}FAR`, { mot_expiry: realDay(40), mot_checked_at: REAL, year: 2018 });
   // Nobody has ever asked about this one.
   const vNever = await mk(`${PREFIX}NEW`, { mot_expiry: null, mot_checked_at: null, year: 2011 });
   // Already out. Warns on any surface, with or without a slot picked.
-  const vExp = await mk(`${PREFIX}EXP`, { mot_expiry: day(-9), mot_checked_at: NOW, year: 2016 });
+  const vExp = await mk(`${PREFIX}EXP`, { mot_expiry: realDay(-9), mot_checked_at: REAL, year: 2016 });
 
   const bookedCard = await prisma.jobCard.create({
     data: {
       group_id: ZZ_GROUP, site_id: site.id, customer_id: cust?.id ?? null, vehicle_id: vFar.id, status: 'accepted',
       resource_id: resource?.id ?? null,
-      start_at: day(20), end_at: new Date(day(20).getTime() + 7_200_000), booking_duration_minutes: 120,
+      start_at: realDay(20), end_at: new Date(realDay(20).getTime() + 7_200_000), booking_duration_minutes: 120,
     }, select: { id: true },
   });
   check('the fixture card really holds a slot, so "against the booking" is being tested',
@@ -244,7 +264,7 @@ try {
     live.top !== null && live.top >= 0 && live.top < live.viewportH && live.regTop !== null && live.top < live.regTop,
     `banner y=${live.top}, registration y=${live.regTop}, viewport ${live.viewportH}`);
   check('  …and it names the booking date it judged against, not "today"',
-    live.text.includes(iso(day(20))) && /not today/i.test(live.text),
+    live.text.includes(BOOK_DAY) && /not today/i.test(live.text),
     live.text.replace(/\s+/g, ' ').slice(0, 160));
 
   console.log('\n— THE NEVER-CHECKED CAR IS OFFERED A LOOKUP, NOT A SENTENCE —');
