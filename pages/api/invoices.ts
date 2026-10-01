@@ -17,6 +17,7 @@ import { refundState } from '@/lib/invoice-refund-state';
 import { invoiceTotals, effectiveIssueDate } from '@/lib/invoice';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { isListStatusKey, isListScope, listWhere, paidPeriodFilter, ListStatusKey } from '@/lib/invoice-list-filters';
+import { dueAdvisory } from '@/lib/account-terms';
 import { resolveRange } from '@/lib/dashboard-periods';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -68,6 +69,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       confirm_due_at: true, payment_method_snapshot: true,
       voided_at: true, void_reason: true, void_category: true,
       customer_name_snapshot: true, vehicle_reg_snapshot: true, vat_registered_at_issue: true, job_card_id: true,
+      // THE DEADLINE, and the two facts that decide whether it may be chased. The list could not
+      // colour anything before this: due_date was never selected, so every row arrived without the
+      // one column the advisory is about. is_imported travels with it because an imported invoice
+      // IS chargeable and DOES carry a due date — nothing else would keep it out of the red.
+      due_date: true, is_imported: true,
       lines: { select: { vat_rate: true, line_total: true, line_vat: true } },
       // The ledger, for the refund chip. Same query, more columns — the list already pulls lines
       // per row, so this adds no round-trip. refundState is the SAME function the invoice page and
@@ -81,6 +87,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Paid-basis period (revenue tile's bucketing) — row-level, mirrors effectivePaidDate fallback.
   const periodRows = paidRange ? rows.filter((r) => paidPeriodFilter(r, paidRange)) : rows;
 
+  // ONE CLOCK FOR THE WHOLE RESPONSE. Per-row `new Date()` would let two rows on one screen
+  // disagree about what "today" is, and the pair that straddles midnight is the pair being chased.
+  const now = new Date();
   const list = await Promise.all(periodRows.map(async (r) => {
     // Amount = gross (what's owed — the AR number) from the FROZEN lines: every invoice carries
     // them from mint (freeze-at-issue); warranty lines sum to £0 by construction.
@@ -112,6 +121,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       currency: r.site?.currency_code ?? 'GBP',
       locale: r.site?.locale ?? 'en-GB',
       jobCardId: r.job_card_id,
+      // OVERDUE OR NEARLY — computed through lib/account-terms, which is also where the `overdue`
+      // TAB's predicate lives, so the colour and the filter cannot disagree. NULL on everything
+      // the chaser leaves alone: retail, warranty, historical, imported.
+      due: dueAdvisory(r, now),
       recipientEmail: (owner?.email || r.job_card?.customer?.email || '').trim() || null,
     };
   }));

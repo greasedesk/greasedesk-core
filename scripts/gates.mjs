@@ -156,7 +156,7 @@ if (stray.length) {
 const TIERS = {
   money: [
     'flat-commission-gate',
-    'account-terms-gate', 'application-fee-gate', 'card-fulfilment-gate', 'commission-fixed-clock-gate',
+    'account-terms-gate', 'invoice-advisory-gate', 'application-fee-gate', 'card-fulfilment-gate', 'commission-fixed-clock-gate',
     'commission-refusal-gate', 'counter-payment-gate', 'credit-note-gate', 'invoice-pay-link-gate',
     'rep-visit-gate', 'rep-answers-gate', 'rep-pay-run-gate', 'rep-auth-gate', 'rep-invoice-gate',
     'never-subscribes-gate', 'payment-intent-gate', 'payment-invariant-gate',
@@ -184,11 +184,13 @@ const TIERS = {
     'credential-residue-gate',
     'products-gate',
     'mot-banner-gate',
+    'mot-urgency-gate',
     'customer-car-gate',
     'sale-invoice-gate',
     'car-sale-gate',
     'historical-sale-gate',
     'dev-restart-gate',
+    'diary-drag-gate',
     'fast-set-gate',
     'backup-gate',
     'after-sale-gate',

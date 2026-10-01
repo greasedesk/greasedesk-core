@@ -55,5 +55,12 @@
   "voidReasonLabel": "Voided",
   "importHistorical": "Import a historical invoice",
   "workshopScopeBanner": "Workshop invoices only, to match the dashboard tile you came from. Car sales are on the stock page.",
-  "workshopScopeClear": "Show car sales too"
+  "workshopScopeClear": "Show car sales too",
+  "due": {
+    "overdue_one": "{{count}} day overdue",
+    "overdue_other": "{{count}} days overdue",
+    "overdueNoDays": "overdue",
+    "nearDue_one": "due in {{count}} day",
+    "nearDue_other": "due in {{count}} days"
+  }
 }

@@ -23,6 +23,7 @@ import { getTenantPermissions, canViewInvoices } from '@/lib/permissions';
 import { prisma } from '@/lib/db';
 import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
+import type { DueAdvisory } from '@/lib/account-terms';
 
 type Row = {
   id: string; number: string; customer: string; reg: string | null;
@@ -30,6 +31,9 @@ type Row = {
   issuedAt: string; receiptSent: boolean; manualPending?: boolean; refundKind?: 'none' | 'partial' | 'full'; method?: string | null; grossPennies: number; currency: string; locale: string;
   jobCardId: string; recipientEmail: string | null;
   voidedAt?: string | null; voidReason?: string | null;
+  /** The deadline advisory, computed SERVER-side through lib/account-terms (null for everything
+   *  the chaser leaves alone: retail with no due date, warranty, historical, imported). */
+  due?: DueAdvisory | null;
 };
 // 'overdue' sits immediately after 'unpaid' because it is a strict subset of it: unpaid is what is
 // out there (mostly cars still on the ramp), overdue is who is actually late.
@@ -73,6 +77,28 @@ function StatusChip({ row, t }: { row: Row; t: (k: string) => string }) {
   return <span className={`${base} bg-surface-muted text-muted border border-line border-dashed`} data-testid="chip-unknown" title={t('chip.unknownHint')}>{row.status}</span>;
 }
 
+/**
+ * THE DEADLINE, IN WORDS. The kind and the day count come from the server (lib/account-terms), so
+ * this picks a sentence and never a threshold — the decision about what "near due" means is not
+ * re-made here, and there is no second place to change it.
+ *
+ * `overdue` with a 0 day count is an invoice less than a day past its deadline. It says "overdue"
+ * and stops there: "0 days overdue" is what a rounding produces and not what anybody says, and
+ * "overdue today" would be a claim about the CALENDAR that a 20-hour-old deadline can contradict.
+ */
+function DueLine({ due, t }: { due?: DueAdvisory | null; t: (k: string, o?: any) => string }) {
+  if (!due) return null;
+  const text = due.kind === 'overdue'
+    ? (due.days === 0 ? t('due.overdueNoDays') : t('due.overdue', { count: due.days }))
+    : t('due.nearDue', { count: due.days });
+  return (
+    <span className="block text-[11px] font-semibold text-danger mt-0.5"
+      data-testid="invoice-due-advisory" data-kind={due.kind} data-days={due.days}>
+      {text}
+    </span>
+  );
+}
+
 export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin: boolean; canImport: boolean; taxLabel: string }) {
   const { t } = useTranslation('invoices');
   const router = useRouter();
@@ -87,14 +113,35 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * ── THE NEWEST REQUEST IS THE ONLY ONE ALLOWED TO ANSWER ────────────────────────────────────
+   * Search is debounced and every keystroke can leave a request in flight, so two loads overlap
+   * routinely. Without a token the SLOWER one wins whenever it finishes last: the unfiltered list
+   * lands on screen while the box still shows what was typed, and the row count silently
+   * disagrees with the filter.
+   *
+   * Found by invoice-advisory-gate on a warm server — the first page load (28 rows) resolved AFTER
+   * the filtered one (4 rows) and overwrote it. On a cold server the compile made the first
+   * request slow enough to arrive first, so the race was invisible exactly when a person is most
+   * likely to be watching: on a quick machine, with a warm cache.
+   */
+  const reqSeq = useRef(0);
 
   async function load(f: Filter, query: string, pd: PeriodQS, workshop: boolean = workshopOnly) {
+    const seq = ++reqSeq.current;
     setLoading(true);
     try {
       const res = await fetch(`/api/invoices?status=${f}&q=${encodeURIComponent(query)}${periodToQS(pd)}${workshop ? '&scope=workshop' : ''}`, { cache: 'no-store' });
+      // A newer request has been issued since this one left; its answer is the current one.
+      if (seq !== reqSeq.current) return;
       if (res.ok) { const d = await res.json(); setRows(d.invoices || []); setApplied(d.period ?? null); }
     } catch { /* list stays; friendly enough */ }
-    setLoading(false);
+    // UNCONDITIONAL, deliberately. The token guards the ROWS, which is what can be wrong in a way
+    // that matters. A superseded load also clearing the spinner was written here first and then
+    // removed: nothing went red with it gone, and a guard whose removal changes nothing reads as
+    // protection while protecting nothing. The spinner's worst case is that it stops a moment
+    // early while a newer request is still in flight, and the next response corrects it.
+    finally { setLoading(false); }
   }
   // Initial load honours tile-passed URL params (status + preset|from/to); bare arrival = as before.
   useEffect(() => {
@@ -229,7 +276,14 @@ export default function InvoicesPage({ isAdmin, canImport, taxLabel }: { isAdmin
                   <td className={`p-3 text-ink whitespace-nowrap ${r.status === 'void' ? 'line-through' : ''}`}>{r.reg || '—'}</td>
                   <td className={`p-3 text-right text-ink tabular-nums whitespace-nowrap ${r.status === 'void' ? 'line-through' : ''}`}>{formatMoney(r.grossPennies, { currency: r.currency, locale: r.locale })}</td>
                   <td className="p-3 text-muted whitespace-nowrap">{new Date(r.issuedAt).toLocaleDateString(r.locale)}</td>
-                  <td className="p-3"><StatusChip row={r} t={t} /></td>
+                  <td className="p-3">
+                    <StatusChip row={r} t={t} />
+                    {/* RED, AND IN WORDS. The chip says UNPAID for everything out there; this says
+                        which of those is actually late, and by how much. Same colour for both
+                        states, different sentence — a reader should not have to tell two reds
+                        apart, and "due in 3 days" and "14 days overdue" are not confusable. */}
+                    <DueLine due={r.due} t={t} />
+                  </td>
                   <td className="p-3 text-right whitespace-nowrap">
                     <Link href={`/admin/invoices/${r.id}`} className="text-accent hover:underline text-sm">{t('action.view')}</Link>
                     <Link href={`/admin/jobcards/${r.jobCardId}`} className="text-accent hover:underline text-sm ml-3">{t('action.jobCard')}</Link>
