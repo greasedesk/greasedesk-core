@@ -377,6 +377,228 @@ function YearGrid({ siteId, year, today, weekStart, locale }: {
   );
 }
 
+
+/**
+ * ── THE DIARY'S BLOCKS LIVE OUT HERE, AND THAT IS THE POINT (2026-10-02) ────────────────────────
+ * These three were declared INSIDE the page component for twenty months. A component declared
+ * inside another gets a NEW IDENTITY on every render of its parent, so React cannot reconcile it —
+ * it unmounts and remounts the whole subtree. Every state change on this page (a peek, the money
+ * toggle, a filter, a drag) therefore destroyed and recreated EVERY BLOCK ON THE BOARD.
+ *
+ * That was a performance cost until 2026-10-01, when it became a correctness trap: a pointerdown
+ * handler set state, the block under the finger was destroyed mid-press, and the browser dispatched
+ * no click at all — clicking a booking silently stopped opening its job card. See
+ * scripts/diary-drag-gate's "the element under the pointer SURVIVES the press", which is a property
+ * of ANY interaction on this surface rather than of that gesture.
+ *
+ * ── ONE ctx OBJECT, NOT TWENTY-ONE PROPS ────────────────────────────────────────────────────────
+ * The page values these need are passed as a single `ctx`, built once per render. Twenty-one
+ * individual props across three call sites would be unreadable, and one object is also the shape a
+ * later React.memo step wants: memoise `ctx` in one place and the blocks stop re-rendering too.
+ *
+ * WHAT THIS COMMIT DOES NOT DO: stop the blocks RE-RENDERING. Hoisting stops the remount, which is
+ * the correctness half. `ctx` is a fresh object each render, so the children still re-render — that
+ * is the optimisation half and it needs stable callbacks (useCallback on ten handlers) to be worth
+ * anything. Deliberately not bundled in: a refactor that changes identity AND memoisation at once
+ * is unreviewable, and stale closures are the classic price.
+ *
+ * The bodies below are VERBATIM from the page component. Only the signature and the destructuring
+ * line are new, so nothing in the rendering could have been quietly rewritten on the way out.
+ */
+type DiaryBlockCtx = {
+  t: (k: string, o?: any) => string;
+  view: DiaryView;
+  locale: string;
+  currency: string;
+  finance: { canSeeValues: boolean };
+  showMoney: boolean;
+  statusColours: Record<StatusBand, string>;
+  canManage: boolean;
+  drag: DragState | null;
+  moving: string | null;
+  pressRef: React.MutableRefObject<{ card: DiaryCard; x0: number; y0: number; movable: boolean } | null>;
+  cardFill: (c: DiaryCard) => string;
+  segmentsForDay: (c: { startAt: string; endAt: string; segments?: Segment[] }, d: string) => Array<{ top: number; height: number; s: number; e: number }>;
+  previewFootprint: (card: DiaryCard, target: DropTarget) => { segments: Segment[]; endISO: string };
+  targetIsOpen: (target: DropTarget) => boolean;
+  timeLabel: (c: { startAt: string; endAt: string; segments?: Segment[] }) => string;
+  onBlockClick: (card: DiaryCard, e: React.MouseEvent) => void;
+  onBlockDbl: (card: DiaryCard, e: React.MouseEvent) => void;
+  onBlockMenu: (card: DiaryCard, col: { date: string; resourceId?: string }, e: React.MouseEvent) => void;
+  onBlockLongPress: (card: DiaryCard, col: { date: string; resourceId?: string }, e: React.TouchEvent) => void;
+  cancelPress: () => void;
+  dropIfArmed: (cx: number, cy: number) => boolean;
+  setEditNote: (n: DiaryNoteView) => void;
+};
+
+function JobBlock({ c, col, top, height, leftPct, widthPct, ctx }: { c: DiaryCard; col: { date: string; resourceId?: string }; top: number; height: number; leftPct: number; widthPct: number; ctx: DiaryBlockCtx }) {
+  const { t, view, locale, currency, finance, showMoney, statusColours, canManage, drag, moving,
+    pressRef, cardFill, segmentsForDay, previewFootprint, targetIsOpen, timeLabel,
+    onBlockClick, onBlockDbl, onBlockMenu, onBlockLongPress, cancelPress, dropIfArmed, setEditNote } = ctx;
+  // A GHOST: the customer never arrived. Renders greyed in the SAME overlap layout as live
+  // blocks (a rebooked slot shows both side-by-side — two things happened there). Fixed grey,
+  // never the tenant band palette; click still opens the card (history is not stranded); drag,
+  // double-click and the context menu are off — moving a terminal fact is meaningless.
+  const ghost = c.status === 'no_show';
+  const liftColour = ghost ? GHOST_COLOUR : resolveColour(c.resourceColour); // lift colour → OUTLINE
+  const fill = ghost ? null : cardFill(c);                                   // status band → FILL
+  // ONE PREDICATE, SHARED WITH THE SERVER (lib/jobcard-status::canMoveBooking). A card whose
+  // slot is a record does not start the gesture at all — being refused after dropping it teaches
+  // nothing, and the refusal exists on the endpoint anyway for everything that bypasses this.
+  const movable = canManage && !ghost && canMoveBooking(c.status);
+  const dragging = drag?.card.id === c.id && drag.moved;
+  const armed = drag?.card.id === c.id && drag.mode === 'armed';
+  const pending = moving === c.id;
+  return (
+    <div
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        // A REF, NEVER STATE. Setting state here remounts this very element and the click that
+        // opens the card is never dispatched — see pressRef. Recorded for EVERY press, movable or
+        // not, so the click below always compares against the gesture it belongs to.
+        //
+        // TOUCH IS DELIBERATELY NOT DRAGGABLE: the finger keeps the scroll and the long-press
+        // menu, and a touch move is the armed pick-up instead.
+        pressRef.current = { card: c, x0: e.clientX, y0: e.clientY, movable: movable && !pending && e.pointerType !== 'touch' && e.button === 0 };
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (dropIfArmed(e.clientX, e.clientY)) return;      // a tap on a card is also a drop
+        // DID THIS GESTURE TRAVEL? Asked of the press it came from, with the SAME threshold the
+        // drag uses — not a flag set elsewhere. A boolean set on drag-end is left true forever
+        // when the pointer lands on another column and no click ever arrives to clear it, and
+        // the next honest click is the one it eats.
+        //
+        // REDUNDANT TODAY, AND KEPT ON PURPOSE (2026-10-02). Removing it changes no outcome,
+        // because a real drag sets state, which remounts this element, so the browser dispatches
+        // no click here at all. It becomes load-bearing the moment that stops being true — which
+        // is precisely what hoisting JobBlock out of the page component would do, and that is a
+        // change somebody should make. The GATE asserts the outcome ("a drag did not open the
+        // card") rather than either mechanism, so the property survives whichever one delivers it.
+        const p = pressRef.current;
+        pressRef.current = null;
+        if (p && (Math.abs(e.clientX - p.x0) >= DRAG_THRESHOLD_PX || Math.abs(e.clientY - p.y0) >= DRAG_THRESHOLD_PX)) return;
+        onBlockClick(c, e);
+      }}
+      onDoubleClick={(e) => { if (!ghost) onBlockDbl(c, e); }}
+      onContextMenu={(e) => { if (ghost) e.preventDefault(); else onBlockMenu(c, col, e); }}
+      onTouchStart={(e) => { if (!ghost) onBlockLongPress(c, col, e); }}
+      onTouchEnd={cancelPress}
+      onTouchMove={cancelPress}
+      data-testid={ghost ? 'diary-ghost-block' : undefined}
+      data-stock={c.isStock ? '1' : undefined}
+      /* SOLID for stock, a ~13% tint for everything else. The difference a fitter reads from ten
+         feet is lightness, not hue — see lib/diary-colours for why that decides it. The 2px LIFT
+         border is kept: it still separates against a solid ground. */
+      style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : (c.isStock ? STOCK_FILL : blockTint(fill as string)), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
+      data-reg={c.reg}
+      data-movable={movable ? '1' : '0'}
+      data-pending={pending ? '1' : undefined}
+      className={`diary-block absolute rounded-md overflow-hidden shadow-sm select-none ${movable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${dragging || armed ? 'opacity-40' : ''} ${pending ? 'animate-pulse ring-2 ring-accent' : ''} ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
+      title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}${ghost ? ` · ${t('ghost.title')}` : ''}`}
+    >
+      <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : c.isStock ? '' : 'text-ink'}`}
+        style={c.isStock ? { color: STOCK_TEXT } : undefined}>{c.reg}</span>
+      {ghost && height > 28 && (
+        <span className="inline-block ml-1 mt-0.5 text-[8px] leading-none py-0.5 rounded-full border px-1.5 font-medium whitespace-nowrap"
+          style={{ color: GHOST_COLOUR, borderColor: GHOST_COLOUR, backgroundColor: GHOST_FILL }}>
+          {t('ghost.tag')}
+        </span>
+      )}
+      {/* Status-band label — THE single status word, always present (non-gated; the colour reinforces
+          it, never replaces it). Shown wherever a pill fits (>28, matching where the pay pill used to
+          appear) so short blocks still carry the word. */}
+      {!ghost && height > 28 && <BandPill status={c.status} isComeback={c.isComeback} isStock={c.isStock} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
+      {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
+          overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
+      {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
+      {/* Day view lists ALL service titles, one per line (wraps + clips to block height). */}
+      {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
+        <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
+      ))}
+      {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
+      {!ghost && showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
+      {/* Payment pill retained ONLY where it says something the band does not: the warranty/settled
+          "No charge" (£0 outcome). Everywhere else it duplicated the band word ("Paid"/"Paid",
+          "Invoiced" vs "Complete, unpaid") and collided with the inline band pill on short blocks. */}
+      {finance.canSeeValues && height > 28 && paymentState(c.status, c.isComeback) === 'settled' && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
+      {/* PRICE NOT AGREED. Information, not a warning — the mechanic reading the board cannot fix
+          it, but whoever hands the keys back can, and only while the car is still here. It carries
+          the DIFFERENCE because a block has no room for two totals and "+£162 unapproved" says
+          more than a neutral marker would. Shown on booked and in-progress blocks alike. */}
+      {finance.canSeeValues && c.priceUnconfirmed && (
+        <span data-testid="price-unconfirmed-chip" data-card-reg={c.reg}
+          title={`Agreed ${formatMoney(c.priceUnconfirmed.agreedPennies, { currency, locale })} (v${c.priceUnconfirmed.agreedVersion}), sent ${formatMoney(c.priceUnconfirmed.sentPennies, { currency, locale })} (v${c.priceUnconfirmed.sentVersion}) — not yet agreed`}
+          className="absolute bottom-0.5 right-1 text-[9px] font-medium rounded-full border px-1 whitespace-nowrap bg-warn-soft border-warn text-warn">
+          {c.priceUnconfirmed.differencePennies >= 0 ? '+' : '−'}{formatMoney(Math.abs(c.priceUnconfirmed.differencePennies), { currency, locale })} unapproved
+        </span>
+      )}
+    </div>
+  );
+}
+/**
+ * THE PREVIEW. Nothing is committed while this is on screen: the dragged block is still in its
+ * old place at 40% opacity and this outline says where it would go. Both are deliberate — a
+ * board that moves the card and then fails has lied, and there is no way to un-lie it that the
+ * person watching will believe.
+ */
+function DropPreview({ col, ctx }: { col: { date: string; resourceId?: string }; ctx: DiaryBlockCtx }) {
+  const { t, view, locale, currency, finance, showMoney, statusColours, canManage, drag, moving,
+    pressRef, cardFill, segmentsForDay, previewFootprint, targetIsOpen, timeLabel,
+    onBlockClick, onBlockDbl, onBlockMenu, onBlockLongPress, cancelPress, dropIfArmed, setEditNote } = ctx;
+  const target = drag?.target;
+  if (!drag || !target || !drag.moved && drag.mode !== 'armed') return null;
+  if (target.date !== col.date) return null;
+  if (col.resourceId && target.resourceId !== col.resourceId) return null;
+  const open = targetIsOpen(target);
+  const mins = workingMinutesOf(drag.card);
+  // CLOSED: no footprint is drawn, because computeFootprint would advance the start to the next
+  // working moment and the preview would show the card somewhere nobody pointed at.
+  if (!open) {
+    return (
+      <div data-testid="drop-preview-closed" className="absolute left-0 right-0 pointer-events-none border-y-2 border-dashed border-danger bg-danger-soft/60 flex items-start"
+        style={{ top: target.atMin * PX_PER_MIN, height: Math.max(22, Math.min(mins, 60) * PX_PER_MIN) }}>
+        <span className="text-[10px] font-semibold text-danger px-1">{t('drag.closed')}</span>
+      </div>
+    );
+  }
+  const fp = previewFootprint(drag.card, target);
+  const boxes = segmentsForDay({ startAt: fp.segments[0]?.startISO ?? '', endAt: fp.endISO, segments: fp.segments }, col.date);
+  return (
+    <>
+      {boxes.map((b, i) => (
+        <div key={i} data-testid="drop-preview" data-at={hhmm(fp.segments[0]?.startISO ?? '')}
+          className="absolute pointer-events-none rounded-md border-2 border-dashed border-accent bg-accent-soft/70"
+          style={{ top: b.top, height: b.height, left: 0, width: 'calc(100% - 3px)' }}>
+          {i === 0 && (
+            <span className="block text-[10px] font-semibold text-accent px-1 pt-0.5 truncate">
+              {drag.card.reg} {hhmm(fp.segments[0].startISO)}–{hhmm(fp.endISO)}
+            </span>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+function NoteBlock({ n, top, height, leftPct, widthPct, ctx }: { n: DiaryNoteView; top: number; height: number; leftPct: number; widthPct: number; ctx: DiaryBlockCtx }) {
+  const { t, view, locale, currency, finance, showMoney, statusColours, canManage, drag, moving,
+    pressRef, cardFill, segmentsForDay, previewFootprint, targetIsOpen, timeLabel,
+    onBlockClick, onBlockDbl, onBlockMenu, onBlockLongPress, cancelPress, dropIfArmed, setEditNote } = ctx;
+  const colour = n.colour || '#94a3b8';
+  return (
+    <div
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => { e.stopPropagation(); if (canManage) setEditNote(n); }}
+      style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, borderColor: colour, cursor: canManage ? 'pointer' : 'default' }}
+      className="diary-block absolute rounded-md overflow-hidden bg-surface-muted border-2 border-dashed select-none"
+      title={`${t('note.tag')}: ${n.title} · ${hhmm(n.startAt)}–${hhmm(n.endAt)}`}
+    >
+      <span className="block text-[9px] uppercase tracking-wide text-muted px-1 pt-0.5">{t('note.tag')}</span>
+      <span className="diary-reg block text-[11px] italic text-ink px-1">{n.title}</span>
+    </div>
+  );
+}
 export default function DiaryPage(props: PageProps) {
   const { siteId, siteName, view, anchor, prev, next, days, resources, cards, notes, openHour, closeHour, breaks, currency, locale, canManage, weekStart, today, finance, noSites, openDays } = props;
   const leaveBanners = props.leaveBanners ?? {};
@@ -612,6 +834,28 @@ export default function DiaryPage(props: PageProps) {
    * pointerup. That clause outlives this gesture and is why the next one cannot break it quietly.
    */
   const pressRef = useRef<{ card: DiaryCard; x0: number; y0: number; movable: boolean } | null>(null);
+  /**
+   * ── ONE RULE, FOUR PLACES: A PRESS BELONGS TO ITS OWN GESTURE ───────────────────────────────
+   * The press has to outlive its pointerup (the click that follows is what reads it) and must not
+   * outlive it by any longer than that. Four fragments enforce that between them, and each was
+   * written because a clause went red:
+   *
+   *   1. a window-level pointerdown in CAPTURE phase clears it, before the block's own handler
+   *      sets it again — otherwise a press on empty space inherits the card from the gesture
+   *      before, and drags it;
+   *   2. a pointermove with NO button held clears it — otherwise simply moving the mouse across
+   *      the diary after a drop starts dragging that card again;
+   *   3. onUp does NOT clear it when a drag ran, because the click needs to read it — clearing it
+   *      there made the travel check in onClick unreachable, so a drag that stayed inside its own
+   *      tall block both moved the booking AND opened the card;
+   *   4. onClick consumes it.
+   *
+   * diary-drag-gate red-proves 1, 3 and 4 individually. Removing 2 currently changes nothing — but
+   * that is an artefact of the order the gate's own gestures run in (an earlier pointerup happens
+   * to clear the press first), NOT a property of the code, so it stays. The honest summary is that
+   * these four are one rule expressed four times, and the next person to touch the gesture should
+   * consider giving the press a pointerId and a single spent-check instead.
+   */
   const [moving, setMoving] = useState<string | null>(null);   // card id, while the server decides
   const [moveMsg, setMoveMsg] = useState<{ text: string; ok: boolean; undo?: { card: DiaryCard; from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null } } } | null>(null);
 
@@ -689,6 +933,12 @@ export default function DiaryPage(props: PageProps) {
     const travelled = (e: PointerEvent, p: { x0: number; y0: number }) =>
       Math.abs(e.clientX - p.x0) >= DRAG_THRESHOLD_PX || Math.abs(e.clientY - p.y0) >= DRAG_THRESHOLD_PX;
     const onMove = (e: PointerEvent) => {
+      // NO BUTTON HELD, NO GESTURE. Without this, the press left behind for the click to read was
+      // picked up by the NEXT ordinary mouse movement and promoted into a drag — so moving the
+      // pointer across the diary after a drop began dragging the card again, and pressing a GHOST
+      // showed a preview belonging to the card before it. The press is dropped the moment the
+      // pointer is seen moving with nothing held.
+      if (e.buttons === 0) { pressRef.current = null; return; }
       // STILL JUST A PRESS: nothing has been promoted to state, so nothing has remounted and the
       // click is still on its way. The first move past the threshold is what makes it a drag.
       const p = pressRef.current;
@@ -707,15 +957,34 @@ export default function DiaryPage(props: PageProps) {
       if (!g || g.mode !== 'pointer') { pressRef.current = null; return; }
       putDrag(null);
       const target = targetFromPoint(e.clientX, e.clientY, g.card) ?? g.target;
-      pressRef.current = null;
+      // THE PRESS IS NOT CLEARED HERE. The click that follows this pointerup is the one that has to
+      // read it — clearing it first made the travel check in onClick UNREACHABLE, so a drag that
+      // stayed inside its own tall block both moved the booking AND opened the card. Found by
+      // red-proving: removing that check changed no outcome, which meant nothing reached it.
+      //
+      // Leaving it set is safe because a click is ALWAYS preceded by a pointerdown on the element,
+      // which overwrites it — a stale press can never be read against a later gesture.
       if (target) void commitMove(g.card, target);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && dragRef.current) putDrag(null); };
+    /**
+     * EVERY PRESS CLEARS THE LAST ONE, IN CAPTURE PHASE — so it runs BEFORE the block's own
+     * handler, which then sets it again if the press landed on a block.
+     *
+     * Without this, a press on empty column space (or a note, or the grid background) left the
+     * PREVIOUS press in the ref, and the next pointermove started dragging the card from the
+     * gesture before — a ghost grew a drag preview it had no business having. Caught by the gate's
+     * "dragging a GHOST does nothing at all", which is the clause that exists because moving a
+     * terminal fact is meaningless.
+     */
+    const onDownAnywhere = () => { pressRef.current = null; };
+    window.addEventListener('pointerdown', onDownAnywhere, true);
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', () => putDrag(null));
     window.addEventListener('keydown', onKey);
     return () => {
+      window.removeEventListener('pointerdown', onDownAnywhere, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('keydown', onKey);
@@ -800,165 +1069,17 @@ export default function DiaryPage(props: PageProps) {
 
   type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
-  function JobBlock({ c, col, top, height, leftPct, widthPct }: { c: DiaryCard; col: { date: string; resourceId?: string }; top: number; height: number; leftPct: number; widthPct: number }) {
-    // A GHOST: the customer never arrived. Renders greyed in the SAME overlap layout as live
-    // blocks (a rebooked slot shows both side-by-side — two things happened there). Fixed grey,
-    // never the tenant band palette; click still opens the card (history is not stranded); drag,
-    // double-click and the context menu are off — moving a terminal fact is meaningless.
-    const ghost = c.status === 'no_show';
-    const liftColour = ghost ? GHOST_COLOUR : resolveColour(c.resourceColour); // lift colour → OUTLINE
-    const fill = ghost ? null : cardFill(c);                                   // status band → FILL
-    // ONE PREDICATE, SHARED WITH THE SERVER (lib/jobcard-status::canMoveBooking). A card whose
-    // slot is a record does not start the gesture at all — being refused after dropping it teaches
-    // nothing, and the refusal exists on the endpoint anyway for everything that bypasses this.
-    const movable = canManage && !ghost && canMoveBooking(c.status);
-    const dragging = drag?.card.id === c.id && drag.moved;
-    const armed = drag?.card.id === c.id && drag.mode === 'armed';
-    const pending = moving === c.id;
-    return (
-      <div
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          // A REF, NEVER STATE. Setting state here remounts this very element and the click that
-          // opens the card is never dispatched — see pressRef. Recorded for EVERY press, movable or
-          // not, so the click below always compares against the gesture it belongs to.
-          //
-          // TOUCH IS DELIBERATELY NOT DRAGGABLE: the finger keeps the scroll and the long-press
-          // menu, and a touch move is the armed pick-up instead.
-          pressRef.current = { card: c, x0: e.clientX, y0: e.clientY, movable: movable && !pending && e.pointerType !== 'touch' && e.button === 0 };
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (dropIfArmed(e.clientX, e.clientY)) return;      // a tap on a card is also a drop
-          // DID THIS GESTURE TRAVEL? Asked of the press it came from, with the SAME threshold the
-          // drag uses — not a flag set elsewhere. A boolean set on drag-end is left true forever
-          // when the pointer lands on another column and no click ever arrives to clear it, and
-          // the next honest click is the one it eats.
-          //
-          // REDUNDANT TODAY, AND KEPT ON PURPOSE (2026-10-02). Removing it changes no outcome,
-          // because a real drag sets state, which remounts this element, so the browser dispatches
-          // no click here at all. It becomes load-bearing the moment that stops being true — which
-          // is precisely what hoisting JobBlock out of the page component would do, and that is a
-          // change somebody should make. The GATE asserts the outcome ("a drag did not open the
-          // card") rather than either mechanism, so the property survives whichever one delivers it.
-          const p = pressRef.current;
-          pressRef.current = null;
-          if (p && (Math.abs(e.clientX - p.x0) >= DRAG_THRESHOLD_PX || Math.abs(e.clientY - p.y0) >= DRAG_THRESHOLD_PX)) return;
-          onBlockClick(c, e);
-        }}
-        onDoubleClick={(e) => { if (!ghost) onBlockDbl(c, e); }}
-        onContextMenu={(e) => { if (ghost) e.preventDefault(); else onBlockMenu(c, col, e); }}
-        onTouchStart={(e) => { if (!ghost) onBlockLongPress(c, col, e); }}
-        onTouchEnd={cancelPress}
-        onTouchMove={cancelPress}
-        data-testid={ghost ? 'diary-ghost-block' : undefined}
-        data-stock={c.isStock ? '1' : undefined}
-        /* SOLID for stock, a ~13% tint for everything else. The difference a fitter reads from ten
-           feet is lightness, not hue — see lib/diary-colours for why that decides it. The 2px LIFT
-           border is kept: it still separates against a solid ground. */
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, backgroundColor: ghost ? GHOST_FILL : (c.isStock ? STOCK_FILL : blockTint(fill as string)), border: `2px ${ghost ? 'dashed' : 'solid'} ${liftColour}`, ...(ghost ? { opacity: 0.75 } : {}) }}
-        data-reg={c.reg}
-        data-movable={movable ? '1' : '0'}
-        data-pending={pending ? '1' : undefined}
-        className={`diary-block absolute rounded-md overflow-hidden shadow-sm select-none ${movable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${dragging || armed ? 'opacity-40' : ''} ${pending ? 'animate-pulse ring-2 ring-accent' : ''} ${finance.canSeeValues && height > 28 ? 'pb-[18px]' : ''}`}
-        title={`${c.reg} · ${c.customer}${c.serviceSummary ? ` · ${c.serviceSummary}` : ''} · ${c.resourceName} · ${timeLabel(c)}${ghost ? ` · ${t('ghost.title')}` : ''}`}
-      >
-        <span className={`diary-reg block font-semibold text-[11px] px-1 pt-0.5 truncate ${ghost ? 'text-muted line-through' : c.isStock ? '' : 'text-ink'}`}
-          style={c.isStock ? { color: STOCK_TEXT } : undefined}>{c.reg}</span>
-        {ghost && height > 28 && (
-          <span className="inline-block ml-1 mt-0.5 text-[8px] leading-none py-0.5 rounded-full border px-1.5 font-medium whitespace-nowrap"
-            style={{ color: GHOST_COLOUR, borderColor: GHOST_COLOUR, backgroundColor: GHOST_FILL }}>
-            {t('ghost.tag')}
-          </span>
-        )}
-        {/* Status-band label — THE single status word, always present (non-gated; the colour reinforces
-            it, never replaces it). Shown wherever a pill fits (>28, matching where the pay pill used to
-            appear) so short blocks still carry the word. */}
-        {!ghost && height > 28 && <BandPill status={c.status} isComeback={c.isComeback} isStock={c.isStock} colours={statusColours} className="ml-1 mt-0.5 text-[8px] leading-none py-0.5" />}
-        {/* Day view wraps the customer + service lines to fit the block height (clipped by the block's
-            overflow-hidden — as many wrapped lines as fit, clip the rest). Week view stays single-line. */}
-        {height > 40 && <span className={`block text-[10px] text-muted px-1 ${view === 'day' ? 'whitespace-normal break-words leading-tight' : 'truncate'}`}>{c.customer}</span>}
-        {/* Day view lists ALL service titles, one per line (wraps + clips to block height). */}
-        {view === 'day' && c.services.length > 0 && height > 54 && c.services.map((s, i) => (
-          <span key={i} className="block text-[10px] text-ink/80 px-1 whitespace-normal break-words leading-tight">{s}</span>
-        ))}
-        {/* Per-block value — only if the SERVER sent it (permitted) AND the runtime toggle is on. */}
-        {!ghost && showMoney && finance.canSeeValues && height > 28 && <span className={`block text-[10px] font-semibold px-1 tabular-nums ${c.valuePennies < 0 ? 'text-danger' : 'text-ink'}`}>{formatMoney(c.valuePennies, { currency, locale })}</span>}
-        {/* Payment pill retained ONLY where it says something the band does not: the warranty/settled
-            "No charge" (£0 outcome). Everywhere else it duplicated the band word ("Paid"/"Paid",
-            "Invoiced" vs "Complete, unpaid") and collided with the inline band pill on short blocks. */}
-        {finance.canSeeValues && height > 28 && paymentState(c.status, c.isComeback) === 'settled' && <PayPill status={c.status} isComeback={c.isComeback} t={t} className="absolute bottom-0.5 left-1 text-[9px]" />}
-        {/* PRICE NOT AGREED. Information, not a warning — the mechanic reading the board cannot fix
-            it, but whoever hands the keys back can, and only while the car is still here. It carries
-            the DIFFERENCE because a block has no room for two totals and "+£162 unapproved" says
-            more than a neutral marker would. Shown on booked and in-progress blocks alike. */}
-        {finance.canSeeValues && c.priceUnconfirmed && (
-          <span data-testid="price-unconfirmed-chip" data-card-reg={c.reg}
-            title={`Agreed ${formatMoney(c.priceUnconfirmed.agreedPennies, { currency, locale })} (v${c.priceUnconfirmed.agreedVersion}), sent ${formatMoney(c.priceUnconfirmed.sentPennies, { currency, locale })} (v${c.priceUnconfirmed.sentVersion}) — not yet agreed`}
-            className="absolute bottom-0.5 right-1 text-[9px] font-medium rounded-full border px-1 whitespace-nowrap bg-warn-soft border-warn text-warn">
-            {c.priceUnconfirmed.differencePennies >= 0 ? '+' : '−'}{formatMoney(Math.abs(c.priceUnconfirmed.differencePennies), { currency, locale })} unapproved
-          </span>
-        )}
-      </div>
-    );
-  }
   /**
-   * THE PREVIEW. Nothing is committed while this is on screen: the dragged block is still in its
-   * old place at 40% opacity and this outline says where it would go. Both are deliberate — a
-   * board that moves the card and then fails has lied, and there is no way to un-lie it that the
-   * person watching will believe.
+   * THE BLOCK CONTEXT, built once per render and handed to the three block components, which now
+   * live at module scope (see DiaryBlockCtx). Inside this component they were remounted on every
+   * state change; out there they reconcile.
    */
-  function DropPreview({ col }: { col: { date: string; resourceId?: string } }) {
-    const target = drag?.target;
-    if (!drag || !target || !drag.moved && drag.mode !== 'armed') return null;
-    if (target.date !== col.date) return null;
-    if (col.resourceId && target.resourceId !== col.resourceId) return null;
-    const open = targetIsOpen(target);
-    const mins = workingMinutesOf(drag.card);
-    // CLOSED: no footprint is drawn, because computeFootprint would advance the start to the next
-    // working moment and the preview would show the card somewhere nobody pointed at.
-    if (!open) {
-      return (
-        <div data-testid="drop-preview-closed" className="absolute left-0 right-0 pointer-events-none border-y-2 border-dashed border-danger bg-danger-soft/60 flex items-start"
-          style={{ top: target.atMin * PX_PER_MIN, height: Math.max(22, Math.min(mins, 60) * PX_PER_MIN) }}>
-          <span className="text-[10px] font-semibold text-danger px-1">{t('drag.closed')}</span>
-        </div>
-      );
-    }
-    const fp = previewFootprint(drag.card, target);
-    const boxes = segmentsForDay({ startAt: fp.segments[0]?.startISO ?? '', endAt: fp.endISO, segments: fp.segments }, col.date);
-    return (
-      <>
-        {boxes.map((b, i) => (
-          <div key={i} data-testid="drop-preview" data-at={hhmm(fp.segments[0]?.startISO ?? '')}
-            className="absolute pointer-events-none rounded-md border-2 border-dashed border-accent bg-accent-soft/70"
-            style={{ top: b.top, height: b.height, left: 0, width: 'calc(100% - 3px)' }}>
-            {i === 0 && (
-              <span className="block text-[10px] font-semibold text-accent px-1 pt-0.5 truncate">
-                {drag.card.reg} {hhmm(fp.segments[0].startISO)}–{hhmm(fp.endISO)}
-              </span>
-            )}
-          </div>
-        ))}
-      </>
-    );
-  }
-  function NoteBlock({ n, top, height, leftPct, widthPct }: { n: DiaryNoteView; top: number; height: number; leftPct: number; widthPct: number }) {
-    const colour = n.colour || '#94a3b8';
-    return (
-      <div
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => { e.stopPropagation(); if (canManage) setEditNote(n); }}
-        style={{ top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`, borderColor: colour, cursor: canManage ? 'pointer' : 'default' }}
-        className="diary-block absolute rounded-md overflow-hidden bg-surface-muted border-2 border-dashed select-none"
-        title={`${t('note.tag')}: ${n.title} · ${hhmm(n.startAt)}–${hhmm(n.endAt)}`}
-      >
-        <span className="block text-[9px] uppercase tracking-wide text-muted px-1 pt-0.5">{t('note.tag')}</span>
-        <span className="diary-reg block text-[11px] italic text-ink px-1">{n.title}</span>
-      </div>
-    );
-  }
+  const blockCtx: DiaryBlockCtx = {
+    t, view, locale, currency, finance, showMoney, statusColours, canManage, drag, moving,
+    pressRef, cardFill, segmentsForDay, previewFootprint, targetIsOpen, timeLabel,
+    onBlockClick, onBlockDbl, onBlockMenu, onBlockLongPress, cancelPress, dropIfArmed, setEditNote,
+  };
+
 
   // Dynamic headers from the anchor (UTC so they match the SSR date math, not the browser's TZ).
   const anchorUTC = new Date(`${anchor}T00:00:00.000Z`);
@@ -1323,12 +1444,12 @@ export default function DiaryPage(props: PageProps) {
                             <div key={h} style={{ top: h * 60 * PX_PER_MIN }} className="absolute left-0 right-0 border-t border-line" />
                           ))}
                           {placed.map((x) => x.kind === 'job'
-                            ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />
-                            : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} />)}
+                            ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} ctx={blockCtx} />
+                            : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} ctx={blockCtx} />)}
                           {/* WHERE IT WOULD LAND — drawn from computeFootprint, so a job dropped
                               before lunch shows as two bands exactly as it will once saved, and a
                               drop the garage is closed for says so instead of being nudged. */}
-                          <DropPreview col={col} />
+                          <DropPreview col={col} ctx={blockCtx} />
                         </div>
                       </div>
                     );

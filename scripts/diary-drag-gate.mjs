@@ -52,6 +52,7 @@ const R = '/Users/hugh/Developer/greasedesk-core';
 const ST = await import(`${R}/lib/jobcard-status.ts`);
 const OC = await import(`${R}/lib/occupancy.ts`);
 const DB = await import(`${R}/lib/diary-booking.ts`);
+const SC = await import(`${R}/lib/status-colours.ts`);
 const PREFIX = 'ZZDRAG';
 const MIN = 60000;
 
@@ -444,22 +445,115 @@ try {
   check('dragging to a time the garage is shut shows a REFUSAL, not a nudged position',
     shut.closed && !shut.normal && /closed/.test(shut.words ?? ''), JSON.stringify(shut));
   check('  …and dropping it there changes nothing', shutRow.start_at.getTime() === at1(15).getTime(), shutRow.start_at.toISOString());
+  /**
+   * ── AND A SECOND PRESS WITH NO MOVEMENT BETWEEN MUST NOT INHERIT THE FIRST ───────────────────
+   * The pointer is sitting on empty, closed space: the drop above was refused, so nothing moved and
+   * nothing is under it. Pressing again from EXACTLY here — without the pixel of movement that
+   * normally clears a spent press — is the one sequence the window-level capture clear exists for.
+   * Everything else is covered by "a move with no button held drops the press", which cannot fire
+   * when there is no move.
+   *
+   * It matters more than its rarity suggests: what it would produce is a WRITE nobody asked for —
+   * the previous card dragged somewhere on a gesture that began on empty space.
+   */
+  const beforeInherit = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  await pg.mouse.down();                                   // no move first — deliberately
+  await pg.mouse.move(g2.col1.left + g2.col1.width / 2, g2.col1.top + (OPEN - 1) * 60 + 90, { steps: 8 });
+  const inheritPreview = await pg.evaluate(() => {
+    const el = document.querySelector('[data-testid="drop-preview"]');
+    return { shown: !!el, text: el?.textContent?.trim() ?? null };
+  });
+  await pg.mouse.up();
+  await pg.waitForTimeout(500);
+  const afterInherit = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  check('a press with NO movement since the last gesture drags nothing',
+    !inheritPreview.shown, `preview: ${inheritPreview.text ?? 'none'}`);
+  check('  …and writes nothing — the previous card stays where it was',
+    afterInherit.start_at.getTime() === beforeInherit.start_at.getTime() && afterInherit.resource_id === beforeInherit.resource_id,
+    `${beforeInherit.start_at.toISOString()} → ${afterInherit.start_at.toISOString()}`);
 
-  // THE GHOST: the same gesture, and nothing happens.
-  const ghostBox = await pg.evaluate((p) => { const b = document.querySelector(`[data-reg="${p}GHOST"]`)?.getBoundingClientRect(); return b ? { x: b.left + b.width / 2, y: b.top + 10 } : null; }, PREFIX);
-  if (ghostBox) {
-    await pg.mouse.move(ghostBox.x, ghostBox.y);
+  /**
+   * THE GHOST: the same gesture, and nothing happens.
+   *
+   * THIS CLAUSE USED TO PASS WITHOUT EVER PRESSING THE GHOST. Its coordinates were taken before an
+   * earlier drag had finished moving things about, so the press landed on empty column space — and
+   * "no preview appeared" was true because no press had begun, not because the ghost refused one.
+   * It only came to light when a separate fix made a press on empty space stop inheriting the
+   * PREVIOUS press: the clause went red, and the red was the truth.
+   *
+   * So the aim is now asserted before the gesture: the element under the press point must BE the
+   * ghost. A clause that drives a pointer has to prove what it is pointing at.
+   */
+  await pg.waitForFunction((p) => {
+    const el = document.querySelector(`[data-reg="${p}GHOST"]`);
+    if (!el) return false;
+    const now = Math.round(el.getBoundingClientRect().top);
+    const prev = window.__ghostTop;
+    window.__ghostTop = now;
+    return prev === now;
+  }, PREFIX, { timeout: 15000, polling: 120 }).catch(() => {});
+  const ghostAim = await pg.evaluate((p) => {
+    const el = document.querySelector(`[data-reg="${p}GHOST"]`);
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    const x = b.left + b.width / 2, y = b.top + 10;
+    const hit = document.elementFromPoint(x, y)?.closest('[data-reg]');
+    return { x, y, hitReg: hit?.getAttribute('data-reg') ?? null, movable: hit?.getAttribute('data-movable') ?? null };
+  }, PREFIX);
+  check('premise: the press lands ON the ghost — the element under the pointer is the one being tested',
+    ghostAim?.hitReg === `${PREFIX}GHOST`, `pointer is over ${ghostAim?.hitReg ?? 'nothing'} (movable=${ghostAim?.movable})`);
+  if (ghostAim?.hitReg === `${PREFIX}GHOST`) {
+    await pg.mouse.move(ghostAim.x, ghostAim.y);
     await pg.mouse.down();
-    await pg.mouse.move(dropX, col3.top + 16 * 60, { steps: 10 });
+    await pg.mouse.move(ghostAim.x, ghostAim.y + 90, { steps: 10 });
     const ghostPreview = await pg.evaluate(() => !!document.querySelector('[data-testid="drop-preview"]'));
     await pg.mouse.up();
+    await pg.waitForTimeout(500);
     const ghostRow = await prisma.jobCard.findUnique({ where: { id: ghostCard }, select: { resource_id: true, start_at: true } });
     check('dragging a GHOST does nothing at all — no preview, no request, no move',
       !ghostPreview && ghostRow.resource_id === lift1.id && ghostRow.start_at.getTime() === at1(13).getTime(),
       `preview ${ghostPreview} / ${ghostRow.start_at.toISOString()}`);
   } else {
-    check('the ghost is on the board to be tested', false, 'ZZDRAGGHOST did not render');
+    check('dragging a GHOST does nothing at all — no preview, no request, no move', false, 'the pointer never reached the ghost, so this proves nothing');
   }
+
+  /**
+   * ── A PRESS ON EMPTY SPACE MUST NOT INHERIT THE LAST ONE ─────────────────────────────────────
+   * The press that the click handler reads is deliberately left in place after a drop (clearing it
+   * made the click unable to tell a drag from a click). So a press that lands on NOTHING — empty
+   * column space, a gap between bookings — must not pick up the card from the gesture before it and
+   * drag that instead. A window-level capture listener clears the press on every pointerdown,
+   * before the block's own handler sets it again.
+   *
+   * No clause reached this until it was written: the ghost case presses a BLOCK that refuses to move,
+   * which is a different thing entirely.
+   */
+  const emptySpot = await pg.evaluate((id) => {
+    const col = document.querySelector(`[data-col-resource="${id}"]`);
+    const r = col.getBoundingClientRect();
+    // 16:30 — after every fixture on this day, so there is genuinely nothing under the pointer.
+    const y = r.top + 16 * 60 + 30;
+    const hit = document.elementFromPoint(r.left + r.width / 2, y);
+    return { x: r.left + r.width / 2, y, onABlock: !!hit?.closest?.('.diary-block'), inAColumn: !!hit?.closest?.('[data-diary-col]') };
+  }, lift2.id);
+  check('premise: the press really lands on empty column space, not on a booking',
+    emptySpot.inAColumn && !emptySpot.onABlock, `in a column: ${emptySpot.inAColumn}, on a block: ${emptySpot.onABlock}`);
+  const beforeEmpty = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  await pg.mouse.move(emptySpot.x, emptySpot.y);
+  await pg.mouse.down();
+  await pg.mouse.move(emptySpot.x, emptySpot.y + 60, { steps: 8 });
+  const emptyPreview = await pg.evaluate(() => {
+    const el = document.querySelector('[data-testid="drop-preview"]');
+    return { shown: !!el, text: el?.textContent?.trim() ?? null };
+  });
+  await pg.mouse.up();
+  await pg.waitForTimeout(500);
+  const afterEmpty = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  check('dragging from empty space drags NOTHING — it does not inherit the last card pressed',
+    !emptyPreview.shown, `preview: ${emptyPreview.text ?? 'none'}`);
+  check('  …and the card from the previous gesture has not moved',
+    afterEmpty.start_at.getTime() === beforeEmpty.start_at.getTime() && afterEmpty.resource_id === beforeEmpty.resource_id,
+    `${beforeEmpty.start_at.toISOString()} → ${afterEmpty.start_at.toISOString()}`);
 
   // ── THE TOUCH PATH, exercised as it is reached: the menu arms the card, the next tap drops it.
   await pg.goto(diaryUrl, { waitUntil: 'domcontentloaded' });
@@ -525,8 +619,62 @@ try {
   }));
   check('the element under the pointer SURVIVES the press — a press that sets state destroys its own click',
     clicked.survived === true, `document.contains(down-node) at pointerup = ${clicked.survived}`);
+  /**
+   * AND THE REASON IT SURVIVES: the blocks RECONCILE across a state change instead of being
+   * remounted. JobBlock, NoteBlock and DropPreview were declared INSIDE the page component for
+   * twenty months, which gives them a new component identity on every render — so React threw away
+   * every block on the board whenever anything changed, and a press that set state destroyed the
+   * element it had started on.
+   *
+   * Measured against a state change nothing to do with this gesture (the money toggle), because the
+   * property belongs to the SURFACE and not to the drag: the same DOM node must still be there.
+   */
+  const reconciles = await pg.evaluate(async (p) => {
+    const before = document.querySelector(`[data-reg="${p}GEST"]`);
+    const toggle = document.querySelector('button[role="switch"]');
+    if (!toggle) return { toggled: false };
+    toggle.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const after = document.querySelector(`[data-reg="${p}GEST"]`);
+    toggle.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return { toggled: true, sameNode: before === after, stillThere: !!after };
+  }, PREFIX);
+  check('a state change RECONCILES the blocks — it does not remount every one of them',
+    reconciles.toggled && reconciles.sameNode === true,
+    reconciles.toggled ? `same DOM node after the money toggle = ${reconciles.sameNode}` : 'the finance toggle was not on screen to drive');
   check('  …so the browser dispatches a click at all', clicked.clicks === 1, `${clicked.clicks} click(s) on a block`);
   check('A PLAIN CLICK OPENS THE JOB CARD', clicked.pane === dragCard, `pane card = ${clicked.pane ?? 'NOT OPEN'}`);
+  // WHAT THE BLOCK ACTUALLY RENDERS. The block's content had no coverage at all, so the twenty-one
+  // page values it reads could have been dropped one at a time by any refactor and the suite would
+  // have stayed green. Asserted as the PRESENCE of each thing a fitter reads off the board.
+  const painted = await pg.evaluate((p) => {
+    const el = document.querySelector(`[data-reg="${p}GEST"]`);
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { text: el.textContent.replace(/\s+/g, ' ').trim(), title: el.getAttribute('title'), bg: cs.backgroundColor, border: cs.borderStyle };
+  }, PREFIX);
+  // The band WORD comes from lib/status-colours, so it is read from there rather than typed here —
+  // pinning "Not started" would pin a label somebody may legitimately reword.
+  const bandWord = SC.STATUS_BANDS.find((b) => b.key === SC.statusBand('accepted', false))?.label;
+  check('  …and the block carries the registration, the status word and the customer',
+    !!painted && painted.text.includes(`${PREFIX}GEST`) && painted.text.includes(bandWord) && painted.text.includes(`${PREFIX} Fixture`),
+    `${painted?.text ?? 'NO BLOCK'} — band word expected: "${bandWord}"`);
+  check('  …the time label a person reads, through the footprint', /\d{2}:\d{2}–\d{2}:\d{2}/.test(painted?.title ?? ''), painted?.title ?? '');
+  check('  …and it is PAINTED: a tenant band fill and a solid lift outline',
+    (painted?.bg ?? 'rgba(0, 0, 0, 0)') !== 'rgba(0, 0, 0, 0)' && painted?.border === 'solid',
+    `${painted?.bg} / ${painted?.border}`);
+  // THE MONEY, which is what a dropped context value looks like. Each of these three failures is a
+  // different dropped prop — the permission (finance), the runtime toggle (showMoney) and the
+  // formatter's locale — and all three read as "the figure is simply not there".
+  check('  …and the per-block value, which no clause covered until a red-proof dropped it',
+    /£[\d,]+\.\d{2}/.test(painted?.text ?? ''), painted?.text ?? '');
+  // THE GHOST'S OWN WORD, read from the locale file rather than typed here. It is the one thing on
+  // a block that comes through `t`, so it is what a dropped translator looks like.
+  const ghostTag = JSON.parse(readFileSync(`${R}/public/locales/en-GB/diary.json`, 'utf8')).ghost?.tag;
+  const ghostText = await pg.evaluate((p) => document.querySelector(`[data-reg="${p}GHOST"]`)?.textContent?.replace(/\s+/g, ' ').trim() ?? null, PREFIX);
+  check('  …and the ghost says what it is, in the words the locale file holds',
+    !!ghostTag && (ghostText ?? '').includes(ghostTag), `"${ghostText}" vs ghost.tag "${ghostTag}"`);
   const whereAfter = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { resource_id: true, start_at: true } });
   check('  …and moves nothing', whereAfter.resource_id === whereBefore.resource_id && whereAfter.start_at.getTime() === whereBefore.start_at.getTime(),
     `${whereBefore.start_at.toISOString()} → ${whereAfter.start_at.toISOString()}`);
@@ -571,6 +719,115 @@ try {
   await pg.waitForSelector('[data-testid="diary-pane"]', { timeout: 20000 }).catch(() => {});
   const afterDrag = await pg.evaluate(() => document.querySelector('[data-testid="diary-pane"]')?.getAttribute('data-card') ?? null);
   check('…AND A CLICK STILL OPENS IT AFTER A DRAG', afterDrag === dragCard, `pane card = ${afterDrag ?? 'NOT OPEN'}`);
+
+  /**
+   * ── A DRAG THAT NEVER LEAVES ITS OWN BLOCK ───────────────────────────────────────────────────
+   * THE CASE EVERY CLAUSE ABOVE MISSES. Each drag so far ends over another column, so the pointer
+   * is no longer over the block it started on and the browser dispatches the click on a common
+   * ancestor — the block's own handler never runs, whatever it says.
+   *
+   * But a two-hour block is 120px tall: press near its top, pull it down half an hour, and the
+   * pointer is STILL inside the block it came from. That gesture both moves the card AND produces a
+   * click on the block — and it is the only thing the travel check in onClick exists for.
+   *
+   * Found by red-proving: removing that check gave 0 RED three different ways, which does not mean
+   * the check is decoration — it means nothing reached it.
+   */
+  await pg.click('[data-testid="diary-pane"] button:has-text("✕")').catch(() => {});
+  await pg.waitForFunction(() => !document.querySelector('[data-testid="diary-pane"]'), null, { timeout: 10000 }).catch(() => {});
+  const beforeNudge = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  // BOTH ENDS DERIVED FROM THE COLUMN, not from viewport arithmetic. The grid scrolls, so a y taken
+  // off the block's own rect and a y the column converts to a time are not the same number — the
+  // first attempt dropped the card at 08:15 while claiming to nudge it by 45 minutes.
+  await pg.locator(`[data-reg="${PREFIX}GEST"]`).scrollIntoViewIfNeeded().catch(() => {});
+  // WAIT FOR THE GEOMETRY TO STOP MOVING, rather than sleeping and hoping. scrollIntoViewIfNeeded
+  // animates, and a rect read mid-flight is a rect that will be wrong by the time the mouse arrives:
+  // the column's top was −241 at measurement and −80 by the drag, so the gate computed 11:00 for a
+  // drop the product correctly read as 08:15. Two consecutive agreeing frames, then measure.
+  await pg.waitForFunction((p) => {
+    const el = document.querySelector(`[data-reg="${p}GEST"]`);
+    if (!el) return false;
+    const now = Math.round(el.getBoundingClientRect().top);
+    const prev = window.__lastTop;
+    window.__lastTop = now;
+    return prev === now;
+  }, PREFIX, { timeout: 15000, polling: 120 }).catch(() => {});
+  // READ OFF THE SCREEN, not off the row. The board can be a beat behind the database after all the
+  // moves this one fixture has had, and the gesture is driven by what is painted — so the expected
+  // landing time is derived from the block's RENDERED position and the column that converts a y to
+  // a time. The property asserted is "the card lands where the pointer was".
+  const nudgeBox = await pg.evaluate((args) => {
+    // THE BLOCK THE POINTER WILL ACTUALLY HIT. There is more than one element carrying this
+    // registration on the page (the desktop grid and the mobile day list both render the booking),
+    // so `querySelector` can hand back one the pointer never touches — which is how a drop landed
+    // at 08:15 while the gate computed 11:00 from a column 161px further up.
+    const all = [...document.querySelectorAll(`[data-reg="${args.p}GEST"]`)];
+    const b = all.map((el) => ({ el, r: el.getBoundingClientRect() })).filter((o) => o.r.width > 0 && o.r.height > 0 && o.el.closest('[data-diary-col]'))[0];
+    if (!b) return null;
+    const x = b.r.left + b.r.width / 2;
+    const y = b.r.top + 10;
+    // Resolved with the SAME hit-test the product uses, so both agree about which column this is.
+    const col = document.elementFromPoint(x, y)?.closest('[data-diary-col]');
+    const c = col?.getBoundingClientRect();
+    return { x, blockTop: b.r.top, height: Math.round(b.r.height), colTop: c?.top ?? null, resource: col?.getAttribute('data-col-resource') ?? null, matches: all.length };
+  }, { p: PREFIX });
+  const colCensus = await pg.evaluate((p) => {
+    const b = document.querySelector(`[data-reg="${p}GEST"]`).getBoundingClientRect();
+    const x = b.left + b.width / 2, y = b.top + 10;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      cols: [...document.querySelectorAll('[data-diary-col]')].map((el) => ({ res: (el.getAttribute('data-col-resource') || '').slice(0, 6), top: Math.round(el.getBoundingClientRect().top), h: Math.round(el.getBoundingClientRect().height) })),
+      press: { x: Math.round(x), y: Math.round(y) },
+      hitTag: hit?.tagName, hitReg: hit?.getAttribute?.('data-reg') ?? null,
+      hitColTop: hit?.closest('[data-diary-col]') ? Math.round(hit.closest('[data-diary-col]').getBoundingClientRect().top) : null,
+      blockColTop: Math.round(document.querySelector(`[data-reg="${p}GEST"]`).closest('[data-diary-col]').getBoundingClientRect().top),
+    };
+  }, PREFIX);
+  console.log('   COLUMN CENSUS ' + JSON.stringify(colCensus));
+  check('premise: the gesture is aimed at the block the POINTER hits, not merely the first in the DOM',
+    !!nudgeBox && nudgeBox.colTop !== null, `${nudgeBox?.matches} element(s) carry this registration; column resolved by hit-test`);
+  const nudgePressY = nudgeBox.blockTop + 10;
+  const nudgeDropY = nudgeBox.blockTop + 55;
+  check('premise: the block is tall enough for the gesture to stay inside it',
+    nudgeBox.height >= 60 && nudgeDropY < nudgeBox.blockTop + nudgeBox.height,
+    `${nudgeBox.height}px tall; the drop sits ${Math.round(nudgeDropY - nudgeBox.blockTop)}px below its top, so the pointer never leaves it`);
+  await pg.mouse.move(nudgeBox.x, nudgePressY);
+  await pg.mouse.down();
+  await pg.mouse.move(nudgeBox.x, nudgeDropY, { steps: 8 });   // +45 minutes, still over the block
+  // THE PRODUCT'S OWN READING OF THE DROP POINT, mid-gesture: the preview carries the start time it
+  // would commit. Compared with the expectation derived above, so a mismatch names which of the two
+  // is wrong instead of leaving a landing time to be explained afterwards.
+  const previewAt = await pg.evaluate(() => {
+    const el = document.querySelector('[data-testid="drop-preview"]');
+    const colEl = el?.closest('[data-diary-col]');
+    return { at: el?.getAttribute('data-at') ?? null, colTop: colEl ? Math.round(colEl.getBoundingClientRect().top) : null, elTop: el ? Math.round(el.getBoundingClientRect().top) : null };
+  });
+  await pg.mouse.up();
+  await pg.waitForFunction(() => document.querySelector('[data-testid="move-result"]')?.getAttribute('data-ok') === '1', null, { timeout: 20000 }).catch(() => {});
+  await pg.waitForTimeout(600);   // longer than the click handler's own 200ms open timer
+  const afterNudge = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { start_at: true, resource_id: true } });
+  const paneAfterNudge = await pg.evaluate(() => !!document.querySelector('[data-testid="diary-pane"]'));
+  /**
+   * ASSERTED AGAINST THE PREVIEW, NOT AGAINST A COORDINATE THE GATE COMPUTED. The grid can move
+   * between a measurement and the gesture — observed here: the column's top read −241 before the
+   * press and −80 during the drag — so an absolute expectation measures the layout's timing rather
+   * than the rule. "It landed where the preview promised" is both stable and the thing a person
+   * actually relies on.
+   */
+  const wasAt = `${String(beforeNudge.start_at.getUTCHours()).padStart(2, '0')}:${String(beforeNudge.start_at.getUTCMinutes()).padStart(2, '0')}`;
+  check('a drag INSIDE its own block previews a NEW time — the gesture really was a move',
+    !!previewAt.at && previewAt.at !== wasAt, `preview said ${previewAt.at}, it was at ${wasAt}`);
+  check('  …and does NOT open the card, though the pointer never left it',
+    paneAfterNudge === false, `pane open = ${paneAfterNudge}`);
+  /**
+   * AND THE PREVIEW IS A PROMISE THE DROP KEEPS. Asserted against the product's own reading of the
+   * drop point, which is the thing a person relies on — and which does not depend on the gate
+   * computing a coordinate. Worth having beside the geometric clause above: that one proves the
+   * column read the pointer correctly, this one proves the commit matched what was shown.
+   */
+  const landedAt = `${String(afterNudge.start_at.getUTCHours()).padStart(2, '0')}:${String(afterNudge.start_at.getUTCMinutes()).padStart(2, '0')}`;
+  check('  …and it lands exactly where the preview promised', landedAt === previewAt.at,
+    `preview said ${previewAt.at}, it landed at ${landedAt}`);
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 400));
 } finally {
