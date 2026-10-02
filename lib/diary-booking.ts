@@ -33,12 +33,26 @@
  * A union rather than an optional flag: a new caller cannot arrive without deciding, and the
  * answer is at the call site where somebody is thinking about it.
  *
+ * ── A HELD BAY CANNOT BE FOUND BY THE PREFILTER (2026-10-02) ────────────────────────────────────
+ * The candidate scan below finds bookings whose START falls inside a 14-day window. That bounds a
+ * booking by its length, which is why SPAN_TOO_LONG exists. A HELD card (lib/held-on-lift: a car
+ * sitting on a bay waiting for parts) has no length at all, so after fourteen days its start would
+ * fall out of the window and the bay it is physically occupying would start being offered again —
+ * silently, and on exactly the morning the hold matters most. SPAN_TOO_LONG cannot be applied to
+ * it either: there is nothing to bound.
+ *
+ * So the hold gets its OWN query, unbounded on the start side and cheap because at most one card
+ * per resource can be in it, asked BEFORE the clash maths so the refusal names the held car rather
+ * than reading as an ordinary double-booking.
+ *
  * Throws: CARD_NOT_FOUND | RESOURCE_NOT_FOUND | CROSS_SITE | EMPTY_FOOTPRINT | CLASH:<reg>
  *       | BILLING_RESTRICTED | SLOT_IS_HISTORY:<status> | NOT_WORKING_TIME | SPAN_TOO_LONG
+ *       | HELD_ON_LIFT:<reg>
  */
 import { Prisma } from '@prisma/client';
 import { computeFootprint, footprintsClash, parseBreaks, isWorkingMoment } from '@/lib/occupancy';
 import { FREES_THE_SLOT, canMoveBooking } from '@/lib/jobcard-status';
+import { HELD_WHERE } from '@/lib/held-on-lift';
 import { canBook, gateFromRow, BILLING_GATE_SELECT } from '@/lib/billing';
 
 export type PlaceParams = {
@@ -122,6 +136,22 @@ export async function placeJobCard(tx: Prisma.TransactionClient, p: PlaceParams)
   // checked and a form cannot promise. Enforced here instead, against the constant it protects, so
   // the two cannot disagree: what is written can never exceed what is searched.
   if (newEnd.getTime() - p.start.getTime() > PREFILTER_LOOKBACK_MS) throw new Error('SPAN_TOO_LONG');
+
+  // ── IS THERE A CAR ALREADY SITTING ON THIS BAY? ─────────────────────────────────────────────
+  // Unbounded on `start_at` deliberately — see the header. The hold runs from `held_since` with no
+  // end, so anything whose footprint reaches past that instant collides with it. A booking that
+  // sits entirely BEFORE the hold began does not, and is still allowed: that is a historical slot,
+  // not a claim on the bay now.
+  const heldCard = await tx.jobCard.findFirst({
+    where: {
+      id: { not: p.jobCardId },
+      resource_id: p.resourceId,
+      ...HELD_WHERE,
+      held_since: { ...HELD_WHERE.held_since, lt: newEnd },
+    },
+    select: { held_since: true, vehicle: { select: { registration: true } } },
+  });
+  if (heldCard) throw new Error(`HELD_ON_LIFT:${heldCard.vehicle?.registration ?? 'another job'}`);
 
   // Superset prefilter (indexed on resource_id, start_at): any existing booking that could overlap
   // must START within [newStart - LOOKBACK, newFootprintEnd]. end_at is NOT trusted here — the exact

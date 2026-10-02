@@ -39,6 +39,7 @@ import { quotePriceUnconfirmed } from '@/lib/quotes-list';
 import { refuseQuoteSend } from '@/lib/quote-acceptance';
 import { acceptanceProvenance, cardAcceptance, PROVENANCE_LABEL, PROVENANCE_SENTENCE } from '@/lib/acceptance-provenance';
 import { latestPreferenceSources } from '@/lib/contact-preferences';
+import { isHeld, heldDays } from '@/lib/held-on-lift';
 
 export async function buildJobCardPageProps(userId: string, groupId: string, cardId: string) {
   // Wave 1 — ONLY user/group-scoped queries (never keyed to the requested card). Defence-in-depth
@@ -383,7 +384,11 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         resourceId: row.resource_id,
         startAt: (row.start_at as Date).toISOString(),
         endAt: (row.end_at as Date).toISOString(),
-        heldOnLift: !!row.held_on_lift,
+        // HELD ON LIFT, derived through lib/held-on-lift: a timestamp is only a hold while the card
+        // is in progress, and that rule has ONE home. `heldDays` is null when it is not held, so
+        // the control below has nothing to decide for itself.
+        heldSince: isHeld(row as any) ? (row.held_since as Date).toISOString() : null,
+        heldDays: heldDays(row as any, new Date()),
         // duration is the source of truth; fall back to (end - start) for pre-backfill rows.
         workingMinutes: row.booking_duration_minutes ?? Math.round(((row.end_at as Date).getTime() - (row.start_at as Date).getTime()) / 60000),
       }

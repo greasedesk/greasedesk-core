@@ -94,5 +94,7 @@
   "fullSite": "Full site →",
   "outboxFailedNamed": "{{reg}} — failed to send, tap to retry or discard",
   "outboxFailedUnknownReg": "A job",
-  "outboxDiscardConfirm": "Discard this upload? It hasn’t been sent and can’t be recovered."
+  "outboxDiscardConfirm": "Discard this upload? It hasn’t been sent and can’t be recovered.",
+  "heldDays_one": "Awaiting parts · {{count}} day",
+  "heldDays_other": "Awaiting parts · {{count}} days"
 }

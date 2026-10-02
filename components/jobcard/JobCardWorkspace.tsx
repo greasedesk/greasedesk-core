@@ -47,7 +47,12 @@ import { formatMoney } from '@/lib/format-money';
 import { refundLines } from '@/lib/invoice-refund-state';
 
 type Resource = { id: string; name: string };
-export type CardBooking = { resourceId: string; startAt: string; endAt: string; heldOnLift: boolean; workingMinutes: number } | null;
+export type CardBooking = {
+  resourceId: string; startAt: string; endAt: string; workingMinutes: number;
+  /** HELD ON LIFT — the car is still on this bay, waiting on parts. Both derived server-side
+   *  (lib/held-on-lift); `heldDays` is null when it is not held. */
+  heldSince: string | null; heldDays: number | null;
+} | null;
 
 /** The mismatch between what was BILLED and what was later agreed. Shaped by lib/jobcard-page-data;
  *  present only where there is a real correction to offer, and only for an admin. */
@@ -1290,6 +1295,26 @@ function QuoteActions(props: {
             <button disabled={busy !== null} onClick={() => saveAll('reschedule', true)} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t('quoteActions.saveReturn')}</button>
             <button disabled={busy !== null} onClick={() => saveAll('reschedule')} className={`${btn} bg-accent-soft text-accent`}>{t('quoteActions.save')}</button>
             <button disabled={busy !== null} onClick={() => call('unbook', `/api/diary?jobCardId=${jobCardId}`, 'DELETE')} className={`${btn} bg-surface-muted text-ink`}>{t('booking.unbook')}</button>
+            {/* ── HOLD THE BAY ────────────────────────────────────────────────────────────────
+                A car waiting on parts is still bolted to the lift, and until now nothing said so:
+                the bay went on being offered to the next booking. Offered only on an in_progress
+                card, which is the only status a hold is valid on (lib/held-on-lift), so the button
+                never appears where the endpoint would refuse it. */}
+            {status === 'in_progress' && (
+              booking?.heldDays != null ? (
+                <button disabled={busy !== null} data-testid="release-bay"
+                  onClick={() => call('hold', '/api/jobcard-hold', 'PATCH', { jobCardId, held: false })}
+                  className={`${btn} bg-warn text-white`}>
+                  {t('booking.release', { count: booking.heldDays })}
+                </button>
+              ) : (
+                <button disabled={busy !== null} data-testid="hold-bay"
+                  onClick={() => call('hold', '/api/jobcard-hold', 'PATCH', { jobCardId, held: true })}
+                  className={`${btn} bg-warn-soft text-warn`}>
+                  {t('booking.hold')}
+                </button>
+              )
+            )}
           </>
         )}
         {canNoShow && !noShowOpen && (

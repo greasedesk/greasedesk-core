@@ -7,6 +7,7 @@
  */
 import { prisma } from '@/lib/db';
 import { HIDDEN_FROM_DIARY } from '@/lib/jobcard-status';
+import { HELD_WHERE } from '@/lib/held-on-lift';
 
 /** Booked cards overlapping [rangeStart, rangeEnd) at a site — the diary's booking query, verbatim.
  *  NOTE: the select carries the money fields the DESKTOP diary needs for its (financeVisibility-
@@ -17,9 +18,27 @@ export function fetchDayBookings(siteId: string, rangeStart: Date, rangeEnd: Dat
     // slot was freed with notice, and a ghost would claim waste that never happened. no_show is NOT
     // hidden: it renders as a greyed ghost (the time genuinely died), while the occupancy guard
     // (FREES_THE_SLOT, lib/diary-booking) still lets a walk-in take the lift.
-    where: { site_id: siteId, resource_id: { not: null }, status: { notIn: HIDDEN_FROM_DIARY }, start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
+    //
+    // ── AND A SECOND ARM, BECAUSE A HOLD HAS NO END (2026-10-02) ──────────────────────────────
+    // The first arm bounds presence by `end_at`, a card's PLANNED end. A car held on a bay keeps
+    // that planned end — the hold does not lengthen the booking, because those minutes are not
+    // sold work — so a car held since last Tuesday is not fetched for today at all, and the tail
+    // the diary is supposed to grow could never come into view. The hold's own arm is unbounded
+    // forward: once `held_since` is before the end of the range, the card is on this board.
+    where: {
+      site_id: siteId,
+      resource_id: { not: null },
+      status: { notIn: HIDDEN_FROM_DIARY },
+      OR: [
+        { start_at: { lt: rangeEnd }, end_at: { gt: rangeStart } },
+        { ...HELD_WHERE, held_since: { ...HELD_WHERE.held_since, lt: rangeEnd } },
+      ],
+    },
     select: {
-      id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true, held_on_lift: true,
+      id: true, resource_id: true, start_at: true, end_at: true, booking_duration_minutes: true, status: true, vat_rate: true, is_comeback: true,
+      // The hold's start. `held_on_lift`, the boolean this replaces, is deliberately NOT selected:
+      // lib/held-on-lift is the one reader of what a hold is.
+      held_since: true,
       // A car WE OWN. Not a status — a statement about whose car it is; see lib/diary-colours.
       stock_item_id: true,
       resource: { select: { name: true, colour: true } }, vehicle: { select: { registration: true } }, customer: { select: { name: true } },

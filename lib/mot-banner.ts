@@ -30,6 +30,8 @@
  * a BUTTON rather than better wording — the remedy for not having asked is to ask.
  */
 
+import { calendarDayDiff } from '@/lib/calendar-days';
+
 /** Four weeks. The window in which it is worth doing while the car is already in. */
 export const MOT_SOON_DAYS = 28;
 
@@ -74,12 +76,10 @@ const asDate = (v: Date | string | null | undefined): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-/** Whole days between two calendar days — floored, date-based, like every other day count here. */
-const dayDiff = (from: Date, to: Date): number => {
-  const a = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
-  const b = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
-  return Math.floor((b - a) / 86_400_000);
-};
+/** Whole days between two calendar days — floored, date-based, like every other day count here.
+ *  THE one implementation now lives in lib/calendar-days, shared with the held-on-lift day count;
+ *  this alias keeps the local reads reading as they did. */
+const dayDiff = calendarDayDiff;
 
 /**
  * WHICH BANNER, AND AGAINST WHICH DAY.

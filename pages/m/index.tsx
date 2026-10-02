@@ -20,7 +20,7 @@ import { hhmm } from '@/lib/diary-time'; // shared diary-time chokepoint (floati
 import OutboxStatus from '@/components/pwa/OutboxStatus';
 import InstallBar from '@/components/pwa/InstallBar';
 
-type DayJob = { id: string; startAt: string | null; endAt: string | null; reg: string; customer: string; resourceName: string | null; service: string; status: string; isComeback: boolean; heldOnLift?: boolean };
+type DayJob = { id: string; startAt: string | null; endAt: string | null; reg: string; customer: string; resourceName: string | null; service: string; status: string; isComeback: boolean; /** Calendar days on the bay; null = not held (derived, lib/held-on-lift). */ heldDays?: number | null };
 type DayNote = { id: string; title: string; colour: string | null; startAt: string; endAt: string; resourceId: string | null };
 type DayData = { siteId: string | null; siteName?: string; sites: Array<{ id: string; name: string }>; date: string | null; isToday?: boolean; notes?: DayNote[]; booked?: DayJob[] };
 type SearchHit = { id: string; reg: string; service: string; status: string; createdAt: string; siteName: string };
@@ -150,8 +150,14 @@ export default function MobileDiaryDay() {
           <span className="block text-xs text-muted truncate">{j.customer}{j.resourceName ? ` · ${j.resourceName}` : ''}</span>
           {j.service && <span className="block text-xs text-muted truncate">{j.service}</span>}
         </span>
-        {j.heldOnLift && j.status !== 'in_progress' && (
-          <span className="shrink-0 text-[11px] font-semibold rounded-full border border-warn bg-warn-soft text-warn px-2 py-1">{t('heldOnLift')}</span>
+        {/* THE CONDITION USED TO BE INVERTED — `status !== 'in_progress'` — so the only case a hold
+            can occur in was the one case the chip was hidden for. It is now asked of the derived
+            fact (lib/held-on-lift, server-side), which is true ONLY on an in_progress card, so the
+            status does not appear here at all and cannot be got the wrong way round again. */}
+        {j.heldDays != null && (
+          <span className="shrink-0 text-[11px] font-semibold rounded-full border border-warn bg-warn-soft text-warn px-2 py-1">
+            {j.heldDays >= 1 ? t('heldDays', { count: j.heldDays }) : t('heldOnLift')}
+          </span>
         )}
         <span className={`shrink-0 text-[11px] font-semibold rounded-full border px-2 py-1 ${chipTone(j.status)}`}>
           {t(`status.${j.status}`)}

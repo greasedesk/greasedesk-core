@@ -191,6 +191,7 @@ const TIERS = {
     'historical-sale-gate',
     'dev-restart-gate',
     'diary-drag-gate',
+    'held-on-lift-gate',
     'fast-set-gate',
     'backup-gate',
     'after-sale-gate',

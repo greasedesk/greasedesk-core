@@ -3033,6 +3033,18 @@ model JobCard {
 
   // --- DIARY scheduling ---
   // start_at / end_at are the SOURCE OF TRUTH for scheduling (continuous time).
+  // HELD ON LIFT — a car occupying its bay open-endedly, almost always awaiting parts. A nullable
+  // TIMESTAMP, not a boolean: "how long has that car been on bay two?" is the question that gets
+  // asked, and nine days on a bay is money a boolean cannot name. NULL = not held.
+  //
+  // It is only a hold while the card is `in_progress` — see lib/held-on-lift, which is THE reader.
+  // Nothing clears it on a transition: status has nine writers outside the transition chokepoint,
+  // so the hold is DERIVED from the status instead and a phantom hold is impossible rather than
+  // remembered. The timestamp stays behind afterwards so history reads without the audit log.
+  held_since               DateTime?
+  // SUPERSEDED by held_since, kept only until the deploy that stops reading it: the live code
+  // selects this column, so dropping it in the same migration would break production before the
+  // push. Nothing new may read or write it.
   held_on_lift             Boolean   @default(false) // job occupying a lift open-endedly (e.g. awaiting parts)
   garage_notes             String? // internal staff notes on the job
   resource_id              String?

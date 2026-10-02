@@ -1,6 +1,11 @@
 /**
  * File: pages/api/jobcard-accept.ts
- * Accept a quote AND book it in ONE atomic step. POST { jobCardId, resourceId, startAt, endAt, heldOnLift? }.
+ * Accept a quote AND book it in ONE atomic step. POST { jobCardId, resourceId, startAt, workingMinutes }.
+ *
+ * The header used to advertise `heldOnLift?` in this body. The handler never read it — a client
+ * sending it was silently ignored — and holding a bay now has its own door (pages/api/jobcard-hold),
+ * which is the only one. `endAt` is likewise gone: the WORKING duration is the source of truth and
+ * an end time is what counted a lunch break as work.
  *
  * Mirrors the proven invoice-mint-on-`invoiced` side-effect pattern: inside a single transaction we
  * placeJobCard (the shared double-booking guard, which THROWS on clash) and only then flip the status
@@ -90,6 +95,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (e: any) {
     const msg = String(e?.message ?? '');
     if (msg === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
+    if (msg.startsWith('HELD_ON_LIFT:')) {
+      return res.status(409).json({ code: 'HELD_ON_LIFT', message: `${msg.slice('HELD_ON_LIFT:'.length)} is being held on that bay, waiting on parts. Release it or use another bay — the quote stays quoted.` });
+    }
     if (msg.startsWith('CLASH:')) {
       return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. The quote stays quoted.' });
     }

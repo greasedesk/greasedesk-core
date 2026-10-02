@@ -15,6 +15,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { getVisibility } from '@/lib/site-visibility';
 import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
+import { heldDays } from '@/lib/held-on-lift';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store'); // freshness is the client cache's job (IndexedDB)
@@ -49,6 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (thisSite?.group_id !== user.group_id) return res.status(404).json({ message: 'Site not found.' }); // belt-and-braces tenant check
 
   // PROJECTION — the money fields on the shared select STOP HERE. Explicit whitelist only.
+  const nowTs = new Date();
   const shape = (c: any) => {
     const { summary } = serviceLabels(c.items ?? []);
     return {
@@ -61,7 +63,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       service: summary,
       status: c.status as string,
       isComeback: !!c.is_comeback,
-      heldOnLift: !!c.held_on_lift,
+      // HELD ON LIFT, derived server-side through lib/held-on-lift — never the raw column, because
+      // whether a timestamp is a HOLD depends on the card's status and the phone must not carry a
+      // copy of that rule. The day count comes with it: "awaiting parts" on its own does not say
+      // that the car has been in the way since last Tuesday.
+      heldDays: heldDays(c as any, nowTs),
     };
   };
 

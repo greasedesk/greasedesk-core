@@ -309,6 +309,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (m === 'RESOURCE_NOT_FOUND') return res.status(404).json({ message: 'Resource not found.' });
       if (m === 'CROSS_SITE') return res.status(400).json({ message: 'A job card can only be placed on a resource at its own location.' });
       if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
+      // A car is physically in the way — a different answer from a clash, so a different message.
+      if (m.startsWith('HELD_ON_LIFT:')) return res.status(409).json({ code: 'HELD_ON_LIFT', clash: true, message: `${m.slice('HELD_ON_LIFT:'.length)} is being held on that bay, waiting on parts. Release it from its job card, or use another bay.` });
       if (m.startsWith('CLASH:')) return res.status(409).json({ message: `Time overlaps ${m.slice(6)} on this resource. Double-booking refused.`, clash: true });
       if (m === 'EMPTY_FOOTPRINT') return res.status(400).json({ message: 'A valid duration is required.' });
       if (m === 'SPAN_TOO_LONG') return res.status(400).json({ code: 'SPAN_TOO_LONG', message: 'That duration would stretch the booking over more than a fortnight of calendar time, which the double-booking check cannot see past. Split it into separate jobs.' });

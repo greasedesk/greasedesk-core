@@ -63,6 +63,7 @@ import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
 import { computeFootprint, parseBreaks, isWorkingMoment, Segment, Break } from '@/lib/occupancy';
+import { isHeld, heldDays, heldTailSegments } from '@/lib/held-on-lift';
 import { canMoveBooking } from '@/lib/jobcard-status';
 import { fetchDayBookings, fetchDayNotes, serviceLabels } from '@/lib/diary-day';
 import { quotePriceUnconfirmed } from '@/lib/quotes-list';
@@ -94,7 +95,11 @@ function PayPill({ status, isComeback, t, className }: { status: string; isComeb
 }
 
 type ResourceCol = { id: string; name: string; type: string; colour: string | null };
-type DiaryCard = { priceUnconfirmed?: { agreedPennies: number; sentPennies: number; differencePennies: number; agreedVersion: number; sentVersion: number } | null; id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; /** A car WE OWN — not a status; takes precedence over the band (lib/diary-colours). */ isStock?: boolean; valuePennies: number; segments: Segment[] };
+type DiaryCard = { priceUnconfirmed?: { agreedPennies: number; sentPennies: number; differencePennies: number; agreedVersion: number; sentVersion: number } | null; id: string; resourceId: string; resourceName: string; resourceColour: string | null; reg: string; customer: string; serviceSummary: string; services: string[]; startAt: string; endAt: string; status: string; isComeback?: boolean; /** A car WE OWN — not a status; takes precedence over the band (lib/diary-colours). */ isStock?: boolean; valuePennies: number; segments: Segment[];
+  /** HELD ON LIFT. `heldTail` is the hatched claim PAST the booking's own end, per day in the range
+   *  (lib/held-on-lift). `heldDayCount` is calendar days, null when the card is not held — a card
+   *  that has moved on carries neither, because the hold is derived from the status server-side. */
+  heldTail?: Segment[]; heldDayCount?: number | null; heldSince?: string | null };
 type DiaryNoteView = { id: string; title: string; resourceId: string | null; colour: string | null; startAt: string; endAt: string };
 type DayCol = { date: string; label: string };
 type DiaryView = 'day' | 'week' | 'month' | 'year';
@@ -578,6 +583,60 @@ function DropPreview({ col, ctx }: { col: { date: string; resourceId?: string };
         </div>
       ))}
     </>
+  );
+}
+/**
+ * ── HELD ON LIFT: THE TAIL ──────────────────────────────────────────────────────────────────────
+ * A car waiting on parts is still bolted to the bay, so the bay keeps being claimed after the
+ * booking's planned end. This is that claim: a hatch in the card's OWN status colour, extending
+ * forward with no end date, carrying the day count once it is over a day.
+ *
+ * IT IS NOT A GHOST, and must not read like one. A ghost is a slot that went to waste and is now
+ * free; this is a slot that is MORE occupied than planned. Grey and dashed — the ghost's and the
+ * lunch band's treatment — would say the opposite of what is true, so the hatch is struck through
+ * the status colour and reads as the block continuing.
+ *
+ * NOT DRAGGABLE. There is nothing here to move: the booking is moved from its own block, on its
+ * own day. A click opens the card, because on day five of a hold the tail is the ONLY thing on
+ * screen for that car and the card would otherwise be unreachable from the diary.
+ */
+function HeldTail({ c, fromMs, top, height, leftPct, widthPct, ctx }: { c: DiaryCard; fromMs: number; top: number; height: number; leftPct: number; widthPct: number; ctx: DiaryBlockCtx }) {
+  const { t, cardFill, onBlockClick, dropIfArmed } = ctx;
+  const colour = cardFill(c) ?? '#f59e0b';
+  const days = c.heldDayCount ?? 0;
+  return (
+    <div
+      data-testid="held-tail"
+      data-card={c.id}
+      data-held-days={days}
+      /* WHERE THIS BAND ACTUALLY STARTS, from the box being drawn rather than from a prop. It is
+         what lets a clause assert that the hatch begins where the BOOKING stops instead of on top
+         of it — the thing `notBefore` decides, which nothing could otherwise see. */
+      data-from={hhmm(new Date(fromMs).toISOString())}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (dropIfArmed(e.clientX, e.clientY)) return;   // a tap here is also a drop, like a block
+        onBlockClick(c, e);
+      }}
+      style={{
+        top, height, left: `${leftPct}%`, width: `calc(${widthPct}% - 3px)`,
+        borderColor: colour,
+        backgroundColor: `${colour}1f`,
+        backgroundImage: `repeating-linear-gradient(135deg, ${colour}59 0, ${colour}59 2px, transparent 2px, transparent 8px)`,
+        cursor: 'pointer',
+      }}
+      className="diary-block absolute rounded-md overflow-hidden border-2 select-none"
+      title={t('held.title', { reg: c.reg, days })}
+    >
+      {/* The count only once it is over a day: "held" on the afternoon it started says enough, and
+          "0 days" is the kind of figure somebody reads as a bug. */}
+      {height > 22 && (
+        <span className="block text-[10px] font-semibold px-1 pt-0.5 truncate" style={{ color: colour }}>
+          {days >= 1 ? t('held.days', { count: days }) : t('held.short')}
+        </span>
+      )}
+    </div>
   );
 }
 function NoteBlock({ n, top, height, leftPct, widthPct, ctx }: { n: DiaryNoteView; top: number; height: number; leftPct: number; widthPct: number; ctx: DiaryBlockCtx }) {
@@ -1067,7 +1126,9 @@ export default function DiaryPage(props: PageProps) {
     router.push(`/admin/diary?site=${siteId}&view=day&date=${dx < 0 ? next : prev}`);
   };
 
-  type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard } | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
+  type Item = { s: number; e: number; top: number; height: number; kind: 'job'; card: DiaryCard }
+    | { s: number; e: number; top: number; height: number; kind: 'held'; card: DiaryCard }
+    | { s: number; e: number; top: number; height: number; kind: 'note'; note: DiaryNoteView };
 
   /**
    * THE BLOCK CONTEXT, built once per render and handed to the three block components, which now
@@ -1374,6 +1435,14 @@ export default function DiaryPage(props: PageProps) {
                     for (const c of cards) {
                       if (view === 'day' && c.resourceId !== col.resourceId) continue;
                       for (const sg of segmentsForDay(c, col.date)) items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'job', card: c });
+                      // The hold's hatched claim. Laid out with the blocks rather than washed across
+                      // the column, because in week view one column holds every bay and only ONE of
+                      // them has a car bolted to it.
+                      if (c.heldTail?.length) {
+                        for (const sg of segmentsForDay({ startAt: '', endAt: '', segments: c.heldTail }, col.date)) {
+                          items.push({ s: sg.s, e: sg.e, top: sg.top, height: sg.height, kind: 'held', card: c });
+                        }
+                      }
                     }
                     for (const n of notes) {
                       if (view === 'day') { if (n.resourceId !== col.resourceId) continue; } // day-level handled by banner
@@ -1445,6 +1514,8 @@ export default function DiaryPage(props: PageProps) {
                           ))}
                           {placed.map((x) => x.kind === 'job'
                             ? <JobBlock key={`${x.card.id}-${x.top}`} c={x.card} col={col} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} ctx={blockCtx} />
+                            : x.kind === 'held'
+                            ? <HeldTail key={`h${x.card.id}-${x.top}`} c={x.card} fromMs={x.s} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} ctx={blockCtx} />
                             : <NoteBlock key={`${x.note.id}-${x.top}`} n={x.note} top={x.top} height={x.height} leftPct={(x.col / x.cols) * 100} widthPct={100 / x.cols} ctx={blockCtx} />)}
                           {/* WHERE IT WOULD LAND — drawn from computeFootprint, so a job dropped
                               before lunch shows as two bands exactly as it will once saved, and a
@@ -2312,6 +2383,9 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
   // Financial visibility for THIS user — decides what money is even sent to the client (server-gated).
   const fin = financeVisibility(vis, perms);
   const rangeStartMs = rangeStart.getTime(), rangeEndMs = rangeEnd.getTime();
+  // ONE clock for the whole response: two cards judged against two different instants is how a
+  // board comes back saying one car has been held 8 days and the one beside it 9 for the same hour.
+  const nowTs = new Date();
   let bookedPennies = 0, marginPennies = 0;
   const dayAgg: Record<string, { booked: number; margin: number }> = {}; // per-day totals (week view)
   const cards: DiaryCard[] = cardRows.map((c) => {
@@ -2342,6 +2416,20 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
      * this month's margin as well as adding them to the car's cost base counts the same turbo twice,
      * in opposite directions. The spend shows against the car in the yard. See lib/stock-prep.
      */
+    // ── HELD ON LIFT: THE TAIL AND THE COUNT ──────────────────────────────────────────────────
+    // Derived here rather than sent as a raw timestamp, because whether a card is HELD depends on
+    // its status (lib/held-on-lift) and that rule must not be re-implemented on the client. The
+    // tail starts at the booking's own end — up to there the bay is already drawn in the status
+    // colour — and runs forward with no end, one segment set per calendar day in the range.
+    const heldTail: Segment[] = [];
+    if (isHeld(c as any)) {
+      for (let d = rangeStartMs; d < rangeEndMs; d += 86400000) {
+        heldTail.push(...heldTailSegments({
+          card: c as any, dayStartISO: new Date(d).toISOString(),
+          openHour, closeHour, openDays, breaks, notBefore: fp.endISO,
+        }));
+      }
+    }
     const isStock = !!c.stock_item_id;
     const revenueEx = (c.is_comeback || isStock) ? 0 : (totals.labour_pennies + totals.parts_pennies);
     const partsCostEx = isStock ? 0 : totals.parts_cost_pennies;
@@ -2379,6 +2467,7 @@ export const getServerSideProps = withI18n(['diary', 'jobcard'])(async (ctx) => 
       // is a money disclosure, so it follows the same see-values permission as the block value.
       priceUnconfirmed: fin.seeValues ? quotePriceUnconfirmed(c.quoteVersions ?? []) : null,
       segments: fp.segments,
+      heldTail, heldDayCount: heldDays(c as any, nowTs), heldSince: isHeld(c as any) ? (c.held_since as Date).toISOString() : null,
     };
   });
   // Per-day totals for week view (gated the same as the period totals).

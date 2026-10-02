@@ -125,6 +125,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           message: 'The garage is closed then. Drop it inside opening hours — it will not be nudged to the next open slot.' });
       }
       if (m === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
+      // A HELD BAY, NAMED. Deliberately not folded into CLASH: a clash is two plans disagreeing and
+      // the answer is to pick another time, while this is a car physically in the way and the answer
+      // is to release it or use another bay. A refusal that does not say which does not help.
+      if (m.startsWith('HELD_ON_LIFT:')) {
+        const reg = m.slice('HELD_ON_LIFT:'.length);
+        return res.status(409).json({ code: 'HELD_ON_LIFT', reg, clash: true,
+          message: `${reg} is being held on that bay, waiting on parts. Release it from its job card, or use another bay.` });
+      }
       if (m.startsWith('CLASH:')) {
         return res.status(409).json({ code: 'CLASH', message: 'That resource isn’t available for that duration. Double-booking refused.', clash: true });
       }
@@ -143,7 +151,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.jobCard.update({
         where: { id: jobCardId },
-        data: { resource_id: null, start_at: null, end_at: null, held_on_lift: false, scheduled_date: null, start_slot: null, end_slot: null },
+        // UNPLACING CLEARS THE HOLD. A hold is a claim on a BAY, and this card no longer has one;
+        // leaving the timestamp would make the card read as held with nothing to hold. (`held_on_lift`
+        // is the superseded boolean, cleared alongside until the column is retired.)
+        data: { resource_id: null, start_at: null, end_at: null, held_since: null, held_on_lift: false, scheduled_date: null, start_slot: null, end_slot: null },
       });
       await writeAudit(tx, { groupId: user.group_id as string, userId: user.id as string, jobCardId, action: 'booking.removed' });
     });

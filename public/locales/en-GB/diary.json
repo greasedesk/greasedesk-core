@@ -248,5 +248,11 @@
     "pending": "Moving…",
     "locked": "That job cannot be moved — its slot is a record of what happened.",
     "hint": "Drag a booking to move it. Right-click for everything else."
+  },
+  "held": {
+    "title": "{{reg}} — held on this bay, waiting on parts ({{days}} days so far)",
+    "days_one": "Held {{count}} day",
+    "days_other": "Held {{count}} days",
+    "short": "Held"
   }
 }

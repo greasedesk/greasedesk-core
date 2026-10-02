@@ -65,6 +65,8 @@ export type AuditAction =
   | 'marketing.sent'
   | 'comeback.marked'       // marked as warranty/comeback (zero-revenue)
   | 'comeback.cleared'      // comeback flag removed
+  | 'hold.placed'           // car held on its bay open-endedly (awaiting parts); diff carries heldSince
+  | 'hold.released'         // the bay given back; diff carries the heldSince it ended
   | 'stock_prep.linked'     // card marked as preparing a car WE OWN — bills nobody, costs the stock item
   | 'stock_prep.unlinked'   // back to an ordinary customer card, and invoiceable again
   | 'stock.sold'            // a car sold out of stock: disposal, ownership to the buyer, sale card and invoice, one transaction

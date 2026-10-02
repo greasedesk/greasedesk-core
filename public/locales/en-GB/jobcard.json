@@ -142,7 +142,11 @@
     "saved": "Booked onto the diary.",
     "removed": "Removed from the diary.",
     "error": "Could not save the booking.",
-    "readOnly": "Only a manager or admin can schedule a job."
+    "readOnly": "Only a manager or admin can schedule a job.",
+    "hold": "Hold the bay (awaiting parts)",
+    "release_zero": "Release the bay",
+    "release_one": "Release the bay ({{count}} day)",
+    "release_other": "Release the bay ({{count}} days)"
   },
   "notes": {
     "title": "Garage notes",

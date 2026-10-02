@@ -285,6 +285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (e: any) {
     const msg = String(e?.message ?? e);
     if (msg === 'BILLING_RESTRICTED') return res.status(402).json({ code: 'billing_restricted', message: 'Your subscription payment hasn’t arrived, so new bookings are paused. Everything already in the workshop can be finished, quoted and invoiced as normal.' });
+    if (msg.startsWith('HELD_ON_LIFT:')) return res.status(409).json({ code: 'HELD_ON_LIFT', message: `${msg.slice('HELD_ON_LIFT:'.length)} is being held on that bay, waiting on parts.` });
     if (msg.startsWith('CLASH:')) return res.status(409).json({ message: `That lift is already taken at that time (${msg.slice(6)}).` });
     if (msg === 'EMPTY_FOOTPRINT') return res.status(409).json({ message: 'That date/time falls outside the site\'s working hours — pick a working day.' });
     // The post-commit assertion refused: a REFUSAL, not a crash. The operator needs the arithmetic,
