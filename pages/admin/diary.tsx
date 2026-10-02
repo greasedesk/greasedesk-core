@@ -595,11 +595,25 @@ export default function DiaryPage(props: PageProps) {
   // close over a stale render's copy.
   const dragRef = useRef<DragState | null>(null);
   const putDrag = (d: DragState | null) => { dragRef.current = d; setDrag(d); };
+  /**
+   * ── A PRESS MUST NOT SET STATE, OR THE CLICK NEVER HAPPENS ──────────────────────────────────
+   * JobBlock, NoteBlock and DropPreview are declared INSIDE this component, so every page render
+   * gives them a new component identity and React UNMOUNTS and remounts each block rather than
+   * reconciling it. Harmless for twenty months — until a pointerdown handler set state, which
+   * destroyed the very element the press started on. A click needs ONE element for down and up, so
+   * the browser dispatched NONE and clicking a booking stopped opening its card (live, 2026-10-01,
+   * found by the owner the morning after the drag shipped).
+   *
+   * So the START of a gesture lives in a ref and touches no state. State is set only once the
+   * pointer has actually travelled — by then it IS a drag, the remount is harmless because every
+   * handler is on `window`, and the click that will not arrive is the one we did not want.
+   *
+   * Measured in diary-drag-gate: the element under the pointer must still be in the document at
+   * pointerup. That clause outlives this gesture and is why the next one cannot break it quietly.
+   */
+  const pressRef = useRef<{ card: DiaryCard; x0: number; y0: number; movable: boolean } | null>(null);
   const [moving, setMoving] = useState<string | null>(null);   // card id, while the server decides
   const [moveMsg, setMoveMsg] = useState<{ text: string; ok: boolean; undo?: { card: DiaryCard; from: { resourceId: string | null; startAt: string | null; workingMinutes: number | null } } } | null>(null);
-  // A drag ends in a `pointerup`, which the browser follows with a `click`. Without this the card
-  // would open the moment it was dropped.
-  const swallowClick = useRef(false);
 
   /** Which column, and what time, is under this point. NULL anywhere that is not a day column. */
   function targetFromPoint(cx: number, cy: number, card: DiaryCard): DropTarget | null {
@@ -672,20 +686,28 @@ export default function DiaryPage(props: PageProps) {
   // ONE registration, reading the ref. Pointer events cover mouse and pen; touch never reaches
   // here, because a touch gesture is the armed pick-up instead.
   useEffect(() => {
+    const travelled = (e: PointerEvent, p: { x0: number; y0: number }) =>
+      Math.abs(e.clientX - p.x0) >= DRAG_THRESHOLD_PX || Math.abs(e.clientY - p.y0) >= DRAG_THRESHOLD_PX;
     const onMove = (e: PointerEvent) => {
+      // STILL JUST A PRESS: nothing has been promoted to state, so nothing has remounted and the
+      // click is still on its way. The first move past the threshold is what makes it a drag.
+      const p = pressRef.current;
+      if (p && p.movable && !dragRef.current && travelled(e, p)) {
+        putDrag({ card: p.card, mode: 'pointer', x0: p.x0, y0: p.y0, moved: true, target: targetFromPoint(e.clientX, e.clientY, p.card) });
+      }
       const g = dragRef.current;
       if (!g || g.mode !== 'pointer') return;
-      if (!g.moved && Math.abs(e.clientX - g.x0) < DRAG_THRESHOLD_PX && Math.abs(e.clientY - g.y0) < DRAG_THRESHOLD_PX) return;
       e.preventDefault();
       putDrag({ ...g, moved: true, target: targetFromPoint(e.clientX, e.clientY, g.card) });
     };
     const onUp = (e: PointerEvent) => {
       const g = dragRef.current;
-      if (!g || g.mode !== 'pointer') return;
+      // A PRESS THAT NEVER TRAVELLED IS A CLICK, and it is left entirely alone: no state was set,
+      // the element survived, and the browser's own click is about to do the work.
+      if (!g || g.mode !== 'pointer') { pressRef.current = null; return; }
       putDrag(null);
-      if (!g.moved) return;                      // a press that never travelled is a click
-      swallowClick.current = true;
       const target = targetFromPoint(e.clientX, e.clientY, g.card) ?? g.target;
+      pressRef.current = null;
       if (target) void commitMove(g.card, target);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && dragRef.current) putDrag(null); };
@@ -797,15 +819,31 @@ export default function DiaryPage(props: PageProps) {
       <div
         onPointerDown={(e) => {
           e.stopPropagation();
-          // TOUCH IS DELIBERATELY NOT HERE: the finger keeps the scroll and the long-press menu,
-          // and a touch move is the armed pick-up instead.
-          if (!movable || pending || e.pointerType === 'touch' || e.button !== 0) return;
-          putDrag({ card: c, mode: 'pointer', x0: e.clientX, y0: e.clientY, moved: false, target: null });
+          // A REF, NEVER STATE. Setting state here remounts this very element and the click that
+          // opens the card is never dispatched — see pressRef. Recorded for EVERY press, movable or
+          // not, so the click below always compares against the gesture it belongs to.
+          //
+          // TOUCH IS DELIBERATELY NOT DRAGGABLE: the finger keeps the scroll and the long-press
+          // menu, and a touch move is the armed pick-up instead.
+          pressRef.current = { card: c, x0: e.clientX, y0: e.clientY, movable: movable && !pending && e.pointerType !== 'touch' && e.button === 0 };
         }}
         onClick={(e) => {
           e.stopPropagation();
           if (dropIfArmed(e.clientX, e.clientY)) return;      // a tap on a card is also a drop
-          if (swallowClick.current) { swallowClick.current = false; return; }
+          // DID THIS GESTURE TRAVEL? Asked of the press it came from, with the SAME threshold the
+          // drag uses — not a flag set elsewhere. A boolean set on drag-end is left true forever
+          // when the pointer lands on another column and no click ever arrives to clear it, and
+          // the next honest click is the one it eats.
+          //
+          // REDUNDANT TODAY, AND KEPT ON PURPOSE (2026-10-02). Removing it changes no outcome,
+          // because a real drag sets state, which remounts this element, so the browser dispatches
+          // no click here at all. It becomes load-bearing the moment that stops being true — which
+          // is precisely what hoisting JobBlock out of the page component would do, and that is a
+          // change somebody should make. The GATE asserts the outcome ("a drag did not open the
+          // card") rather than either mechanism, so the property survives whichever one delivers it.
+          const p = pressRef.current;
+          pressRef.current = null;
+          if (p && (Math.abs(e.clientX - p.x0) >= DRAG_THRESHOLD_PX || Math.abs(e.clientY - p.y0) >= DRAG_THRESHOLD_PX)) return;
           onBlockClick(c, e);
         }}
         onDoubleClick={(e) => { if (!ghost) onBlockDbl(c, e); }}
@@ -1304,7 +1342,7 @@ export default function DiaryPage(props: PageProps) {
                 same component + data builder as the routed page (via /api/jobcard-pane), so the day
                 stays visible above while the selected job is worked below. */}
             {view === 'day' && pane && (
-              <div className="hidden md:block mt-6 border-t-2 border-line pt-4">
+              <div className="hidden md:block mt-6 border-t-2 border-line pt-4" data-testid="diary-pane" data-card={pane.cardId}>
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <h2 className="text-xl font-bold text-ink">{pane.data?.registration ?? '…'}</h2>
                   <div className="flex items-center gap-3">

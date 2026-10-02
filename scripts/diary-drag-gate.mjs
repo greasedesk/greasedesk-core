@@ -488,6 +488,89 @@ try {
   check('ONE TAP on the diary drops it there — the finger was never captured, so the scroll still works',
     tapped.resource_id === lift2.id && tapped.start_at.getTime() === at1(10).getTime(),
     `${tapped.start_at.toISOString()} on ${tapped.resource_id === lift2.id ? 'lift2' : 'elsewhere'}`);
+
+  // ── AND THE THING THE DRAG SITS ON TOP OF ────────────────────────────────────────────────────
+  // A CLICK OPENS THE CARD. This gate proved the drag in forensic detail and never proved the
+  // gesture the drag was added to, so when the press began setting state — which remounts the very
+  // block it started on, because JobBlock is declared inside the page component — the browser
+  // dispatched no click at all and clicking a booking silently stopped opening its card. Live for a
+  // day. 81 green clauses and not one of them noticed.
+  //
+  // Both halves now live here, because they are one gesture with two outcomes: travel past the
+  // threshold moves the card, and anything less opens it.
+  console.log('\n— a click opens the card, which is what the drag sits on top of —');
+  await pg.goto(diaryUrl, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector(`[data-reg="${PREFIX}GEST"]`, { timeout: 30000 });
+  /**
+   * THE PROPERTY THAT OUTLIVES THIS GESTURE: the element the pointer went down on must still be in
+   * the document at pointerup. A click requires ONE element for both, so a handler that remounts it
+   * destroys the click without touching a click handler — which is why no amount of reading the
+   * click path would have found this. Measured, not scanned.
+   */
+  await pg.evaluate((p) => {
+    window.__press = {};
+    document.addEventListener('pointerdown', () => { window.__press.down = document.querySelector(`[data-reg="${p}GEST"]`); }, true);
+    document.addEventListener('pointerup', () => { window.__press.survived = document.contains(window.__press.down); }, true);
+    window.__clicks = 0;
+    document.addEventListener('click', (e) => { if (e.target?.closest?.('.diary-block')) window.__clicks += 1; }, true);
+  }, PREFIX);
+  const seat = await pg.evaluate((p) => { const r = document.querySelector(`[data-reg="${p}GEST"]`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 10 }; }, PREFIX);
+  const whereBefore = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { resource_id: true, start_at: true } });
+  await pg.mouse.click(seat.x, seat.y);
+  await pg.waitForSelector('[data-testid="diary-pane"]', { timeout: 20000 }).catch(() => {});
+  const clicked = await pg.evaluate(() => ({
+    survived: window.__press.survived,
+    clicks: window.__clicks,
+    pane: document.querySelector('[data-testid="diary-pane"]')?.getAttribute('data-card') ?? null,
+  }));
+  check('the element under the pointer SURVIVES the press — a press that sets state destroys its own click',
+    clicked.survived === true, `document.contains(down-node) at pointerup = ${clicked.survived}`);
+  check('  …so the browser dispatches a click at all', clicked.clicks === 1, `${clicked.clicks} click(s) on a block`);
+  check('A PLAIN CLICK OPENS THE JOB CARD', clicked.pane === dragCard, `pane card = ${clicked.pane ?? 'NOT OPEN'}`);
+  const whereAfter = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { resource_id: true, start_at: true } });
+  check('  …and moves nothing', whereAfter.resource_id === whereBefore.resource_id && whereAfter.start_at.getTime() === whereBefore.start_at.getTime(),
+    `${whereBefore.start_at.toISOString()} → ${whereAfter.start_at.toISOString()}`);
+
+  // AND IT STILL WORKS AFTER A DRAG. The first version suppressed the post-drag click with a
+  // boolean set on drag-end — left true forever when the pointer lands on another column and no
+  // click arrives to clear it, so the next honest click was the one it ate.
+  // CLOSE THE PANE THE CLICK ABOVE OPENED, or "the drag did not open the card" is measured against
+  // a card the previous clause opened — green or red for a reason that has nothing to do with the
+  // drag. Closed by its own button rather than by reloading, because a reload would also wipe the
+  // in-memory suppression this sequence exists to test.
+  await pg.click('[data-testid="diary-pane"] button:has-text("✕")');
+  await pg.waitForFunction(() => !document.querySelector('[data-testid="diary-pane"]'), null, { timeout: 10000 }).catch(() => {});
+  check('  …and the pane closes again, so the next clause measures the drag and not this click',
+    (await pg.evaluate(() => !document.querySelector('[data-testid="diary-pane"]'))) === true);
+  // RE-MEASURED, not reused: opening and closing the pane adds and removes a panel below the grid,
+  // and the coordinates taken before the click are not the ones on screen after it.
+  const geo2 = await pg.evaluate((args) => {
+    const b = document.querySelector(`[data-reg="${args.p}GEST"]`).getBoundingClientRect();
+    const c = document.querySelector(`[data-col-resource="${args.id}"]`).getBoundingClientRect();
+    return { block: { x: b.left + b.width / 2, y: b.top + 10 }, col: { left: c.left, width: c.width, top: c.top } };
+  }, { p: PREFIX, id: lift1.id });
+  const col1b = geo2.col;
+  await pg.mouse.move(geo2.block.x, geo2.block.y);
+  await pg.mouse.down();
+  await pg.mouse.move(col1b.left + col1b.width / 2, col1b.top + 12 * 60, { steps: 10 });
+  await pg.mouse.up();
+  await pg.waitForFunction(() => document.querySelector('[data-testid="move-result"]')?.getAttribute('data-ok') === '1', null, { timeout: 20000 }).catch(() => {});
+  const draggedTo = await prisma.jobCard.findUnique({ where: { id: dragCard }, select: { resource_id: true, start_at: true } });
+  const paneAfterDrag = await pg.evaluate(() => !!document.querySelector('[data-testid="diary-pane"]'));
+  check('a DRAG still moves it', draggedTo.resource_id === lift1.id && draggedTo.start_at.getTime() === at1(12).getTime(), draggedTo.start_at.toISOString());
+  // ASSERTED, NOT IMPLIED. This clause used to be named "…and did not open the card on the way"
+  // while checking only the move — a detail line naming a cause it had not established.
+  check('  …and did not open the card on the way', paneAfterDrag === false, `pane open after the drag = ${paneAfterDrag}`);
+  // NO RELOAD between the drag and the click. The real sequence is drag-then-click on one page
+  // load, and a reload would wipe any in-memory suppression flag — hiding exactly the bug the
+  // first version of this feature shipped with. The board refreshes itself through the router, so
+  // the block is back in place without the page being thrown away.
+  await pg.waitForSelector(`[data-reg="${PREFIX}GEST"]`, { timeout: 30000 });
+  const seat2 = await pg.evaluate((p) => { const r = document.querySelector(`[data-reg="${p}GEST"]`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 10 }; }, PREFIX);
+  await pg.mouse.click(seat2.x, seat2.y);
+  await pg.waitForSelector('[data-testid="diary-pane"]', { timeout: 20000 }).catch(() => {});
+  const afterDrag = await pg.evaluate(() => document.querySelector('[data-testid="diary-pane"]')?.getAttribute('data-card') ?? null);
+  check('…AND A CLICK STILL OPENS IT AFTER A DRAG', afterDrag === dragCard, `pane card = ${afterDrag ?? 'NOT OPEN'}`);
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 400));
 } finally {
