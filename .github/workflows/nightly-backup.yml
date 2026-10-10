@@ -61,6 +61,67 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # ── WHICH SECRETS CAN THIS JOB ACTUALLY SEE? ──────────────────────────────────────────────
+      # FIRST step, before checkout, so a missing secret costs seconds instead of a minute — and so
+      # ALL SIX are named in one run. Nine consecutive nights failed one cause at a time, each night
+      # reporting only the first thing it tripped over; discovering six secrets six nights apart is
+      # not a diagnosis, it is a queue.
+      #
+      # It also replaces a refusal that named the wrong conclusion. With an empty connection string
+      # pg_dump falls back to a local Unix socket and reports
+      #   "connection to server on socket /var/run/postgresql/.s.PGSQL.5432 failed: No such file or
+      #    directory ... Is the server running locally?"
+      # which reads as a networking fault and is in fact an unset variable. Four nights were spent
+      # believing the first sentence.
+      #
+      # NO VALUE IS EVER PRINTED — not a length, not a prefix. This repository is PUBLIC. Only
+      # present/MISSING per name, and two shape booleans on the connection string. GitHub masks
+      # secret values as *** anyway; this step is written so there is nothing to mask.
+      - name: Preflight — which secrets are visible to this job
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Deliberately NOT -e: every missing name must be reported, not only the first.
+          set -uo pipefail
+          missing=0
+          for n in BACKUP_DATABASE_URL BACKUP_PASSPHRASE R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [ -z "${!n:-}" ]; then
+              echo "  MISSING  $n"
+              missing=$((missing + 1))
+            else
+              echo "  present  $n"
+            fi
+          done
+
+          # Shape, not content. A secret that is SET but wrong fails later with a worse message.
+          if [ -n "${BACKUP_DATABASE_URL:-}" ]; then
+            case "$BACKUP_DATABASE_URL" in
+              postgres://*|postgresql://*) echo "  shape    BACKUP_DATABASE_URL scheme ok" ;;
+              *) echo "::error::BACKUP_DATABASE_URL is set but does not begin postgres:// or postgresql://"; missing=$((missing + 1)) ;;
+            esac
+            # pg_dump cannot use the pooler: it needs a plain session, and the header says so.
+            case "$BACKUP_DATABASE_URL" in
+              *-pooler.*) echo "::error::BACKUP_DATABASE_URL points at the POOLER. pg_dump needs the DIRECT endpoint."; missing=$((missing + 1)) ;;
+              *) echo "  shape    BACKUP_DATABASE_URL is not the pooler host" ;;
+            esac
+          fi
+
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$missing secret(s) are missing or malformed for this job — see the list above. Nothing was dumped."
+            echo "A name printed MISSING above is EMPTY as this job sees it. Four things produce that:"
+            echo "  1. the name differs from the workflow's (it reads secrets.BACKUP_DATABASE_URL etc., exactly)"
+            echo "  2. it is an ENVIRONMENT secret, and this job declares no 'environment:', so it cannot see one"
+            echo "  3. it is an ORGANISATION secret whose repository-access policy excludes this repo"
+            echo "  4. it is a VARIABLE (vars.*) rather than a SECRET (secrets.*)"
+            exit 1
+          fi
+          echo "all six secrets are visible to this job"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
