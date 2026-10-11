@@ -188,9 +188,51 @@ try {
    * REAL tenant can carry one — and until the code is deployed, a row on a real tenant would meet a
    * production reader that has never heard of the value.
    */
-  const strayReal = await prisma.invoice.count({ where: { series: 'vehicle_sale', group_id: { not: ZZ_GROUP } } });
-  check('no vehicle_sale invoice exists on any real tenant', strayReal === 0,
-    `${strayReal} — there is no UI that mints one, and a deployed reader has not met the value yet`);
+  /**
+   * ── AND THAT CLAUSE HAS NOW EXPIRED TOO (2026-10-11) ──────────────────────────────────────────
+   * It said "no vehicle_sale invoice exists on any real tenant", resting on two reasons written
+   * into it above: the mint had no entry point outside this gate, and the code was not deployed.
+   * BOTH are now false. The Sell-this-car path shipped, production runs it, and the owner sold a
+   * car through it on 2026-10-06 (VS1, NU14KUF). A guard whose hazard is gone is a blindfold: this
+   * one would have gone red on correct use for as long as nobody re-read it.
+   *
+   * THE CLAIM THAT SURVIVES is not "none exists" — it is that every one that does is WELL FORMED.
+   * Asserted as a pure predicate over the rows, and red-proved against synthetic rows below,
+   * because the only candidates on a real tenant are the owner's own sales and those are not
+   * fixtures to break (destructive-gate-discipline).
+   */
+  const wellFormed = (r) => {
+    const faults = [];
+    if (!r.stock_disposal_id) faults.push('no linked StockDisposal — a car sale with no car');
+    if (!r.vat_position) faults.push('vat_position is null — VAT_RETURN_TREATMENT returns "unclassified"');
+    else if (!['margin', 'qualifying'].includes(r.vat_position)) faults.push(`vat_position "${r.vat_position}" is not a known position`);
+    if (!r.date_issued) faults.push('no date_issued — nothing to period-match VAT on');
+    if (r.is_imported && !r.external_ref) faults.push('is_imported with no external_ref — claims to be imported with no original to point at');
+    return faults;
+  };
+  const realSales = await prisma.invoice.findMany({
+    where: { series: 'vehicle_sale', group_id: { not: ZZ_GROUP } },
+    select: { invoice_number: true, stock_disposal_id: true, vat_position: true, date_issued: true, is_imported: true, external_ref: true },
+  });
+  const malformed = realSales.flatMap((r) => wellFormed(r).map((f) => `${r.invoice_number}: ${f}`));
+  check(`every vehicle_sale invoice on a real tenant is well formed (${realSales.length} found)`,
+    malformed.length === 0, malformed.join(' | ') || 'disposal linked, VAT position known, dated, import marker self-consistent');
+
+  // RED-PROVED HERE, not against the owner's rows. A predicate asserted only over data that happens
+  // to be correct is a predicate nobody has watched fail.
+  {
+    const ok = { invoice_number: 'T', stock_disposal_id: 'd', vat_position: 'margin', date_issued: new Date(), is_imported: false, external_ref: null };
+    const cases = [
+      ['a sale with no disposal', { ...ok, stock_disposal_id: null }],
+      ['a null vat_position', { ...ok, vat_position: null }],
+      ['an unknown vat_position', { ...ok, vat_position: 'standard' }],
+      ['no date_issued', { ...ok, date_issued: null }],
+      ['imported with no external_ref', { ...ok, is_imported: true, external_ref: null }],
+    ];
+    const caught = cases.filter(([, row]) => wellFormed(row).length > 0).length;
+    check('  …and the predicate catches every malformation it names',
+      wellFormed(ok).length === 0 && caught === cases.length, `${caught} of ${cases.length} planted faults caught`);
+  }
 
 
   // ════════════════════════════════════════════════════════════════════════════════════════════

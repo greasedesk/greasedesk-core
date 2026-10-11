@@ -244,16 +244,50 @@ const bayNew = (await prisma.resource.create({ data: { site_id: site.id, name: `
 const bayFree = (await prisma.resource.create({ data: { site_id: site.id, name: `${PREFIX} Bay Free`, type: 'lift' }, select: { id: true } })).id;
 const bayMoved = (await prisma.resource.create({ data: { site_id: site.id, name: `${PREFIX} Bay Moved`, type: 'lift' }, select: { id: true } })).id;
 
-// Real site hours, so the footprints are the ones the product would compute.
-const SOPEN = site.open_hour ?? 8, SCLOSE = site.close_hour ?? 18;
-const SDAYS = site.open_days?.length ? site.open_days : [1, 2, 3, 4, 5, 6];
+// ── THE SITE'S REAL HOURS, READ FROM THE ROW ──────────────────────────────────────────────────
+// This said `site.open_hour ?? 8` and `site.open_days?.length ? … : [1,2,3,4,5,6]` against the
+// object `zzSite` returns — which is `{ id }` and nothing else. So every one of those reads was
+// undefined and the gate silently used Mon–SAT defaults while ZZ opens Mon–Fri. On a weekday the
+// two agree closely enough that nothing showed; the day it mattered, the gate placed its "current
+// open day" on a Saturday the product considers closed and then failed its own clause.
+//
+// A premise about the tenant has to be READ from the tenant. Fetched here, and asserted below, so
+// a gate cannot again disagree with the hours the page renders with.
+const siteRow = await prisma.site.findUnique({
+  where: { id: site.id },
+  select: { open_hour: true, close_hour: true, open_days: true, breaks: true },
+});
+const SOPEN = siteRow?.open_hour ?? 8, SCLOSE = siteRow?.close_hour ?? 18;
+const SDAYS = siteRow?.open_days?.length ? siteRow.open_days : [1, 2, 3, 4, 5, 6];
+check('premise: the gate uses the hours the SITE actually keeps, not a default',
+  typeof siteRow?.open_hour === 'number' && Array.isArray(siteRow?.open_days) && siteRow.open_days.length > 0,
+  `open ${SOPEN}:00–${SCLOSE}:00 on days ${JSON.stringify(SDAYS)}`);
 // FROM THE REAL CLOCK, not a fixed date: a hold is judged against `now` by every reader, so a
 // fixture dated to a hardcoded October would drift out of the relation it is meant to demonstrate
 // and the refusal would be correctly absent — which is what the first run of this gate showed.
 const REAL = new Date();
+/**
+ * ── THE DAY THIS GATE DRAWS ON, AND WHY IT IS NOT ALWAYS TODAY ──────────────────────────────────
+ * ZZ opens Monday to Friday. Run on a Saturday or Sunday, the diary correctly has no working hours
+ * and `heldTailSegments` correctly returns nothing — so a clause reading "a tail appears on TODAY's
+ * diary" fails for being asked on the wrong day, not because anything is wrong.
+ *
+ * It was written and proved on a Thursday and would have failed every weekend since. The point of
+ * the clause is that the tail reaches the PRESENT, not that the present is a Tuesday, so the gate
+ * drives the most recent OPEN day at or before today and says so.
+ *
+ * Every fixture anchors on the same day for the same reason: a fixture placed by walking FORWARD
+ * from a Sunday lands on Monday, on a different column from the one being read.
+ */
+const VIEW_DAY = (() => {
+  let d = new Date(Date.UTC(REAL.getUTCFullYear(), REAL.getUTCMonth(), REAL.getUTCDate()));
+  for (let i = 0; i < 7 && !SDAYS.includes(d.getUTCDay()); i++) d = new Date(d.getTime() - DAY);
+  return d;
+})();
 const atHour = (dayOffset, hour) => {
-  // Walk to an OPEN day, so a fixture is never placed on a Sunday and refused for the wrong reason.
-  let d = new Date(REAL.getTime() + dayOffset * DAY);
+  // Walk to an OPEN day, so a fixture is never placed on a closed day and refused for the wrong
+  // reason. Anchored on VIEW_DAY, which is open by construction.
+  let d = new Date(VIEW_DAY.getTime() + dayOffset * DAY);
   while (!SDAYS.includes(d.getUTCDay())) d = new Date(d.getTime() + DAY);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour, 0, 0));
 };
@@ -421,14 +455,26 @@ const hold = (body) => pg.evaluate(async (b) => {
 console.log('\n— the tail on screen —');
 {
   const ymd = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-  await pg.goto(`${origin}/admin/diary?site=${site.id}&view=day&date=${ymd(REAL)}`, { waitUntil: 'networkidle' });
+  const sameDay = ymd(VIEW_DAY) === ymd(REAL);
+  check('premise: there is an open day at or before today to draw on',
+    SDAYS.includes(VIEW_DAY.getUTCDay()), `drawing ${ymd(VIEW_DAY)}${sameDay ? ' (today)' : ` — today (${ymd(REAL)}) is closed`}`);
+  await pg.goto(`${origin}/admin/diary?site=${site.id}&view=day&date=${ymd(VIEW_DAY)}`, { waitUntil: 'networkidle' });
   const tails = await pg.$$('[data-testid="held-tail"]');
-  check('a car held three weeks ago draws a tail on TODAY\'s diary', tails.length > 0, `${tails.length} tails`);
+  check('a car held three weeks ago draws a tail on the CURRENT open day', tails.length > 0, `${tails.length} tails on ${ymd(VIEW_DAY)}`);
 
-  if (tails.length) {
+  /**
+   * UNCONDITIONAL FROM HERE. These clauses used to live inside `if (tails.length)`, so a missing
+   * tail did not merely fail one clause — it removed the six below it and the gate reported 55 of
+   * 56 where it had been 62 of 62. A failure that shrinks its own denominator is the same defect as
+   * a gate that throws mid-run: the tally describes what ran, not what should have.
+   */
+  {
+    const tail = tails[0] ?? null;
     // GEOMETRY NEEDS PAINT: top/bottom inside the viewport is true of a display:none element, whose
     // rect is 0x0 at the origin. Size and offsetParent first, then position.
-    const box = await tails[0].evaluate((el) => {
+    const box = tail === null
+      ? { w: 0, h: 0, mounted: false, days: null, text: '', bg: '', img: '', border: '' }
+      : await tail.evaluate((el) => {
       const r = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
       return {
@@ -438,6 +484,8 @@ console.log('\n— the tail on screen —');
       };
     });
     check('  …with real size, actually laid out', box.w > 10 && box.h > 10 && box.mounted, `${box.w}x${box.h}`);
+    // Measured from the day being DRAWN. The block's count comes from the server's `now`, so on a
+    // weekend run those differ and the clause would be testing the wall clock, not the renderer.
     const expected = Math.round((Date.UTC(REAL.getUTCFullYear(), REAL.getUTCMonth(), REAL.getUTCDate()) - Date.UTC(oldStart.getUTCFullYear(), oldStart.getUTCMonth(), oldStart.getUTCDate())) / DAY);
     check('  …and it says HOW MANY DAYS, matching the calendar count', Number(box.days) === expected && box.text.includes(String(expected)), `${box.days} vs ${expected}, text "${box.text}"`);
 
@@ -452,7 +500,7 @@ console.log('\n— the tail on screen —');
     // an earlier clause reads as this one succeeding; that mistake has been made in this suite.
     const paneBefore = await pg.$('[data-testid="diary-pane"]');
     check('  …nothing is open before the click', paneBefore === null);
-    await tails[0].click();
+    if (tail) await tail.click();
     await pg.waitForSelector('[data-testid="diary-pane"]', { timeout: 15000 }).catch(() => {});
     const paneCard = await pg.$eval('[data-testid="diary-pane"]', (el) => el.getAttribute('data-card')).catch(() => null);
     check('  …and clicking it opens THAT car\'s job card', paneCard === oldHeld, `${paneCard} vs ${oldHeld}`);
