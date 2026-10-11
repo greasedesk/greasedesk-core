@@ -174,8 +174,12 @@ jobs:
           # --no-owner/--no-privileges: the restore target has different roles, and a dump that only
           # restores onto an identically-roled server is a dump that does not restore.
           pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file="db-$STAMP.dump"
-          node scripts/backup-manifest.mjs "manifest-$STAMP.json"
+          # IMMEDIATELY after pg_dump, before anything that can fail. This line is the ONLY evidence
+          # the dump did anything at all, and it used to sit after the manifest script: the first run
+          # that ever reached pg_dump then failed in the manifest, so the size was never printed and
+          # the file died with the runner. The one measurement, gated behind the likeliest failure.
           ls -l "db-$STAMP.dump" | awk '{print "dump bytes:", $5}'
+          node scripts/backup-manifest.mjs "manifest-$STAMP.json"
 
       - name: Encrypt
         env:
