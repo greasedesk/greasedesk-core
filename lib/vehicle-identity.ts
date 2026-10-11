@@ -70,6 +70,35 @@ export async function ensureIdentityAndCurrentOwner(
   tx: Prisma.TransactionClient,
   args: { vehicleId: string; groupId: string; customerId: string; registration: string; vin?: string | null },
 ): Promise<void> {
+  await ensureIdentity(tx, args);
+
+  const current = await tx.vehicleOwnership.findFirst({
+    where: { vehicle_id: args.vehicleId, is_current: true },
+    select: { id: true },
+  });
+  if (!current) {
+    await tx.vehicleOwnership.create({
+      data: { vehicle_id: args.vehicleId, customer_id: args.customerId, is_current: true },
+    });
+  }
+}
+
+/**
+ * THE IDENTITY HALF ON ITS OWN — anchor the car, decide nothing about who owns it.
+ *
+ * Split out because the combined function answers two unrelated questions, and a caller that has
+ * ALREADY decided ownership must not hand the second one to a helper. `ensureIdentityAndCurrentOwner`
+ * creates its edge with no `valid_from`, so the row lands on @default(now()): correct for a car
+ * first seen today, wrong for every caller that knows the real date. In sellCar's `ended` branch the
+ * buyer's edge is capped and deliberately NOT current, which left the car with no current owner and
+ * the anchor filled that hole with a today-dated edge for a buyer who had already sold it on.
+ *
+ * Rule: if you know who owns the car and from when, write the edge yourself and call THIS.
+ */
+export async function ensureIdentity(
+  tx: Prisma.TransactionClient,
+  args: { vehicleId: string; groupId: string; registration: string; vin?: string | null },
+): Promise<void> {
   const vin_normalized = normalizeVin(args.vin);
 
   const vehicle = await tx.vehicle.findUnique({
@@ -92,16 +121,6 @@ export async function ensureIdentityAndCurrentOwner(
     await tx.vehicle.update({
       where: { id: args.vehicleId },
       data: { identity_id: identityId, vin_normalized },
-    });
-  }
-
-  const current = await tx.vehicleOwnership.findFirst({
-    where: { vehicle_id: args.vehicleId, is_current: true },
-    select: { id: true },
-  });
-  if (!current) {
-    await tx.vehicleOwnership.create({
-      data: { vehicle_id: args.vehicleId, customer_id: args.customerId, is_current: true },
     });
   }
 }

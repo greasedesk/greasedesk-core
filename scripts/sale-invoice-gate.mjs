@@ -26,6 +26,7 @@ const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady } = await i
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 import './_ts.mjs';
 
+const { notVoided } = await import('/Users/hugh/Developer/greasedesk-core/lib/invoice-void.ts');
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const PREFIX = 'ZZSALE';
@@ -210,13 +211,35 @@ try {
     if (r.is_imported && !r.external_ref) faults.push('is_imported with no external_ref — claims to be imported with no original to point at');
     return faults;
   };
-  const realSales = await prisma.invoice.findMany({
-    where: { series: 'vehicle_sale', group_id: { not: ZZ_GROUP } },
-    select: { invoice_number: true, stock_disposal_id: true, vat_position: true, date_issued: true, is_imported: true, external_ref: true },
-  });
+  /**
+   * ── LIVE SALES ONLY, AND THE EXCLUSION IS ASSERTED BELOW ─────────────────────────────────────
+   * A VOID sale is a retired number with its document retained (VATREC5010), and since 2026-10-11
+   * canVoid admits exactly the sale that has NO disposal behind it — so "a car sale with no car"
+   * is the DEFINING shape of a voided one, not a malformation. Judging voids by this predicate
+   * would make every correct void a red. `notVoided` is spread alone here: no other status key
+   * follows it, which is the condition lib/vat-summary warns about.
+   */
+  const SALE_SCOPE = { series: 'vehicle_sale', group_id: { not: ZZ_GROUP } };
+  const COLS = { invoice_number: true, status: true, stock_disposal_id: true, vat_position: true, date_issued: true, is_imported: true, external_ref: true };
+  const realSales = await prisma.invoice.findMany({ where: { ...SALE_SCOPE, ...notVoided }, select: COLS });
   const malformed = realSales.flatMap((r) => wellFormed(r).map((f) => `${r.invoice_number}: ${f}`));
-  check(`every vehicle_sale invoice on a real tenant is well formed (${realSales.length} found)`,
+  check(`every LIVE vehicle_sale invoice on a real tenant is well formed (${realSales.length} found)`,
     malformed.length === 0, malformed.join(' | ') || 'disposal linked, VAT position known, dated, import marker self-consistent');
+
+  /**
+   * THE EXCLUSION MUST BE NARROW. Dropping voids is only legitimate if the predicate would still
+   * have caught them: an exclusion that hides a fault nobody re-checks is the blindfold this
+   * gate's own history is about. So assert BOTH directions — a void sale with no disposal is out
+   * of the population AND the predicate still calls it a fault; and nothing live is excluded.
+   */
+  const everySale = await prisma.invoice.findMany({ where: SALE_SCOPE, select: COLS });
+  const excluded = everySale.filter((r) => !realSales.some((l) => l.invoice_number === r.invoice_number));
+  check('  …and the only ones excluded are VOID, each still a fault by the predicate',
+    excluded.every((r) => r.status === 'void' && wellFormed(r).length > 0)
+    && excluded.length === everySale.filter((r) => r.status === 'void').length,
+    excluded.length
+      ? excluded.map((r) => `${r.invoice_number}(${r.status}): ${wellFormed(r).join(', ') || 'NO FAULT — would have passed anyway'}`).join(' | ')
+      : 'none voided on any real tenant');
 
   // RED-PROVED HERE, not against the owner's rows. A predicate asserted only over data that happens
   // to be correct is a predicate nobody has watched fail.

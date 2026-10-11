@@ -33,7 +33,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recordDisposalInTx } from '@/lib/stock-store';
 import { issueVehicleSaleInvoice } from '@/lib/invoice-issue';
-import { ensureIdentityAndCurrentOwner } from '@/lib/vehicle-identity';
+import { ensureIdentity } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { invertedEdgeRefusal, laterOwners, ownershipWrite, utcDayAfter } from '@/lib/stock-historical-rules';
@@ -187,12 +187,27 @@ export async function sellCar(a: {
           + 'sale date being wrong. Correct the ownership on the car, then record the sale again.',
         );
       }
-      await tx.vehicleOwnership.updateMany({
-        where: { vehicle_id: item.vehicle.id, is_current: true },
-        data: { is_current: false, valid_to: a.soldAt },
-      });
-
       const own = ownershipWrite(customerId, laterOwners(edges, a.soldAt));
+
+      // ── THE BUYER ALREADY OWNS IT FROM ON OR AFTER THE SALE DAY ─────────────────────────────
+      // Then the record is already right and the correct action is NOTHING. Ending the existing
+      // edge at the sale date collapsed it to zero length — and `ensureIdentityAndCurrentOwner`,
+      // finding no current owner left, created a fresh one stamped @default(now()). On NU14KUF that
+      // made the car read as the buyer's since the afternoon it was entered rather than since 7
+      // July, and it was MY fix that opened the gap: `ownershipWrite` correctly declined to add a
+      // duplicate, and the anchor filled the hole the updateMany had just made.
+      //
+      // The comment on that anchor call said "the owner record above already exists, so this cannot
+      // touch it" — true in every case except this one, which is the case nothing covered.
+      const alreadyTheirs = own.kind === 'none' && own.why === 'buyer_already_owner';
+      if (!alreadyTheirs) {
+        // Only end the current edges when ownership actually MOVES.
+        await tx.vehicleOwnership.updateMany({
+          where: { vehicle_id: item.vehicle.id, is_current: true },
+          data: { is_current: false, valid_to: a.soldAt },
+        });
+      }
+
       if (own.kind === 'ended') {
         // A later owner is on record, so the buyer held the car between the sale and that owner.
         const bad = invertedEdgeRefusal(a.soldAt, own.validTo);
@@ -208,9 +223,16 @@ export async function sellCar(a: {
       }
       // kind === 'none' means the buyer already owns it from a later date — nothing to add, and
       // adding would be the second edge for one owner that ownershipWrite exists to prevent.
-      // The identity anchor only — the owner record above already exists, so this cannot touch it.
-      await ensureIdentityAndCurrentOwner(tx, {
-        vehicleId: item.vehicle.id, groupId: a.groupId, customerId,
+      //
+      // ── OWNERSHIP IS DECIDED ABOVE. THE ANCHOR ONLY ANCHORS. ────────────────────────────────
+      // This used to call ensureIdentityAndCurrentOwner, which creates a current edge with no
+      // valid_from — @default(now()) — whenever the car has no current owner. Every branch above
+      // leaves one EXCEPT `ended`, where the buyer's edge is capped and deliberately not current:
+      // there the anchor wrote a TODAY-dated edge making the car the buyer's on the day of entry,
+      // after they had already sold it on. Three branches of ownership are settled by the time we
+      // get here, so there is nothing left for a helper to decide.
+      await ensureIdentity(tx, {
+        vehicleId: item.vehicle.id, groupId: a.groupId,
         registration: item.vehicle.registration, vin: item.vehicle.vin,
       });
 

@@ -49,12 +49,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const invoice = (await prisma.invoice.findFirst({
     where: { id: invoiceId, group_id: user.group_id },
-    select: { id: true, status: true, invoice_number: true, job_card_id: true, series: true, _count: { select: { lines: true } } },
+    select: { id: true, status: true, invoice_number: true, job_card_id: true, series: true, stock_disposal_id: true, _count: { select: { lines: true } } },
   })) as any;
   if (!invoice) return res.status(404).json({ message: 'Invoice not found.' });
 
   // series rides along: a car sale refuses here, whatever its status (lib/invoice-void::CAR_SALE_VOID_REFUSAL).
-  const allowed = canVoid({ status: invoice.status, lineCount: invoice._count.lines, series: invoice.series });
+  // hasDisposal is asked EXPLICITLY: canVoid treats undefined as "there is one", so forgetting the
+  // question keeps the car-sale refusal rather than opening the duplicate door by omission.
+  const allowed = canVoid({ status: invoice.status, lineCount: invoice._count.lines, series: invoice.series,
+    hasDisposal: invoice.stock_disposal_id !== null });
   if (!allowed.ok) return res.status(409).json({ code: allowed.code, message: allowed.message });
 
   try {

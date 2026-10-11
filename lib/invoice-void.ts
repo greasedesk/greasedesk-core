@@ -79,9 +79,30 @@ export const CAR_SALE_VOID_REFUSAL =
   + 'it. If the sale price itself was wrong, the car’s recorded sale price needs correcting too — until it '
   + 'is, the VAT summary names this invoice rather than guessing.';
 
-export function canVoid(inv: { status: string; lineCount: number; series?: string | null }): { ok: true } | { ok: false; code: string; message: string } {
+export function canVoid(inv: {
+  status: string; lineCount: number; series?: string | null;
+  /** Whether a StockDisposal stands behind this invoice. UNDEFINED means the caller did not look —
+   *  treated as "there is one", so a caller that forgets the question gets the SAFE answer and the
+   *  car-sale refusal still fires. Only an explicit `false` opens the duplicate door. */
+  hasDisposal?: boolean;
+}): { ok: true } | { ok: false; code: string; message: string } {
   if (inv.status === 'void') return { ok: false, code: 'already_void', message: 'This invoice is already voided.' };
-  if (inv.series === 'vehicle_sale') return { ok: false, code: 'car_sale', message: CAR_SALE_VOID_REFUSAL };
+  // ── A CAR SALE WITH NO DISPOSAL BEHIND IT IS NOT A SALE ──────────────────────────────────────
+  // The refusal above is about a REAL sale, and every one of its four consequences assumes one:
+  // the car stays sold at this price, still owned by the buyer, unable to be sold again, and its
+  // margin VAT silently leaves the VAT summary. ALL FOUR need the disposal — it is the row that
+  // records the car leaving, and lib/vat-summary takes the margin from it by id.
+  //
+  // With no disposal there is no sale behind the number: nothing to undo, no car to strand, and no
+  // margin to lose, because getVatSummary already refuses to interpret such an invoice ("a
+  // margin-scheme sale with no stock record to take the margin from"). What is left is a spent
+  // number with a frozen document, which is exactly what void is for.
+  //
+  // NARROW ON PURPOSE. A vehicle_sale WITH a disposal still refuses, unchanged — that is the case
+  // the refusal was written for, and it stays written for it. Owner's ruling, 2026-10-11.
+  if (inv.series === 'vehicle_sale' && inv.hasDisposal !== false) {
+    return { ok: false, code: 'car_sale', message: CAR_SALE_VOID_REFUSAL };
+  }
   if (inv.status === 'paid' || inv.status === 'paid_pending') {
     return { ok: false, code: 'is_paid', message: 'This invoice is marked paid. Unmark or unlock the payment first — voiding must not silently discard a payment record.' };
   }

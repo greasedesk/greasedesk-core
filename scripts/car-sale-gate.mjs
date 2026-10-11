@@ -224,6 +224,94 @@ try {
       `${left.length} edge(s)`);
   }
 
+  /**
+   * ── THE BUYER IS ALREADY A LATER OWNER — THE CASE NOTHING COVERED ─────────────────────────────
+   * This gate had the SHAPE and not the CASE: every fixture here sells to a NEW customer, so
+   * `ownershipWrite` returns `current`, creates the edge, and the identity anchor finds an owner
+   * already there. The uncovered case is a buyer who ALREADY owns the car from on or after the sale
+   * day — which is the common one in real life: the car came in for servicing as their car, and the
+   * sale is recorded afterwards, backdated.
+   *
+   * It went wrong in production on NU14KUF: `ownershipWrite` correctly declined to add a duplicate,
+   * the updateMany had already ended the existing edge at the sale date (zero length), and
+   * `ensureIdentityAndCurrentOwner` then filled the hole with an edge stamped @default(now()). The
+   * car read as the buyer's since that afternoon instead of since 7 July.
+   *
+   * THE RIGHT ANSWER IS TO DO NOTHING, and these clauses assert exactly that — the edge is left
+   * untouched, there is no zero-length edge, and no edge is dated today.
+   */
+  {
+    const v3 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}OWNED`, registration_normalized: `${PREFIX}OWNED` }, select: { id: true } });
+    const already = await mkCustomer('Already owner', '5 Already Lane');
+    const soldOn = new Date('2026-09-12T00:00:00.000Z');
+    // The buyer's own edge, from the SALE DAY, exactly as a servicing visit would have left it.
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: v3.id, customer_id: already.id, is_current: true, valid_from: soldOn } });
+    const it3 = await ST.takeIntoStock({ groupId: ZZ_GROUP, userId: user.id, vehicleId: v3.id,
+      acquiredAt: new Date('2026-06-01T00:00:00.000Z'), purchasePence: 90000, vatStatus: 'margin', source: 'trade' });
+    if ('refused' in it3) throw new Error(it3.refused);
+    const sold3 = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: it3.id,
+      soldAt: soldOn, salePence: 180000, buyer: { customerId: already.id, name: 'Already owner', address: '5 Already Lane\nTipton' } });
+    check('selling to someone who ALREADY owns the car from the sale day completes',
+      'invoiceId' in sold3, 'refused' in sold3 ? sold3.refused.slice(0, 90) : 'sold');
+    const e3 = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: v3.id },
+      select: { customer_id: true, is_current: true, valid_from: true, valid_to: true } });
+    check('  …and the ownership record is LEFT ALONE: one edge, still current, still dated the sale',
+      e3.length === 1 && e3[0].is_current === true && e3[0].valid_to === null
+      && e3[0].valid_from.toISOString() === soldOn.toISOString(),
+      e3.map((e) => `${e.valid_from.toISOString().slice(0, 10)}->${e.valid_to ? e.valid_to.toISOString().slice(0, 10) : 'open'}(cur=${e.is_current})`).join(', '));
+    check('  …no zero-length edge, and nothing dated today',
+      !e3.some((e) => e.valid_to && e.valid_to.getTime() === e.valid_from.getTime())
+      && !e3.some((e) => e.valid_from.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)),
+      `${e3.length} edge(s)`);
+  }
+
+  /**
+   * ── A LATER OWNER WHO IS NOT THE CURRENT ONE: THE BUYER'S WINDOW CLOSES, AND STAYS CLOSED ────
+   * Found by a 0-RED. Dropping the anchor call from sellBook entirely broke no clause, which meant
+   * no clause reached it — and reading why uncovered the same defect in a second branch. When a
+   * later owner is on record but NOT current, the buyer's edge is capped and deliberately not
+   * current either, so the car is left with no current owner. ensureIdentityAndCurrentOwner filled
+   * that hole with an edge carrying no valid_from — @default(now()) — so the record read as the
+   * buyer's from the day of entry, after they had already sold it on.
+   *
+   * The sale must still ANCHOR the car's identity. It must not decide who owns it.
+   */
+  console.log('\n— A LATER OWNER WHO IS NOT CURRENT —');
+  {
+    const v4 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}LATER`, registration_normalized: `${PREFIX}LATER`, vin: 'ZZCSLATERVIN00001' }, select: { id: true } });
+    const nextOwner = await mkCustomer('Later keeper', '2 Later Street');
+    const buyer4 = await mkCustomer('Window buyer', '3 Window Way');
+    const laterFrom = new Date('2026-10-01T00:00:00.000Z');
+    // On record, dated AFTER the sale, and NOT current — so the blocking refusal does not fire and
+    // `ownershipWrite` returns kind 'ended'. This is the branch nothing reached.
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: v4.id, customer_id: nextOwner.id, is_current: false, valid_from: laterFrom } });
+    const it4 = await ST.takeIntoStock({ groupId: ZZ_GROUP, userId: user.id, vehicleId: v4.id,
+      acquiredAt: new Date('2026-06-01T00:00:00.000Z'), purchasePence: 90000, vatStatus: 'margin', source: 'trade' });
+    if ('refused' in it4) throw new Error(it4.refused);
+    const sold4 = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: it4.id,
+      soldAt, salePence: 200000, buyer: { customerId: buyer4.id, name: 'Window buyer', address: '3 Window Way\nTipton' } });
+    check('a sale before a later owner who is not current completes',
+      'invoiceId' in sold4, 'refused' in sold4 ? sold4.refused.slice(0, 90) : 'sold');
+    const e4 = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: v4.id },
+      select: { customer_id: true, is_current: true, valid_from: true, valid_to: true } });
+    const win = e4.find((e) => e.customer_id === buyer4.id);
+    check('  …the buyer holds it from the sale until the later owner takes over',
+      !!win && win.valid_from.toISOString() === soldAt.toISOString() && win.valid_to?.toISOString() === laterFrom.toISOString(),
+      win ? `${win.valid_from.toISOString().slice(0, 10)}->${win.valid_to?.toISOString?.().slice(0, 10)}` : 'NO EDGE FOR THE BUYER');
+    const today = new Date().toISOString().slice(0, 10);
+    check('  …and NOTHING is dated today: the sale invents no ownership it was not told about',
+      !e4.some((e) => e.valid_from.toISOString().slice(0, 10) === today),
+      e4.map((e) => `${e.valid_from.toISOString().slice(0, 10)}->${e.valid_to ? e.valid_to.toISOString().slice(0, 10) : 'open'}(cur=${e.is_current})`).join(', '));
+    check('  …the buyer is not left as the current owner of a car they sold on',
+      !e4.some((e) => e.is_current && e.customer_id === buyer4.id),
+      `${e4.filter((e) => e.is_current).length} current edge(s)`);
+    /** THE ANCHOR STILL ANCHORS — splitting the two halves must not cost the identity write. */
+    const anchored = await prisma.vehicle.findUnique({ where: { id: v4.id }, select: { identity_id: true, vin_normalized: true } });
+    check('  …and the car is still identity-anchored on its VIN',
+      !!anchored?.identity_id && anchored.vin_normalized === 'ZZCSLATERVIN00001',
+      `identity=${anchored?.identity_id ? 'set' : 'MISSING'} vin_normalized=${anchored?.vin_normalized ?? 'null'}`);
+  }
+
   check('  …and exactly one current owner, the buyer, from the sale date', current.length === 1 && current[0].customer_id === A.customerId
     && current[0].valid_from.toISOString() === soldAt.toISOString(), `${current.length} current`);
   const card = await prisma.jobCard.findUnique({ where: { id: A.cardId }, select: { status: true, sale_of_stock_item_id: true, stock_item_id: true, customer_id: true } });
@@ -486,6 +574,57 @@ try {
   check('the void endpoint REFUSES a car sale, whoever calls it', tryVoid.status() === 409 && voidBody.code === 'car_sale' && invAfterVoid?.status !== 'void',
     `HTTP ${tryVoid.status()} ${voidBody.code ?? ''}; invoice ${invAfterVoid?.status}`);
   check('  …and the sale behind it is untouched', dispAfter?.id === dispBefore?.id && dispAfter?.sale_pence === dispBefore?.sale_pence);
+
+  /**
+   * ── …BUT A SALE NUMBER WITH NO SALE BEHIND IT CAN ────────────────────────────────────────────
+   * Measured on the live tenant, 2026-10-11: one vehicle_sale number stood with no disposal behind
+   * it, and the refusal above held it there permanently — a spent VAT number that could never be
+   * retired. All four consequences the refusal names need the disposal: the price to stand at, the
+   * car to strand, the second sale to prevent, the margin to lose. With no disposal there are none,
+   * and getVatSummary already refuses to read such an invoice rather than guessing its margin.
+   * This fixture is that exact state, reached the way the real one was: a real sale whose disposal
+   * is gone. The refusal above, on a sale WITH its disposal, stays green in the same run.
+   */
+  console.log('\n— A SALE NUMBER WITH NO SALE BEHIND IT CAN BE VOIDED —');
+  const strandCar = await car();
+  const strandBuyer = await mkCustomer('Strand Buyer', '9 Strand Road\nDudley');
+  const strandSale = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: strandCar.itemId,
+    soldAt, salePence: 450000, buyer: { customerId: strandBuyer.id } });
+  check('the fixture sale completes', 'invoiceId' in strandSale, 'refused' in strandSale ? strandSale.refused : 'sold');
+  const S = ids(strandSale);
+  await prisma.invoice.updateMany({ where: { id: S.invoiceId }, data: { stock_disposal_id: null } });
+  await prisma.stockDisposal.deleteMany({ where: { stock_item_id: strandCar.itemId } });
+  const strandedBefore = await prisma.invoice.findUnique({ where: { id: S.invoiceId },
+    select: { status: true, series: true, invoice_number: true, stock_disposal_id: true, _count: { select: { lines: true } } } });
+  check('  …and the fixture really is stranded: a vehicle_sale with no disposal',
+    strandedBefore?.series === 'vehicle_sale' && strandedBefore.stock_disposal_id === null && (strandedBefore._count.lines ?? 0) > 0,
+    `${strandedBefore?.series} disposal=${strandedBefore?.stock_disposal_id} lines=${strandedBefore?._count.lines}`);
+  const okVoid = await ctx.request.post(`${origin}/api/invoice-void`,
+    { data: { invoiceId: S.invoiceId, category: 'duplicate', reason: 'Duplicate sale number with no stock record behind it' } });
+  const okBody = await okVoid.json().catch(() => ({}));
+  const strandedAfter = await prisma.invoice.findUnique({ where: { id: S.invoiceId },
+    select: { status: true, invoice_number: true, void_reason: true, void_category: true, _count: { select: { lines: true } } } });
+  check('the void endpoint ADMITS it', okVoid.status() === 200 && strandedAfter?.status === 'void',
+    `HTTP ${okVoid.status()} ${okBody.error ?? okBody.code ?? ''}; invoice ${strandedAfter?.status}`);
+  // `status === 'void'` is carried here ON PURPOSE: without it this clause compares before to after
+  // and passes whenever the void DID NOT HAPPEN, which is the one state it exists to rule out.
+  check('  …retiring the number while RETAINING the document (VATREC5010)',
+    strandedAfter?.status === 'void' && strandedAfter.invoice_number === strandedBefore?.invoice_number
+    && (strandedAfter._count.lines ?? 0) === (strandedBefore?._count.lines ?? 0) && (strandedAfter._count.lines ?? 0) > 0,
+    `${strandedAfter?.invoice_number} with ${strandedAfter?._count.lines} line(s)`);
+  check('  …and it carries the reason and category a VAT inspection reads',
+    strandedAfter?.void_category === 'duplicate' && (strandedAfter?.void_reason ?? '').length >= 12,
+    `${strandedAfter?.void_category}: ${(strandedAfter?.void_reason ?? '').slice(0, 50)}`);
+  /**
+   * THE DEFAULT IS THE SAFE ANSWER. hasDisposal is optional, so a caller that never asks the
+   * question must get the REFUSAL, not the new door. Otherwise the narrowing above widens itself
+   * through every reader that was written before the question existed.
+   */
+  check('a caller that does not ask about the disposal still gets the refusal',
+    VOID.canVoid({ status: 'issued', lineCount: 1, series: 'vehicle_sale' }).ok === false
+    && VOID.canVoid({ status: 'issued', lineCount: 1, series: 'vehicle_sale', hasDisposal: true }).ok === false
+    && VOID.canVoid({ status: 'issued', lineCount: 1, series: 'vehicle_sale', hasDisposal: false }).ok === true,
+    'undefined refuses · true refuses · false admits');
 
   const prepStill = await prisma.jobCard.findUnique({ where: { id: prep.id }, select: { status: true } });
   check('the prep card was left exactly as it was', prepStill?.status === 'accepted', String(prepStill?.status));
