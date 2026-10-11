@@ -158,6 +158,36 @@ export function laterOwners(edges: OwnerEdge[], soldAt: Date): OwnerEdge[] {
  *  · no later owner                      → the buyer from the sale day, current
  */
 export type OwnershipWrite = { kind: 'none'; why: 'no_buyer' | 'buyer_already_owner' } | { kind: 'ended'; validTo: Date } | { kind: 'current' };
+/**
+ * ── AN EDGE CANNOT END BEFORE IT BEGINS ─────────────────────────────────────────────────────────
+ * Found on TMBS 2026-10-11: one ownership edge reading `valid_from 2026-08-18 → valid_to
+ * 2026-07-07`, the only inverted row in the tenant. `sellCar` wrote it — it ended whatever edge was
+ * `is_current` at the sale date without checking when that edge BEGAN, so a backdated sale ended a
+ * later edge at an earlier date. The car had come in for servicing as the buyer's own car in August;
+ * the sale was then recorded backdated to July.
+ *
+ * The careful logic already existed in `laterOwners` + `ownershipWrite` directly below, and the
+ * HISTORICAL path used it while the LIVE path did not: one of two writers got the rule.
+ *
+ * So this is the rule itself, separate from either writer. There are SIX writers of
+ * `VehicleOwnership` across lib and pages, and a rule enforced in the one being fixed today is a
+ * rule waiting for the seventh. The real enforcement is a CHECK constraint on the column — that
+ * needs the two-push cycle (constraint-migration-before-deploy) and the existing inverted row
+ * cleared first, so it lands second. This is what the writers call in the meantime.
+ */
+export const INVERTED_EDGE_REFUSAL =
+  'That would record the car as owned until before the day the ownership started. An ownership '
+  + 'cannot end before it begins — check the sale date against who owned the car at the time.';
+
+/** Is `a` a strictly LATER calendar day than `b`? Day-based like every comparison in this file. */
+export const utcDayAfter = (a: Date, b: Date): boolean => utcDay(a) > utcDay(b);
+
+export function invertedEdgeRefusal(validFrom: Date, validTo: Date | null | undefined): string | null {
+  if (!validTo) return null;                       // an open-ended edge has nothing to invert
+  if (utcDay(validTo) >= utcDay(validFrom)) return null;
+  return INVERTED_EDGE_REFUSAL;
+}
+
 export function ownershipWrite(buyerCustomerId: string | null, later: OwnerEdge[]): OwnershipWrite {
   if (!buyerCustomerId) return { kind: 'none', why: 'no_buyer' };
   if (later.some((e) => e.customerId === buyerCustomerId)) return { kind: 'none', why: 'buyer_already_owner' };

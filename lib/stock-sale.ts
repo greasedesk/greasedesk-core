@@ -36,6 +36,7 @@ import { issueVehicleSaleInvoice } from '@/lib/invoice-issue';
 import { ensureIdentityAndCurrentOwner } from '@/lib/vehicle-identity';
 import { writeAudit } from '@/lib/audit';
 import { customerPhoneFields } from '@/lib/contact-routes';
+import { invertedEdgeRefusal, laterOwners, ownershipWrite, utcDayAfter } from '@/lib/stock-historical-rules';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import {
   buyerRefusal, isOpenPrepStatus, PICKED_BUYER_NO_ADDRESS, SALE_DATE_IN_FUTURE_REFUSAL, saleLine, saleLineDescription,
@@ -139,14 +140,74 @@ export async function sellCar(a: {
       });
       if ('refused' in disposal) throw new SaleRefused(disposal.refused);
 
-      // 3 ─ OWNERSHIP moves to the buyer.
+      // 3 ─ OWNERSHIP moves to the buyer — THROUGH THE SAME RULES THE HISTORICAL PATH USES.
+      //
+      // This used to end whatever edge was `is_current` and open a new one at the sale date, with no
+      // regard for WHEN the ended edge began. A backdated sale therefore ended a LATER edge at an
+      // EARLIER date and wrote `valid_from 2026-08-18 → valid_to 2026-07-07` on TMBS — the car had
+      // come in for servicing as the buyer's own car in August, and the sale was then recorded
+      // backdated to July. One inverted row, and nothing anywhere would have refused it.
+      //
+      // `laterOwners` + `ownershipWrite` are the careful version and already existed; the historical
+      // path used them and this one did not. Same two calls now, so a sale dated before a known
+      // later owner caps the buyer's edge at that owner's start instead of claiming the car still.
+      const edges = (await tx.vehicleOwnership.findMany({
+        where: { vehicle_id: item.vehicle.id },
+        select: { customer_id: true, valid_from: true, valid_to: true, is_current: true },
+        orderBy: { valid_from: 'asc' },
+      })).map((r) => ({ customerId: r.customer_id, customerName: '', validFrom: r.valid_from, validTo: r.valid_to, isCurrent: r.is_current }));
+
+      // ── A CURRENT EDGE DATED AFTER THE SALE IS CONTRADICTORY, AND IS REFUSED ────────────────
+      // The first version of this fix bounded the update by `valid_from <= soldAt`, so an edge
+      // starting after the sale was simply skipped. That is WORSE than the inverted row it
+      // replaced: the previous keeper stays current, two owners end up current at once, and
+      // nothing looks broken. A wrong answer is harder to find than a corrupt one.
+      //
+      // And it is not a rare shape. `valid_from` is `@default(now())` and NEITHER
+      // lib/vehicle-identity NOR pages/api/import/commit sets it — so edges are routinely stamped
+      // "from today" whatever the real acquisition date, and any backdated sale meets one. Skipping
+      // them would have mis-written every car entered with a past sale date.
+      //
+      // So the sale refuses and says what to fix. The data is contradictory before we arrive; a
+      // sale is not the act that gets to resolve it silently.
+      const blocking = edges.filter((e) => e.isCurrent && utcDayAfter(e.validFrom, a.soldAt));
+      if (blocking.length) {
+        // IT DOES NOT CLAIM THE SALE DATE IS WRONG. Measured on TMBS 2026-10-11: 312 of 319
+        // ownership edges have a `valid_from` within two seconds of their own `created_at` — the
+        // @default(now()), not a date anybody stated. So the recorded date is usually just when
+        // GreaseDesk first saw the car, and on the balance of probability it is the RECORD that
+        // needs correcting, not the sale. Saying "one of the two is wrong" sent the reader to
+        // re-check a sale date they had from the paperwork.
+        throw new SaleRefused(
+          'This car’s ownership is recorded from '
+          + blocking.map((e) => e.validFrom.toISOString().slice(0, 10)).join(', ')
+          + ', which is after this sale on ' + a.soldAt.toISOString().slice(0, 10) + '. '
+          + 'That date is usually just when this car was first seen here, not when its owner got it — '
+          + 'so it is most likely the ownership record that needs the earlier date, rather than your '
+          + 'sale date being wrong. Correct the ownership on the car, then record the sale again.',
+        );
+      }
       await tx.vehicleOwnership.updateMany({
         where: { vehicle_id: item.vehicle.id, is_current: true },
         data: { is_current: false, valid_to: a.soldAt },
       });
-      await tx.vehicleOwnership.create({
-        data: { vehicle_id: item.vehicle.id, customer_id: customerId, is_current: true, valid_from: a.soldAt },
-      });
+
+      const own = ownershipWrite(customerId, laterOwners(edges, a.soldAt));
+      if (own.kind === 'ended') {
+        // A later owner is on record, so the buyer held the car between the sale and that owner.
+        const bad = invertedEdgeRefusal(a.soldAt, own.validTo);
+        if (bad) throw new SaleRefused(bad);
+        await tx.vehicleOwnership.create({
+          data: { vehicle_id: item.vehicle.id, customer_id: customerId, is_current: false,
+            valid_from: a.soldAt, valid_to: own.validTo },
+        });
+      } else if (own.kind === 'current') {
+        await tx.vehicleOwnership.create({
+          data: { vehicle_id: item.vehicle.id, customer_id: customerId, is_current: true, valid_from: a.soldAt },
+        });
+      }
+      // kind === 'none' means the buyer already owns it from a later date — nothing to add, and
+      // adding would be the second edge for one owner that ownershipWrite exists to prevent.
       // The identity anchor only — the owner record above already exists, so this cannot touch it.
       await ensureIdentityAndCurrentOwner(tx, {
         vehicleId: item.vehicle.id, groupId: a.groupId, customerId,

@@ -167,7 +167,13 @@ try {
   console.log('\n— A SALE TO A NEW BUYER: ALL FOUR PARTS —');
   const a = await car('margin');
   const prev = await mkCustomer('Previous keeper', '9 Old Street');
-  await prisma.vehicleOwnership.create({ data: { vehicle_id: a.vehicleId, customer_id: prev.id, is_current: true } });
+  // DATED BEFORE THE SALE, as a real keeper's record is. It used to be created with no `valid_from`
+  // at all, which defaults to NOW — so the keeper "owned the car from today" while the sale was
+  // dated a month earlier. The old sellCar ended it at the sale date anyway and wrote an inverted
+  // edge (valid_to before valid_from); that is the defect this fixture was silently relying on.
+  // A contradictory edge is now REFUSED, and has its own clause further down.
+  await prisma.vehicleOwnership.create({ data: { vehicle_id: a.vehicleId, customer_id: prev.id, is_current: true,
+    valid_from: new Date('2026-08-01T00:00:00.000Z') } });
   const counterBefore = (await prisma.invoiceSequence.findUnique({ where: { group_id: ZZ_GROUP }, select: { vehicle_sale_last_value: true } }))?.vehicle_sale_last_value ?? 0;
   const sa = await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id, stockItemId: a.itemId, soldAt,
     salePence: 800000, buyer: { name: `${PREFIX} New Buyer`, address: '1 Buyer Road\nBirmingham', phone: '07700 900123', email: 'zz-buyer@example.invalid' } });
@@ -187,6 +193,37 @@ try {
    */
   check('  …the previous keeper’s record is ENDED, dated the sale', ended?.is_current === false && ended?.valid_to?.toISOString() === soldAt.toISOString(),
     `current=${ended?.is_current} valid_to=${ended?.valid_to?.toISOString?.()}`);
+  /**
+   * ── AND A CURRENT EDGE DATED AFTER THE SALE IS REFUSED, NOT RESOLVED ──────────────────────────
+   * `valid_from` is @default(now()) and neither lib/vehicle-identity nor pages/api/import/commit
+   * sets it, so edges are routinely stamped "from today" whatever the real date — and any backdated
+   * sale meets one. The old code ended it anyway and wrote valid_to BEFORE valid_from. Skipping it
+   * instead (the first attempt at this fix) was worse: the keeper stayed current, two owners were
+   * current at once, and nothing looked broken.
+   *
+   * So the sale refuses. The contradiction exists before the sale arrives, and a sale is not the
+   * act that gets to resolve it silently.
+   */
+  {
+    const v2 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${PREFIX}CONTRA`, registration_normalized: `${PREFIX}CONTRA` }, select: { id: true } });
+    const keeper = await mkCustomer('Contra keeper', '3 Contra Way');
+    // No valid_from: the shape every un-dated writer produces.
+    await prisma.vehicleOwnership.create({ data: { vehicle_id: v2.id, customer_id: keeper.id, is_current: true } });
+    const it2 = await ST.takeIntoStock({ groupId: ZZ_GROUP, userId: user.id, vehicleId: v2.id,
+      acquiredAt: new Date('2026-07-01T00:00:00.000Z'), purchasePence: 100000, vatStatus: 'margin', source: 'trade' });
+    const sold = 'refused' in it2 ? { refused: it2.refused } : await SALE.sellCar({ groupId: ZZ_GROUP, userId: user.id, siteId: site.id,
+      stockItemId: it2.id, soldAt: new Date('2026-09-12T00:00:00.000Z'), salePence: 200000,
+      buyer: { name: `${PREFIX} Contra Buyer`, address: '4 Contra Way\nTipton' } });
+    check('a sale dated BEFORE the only recorded owner is refused, not silently resolved',
+      'refused' in sold && /which is after this sale on/.test(sold.refused)
+      && /usually just when this car was first seen here/.test(sold.refused),
+      'refused' in sold ? sold.refused.slice(0, 80) : 'ALLOWED');
+    const left = await prisma.vehicleOwnership.findMany({ where: { vehicle_id: v2.id }, select: { valid_from: true, valid_to: true, is_current: true } });
+    check('  …and nothing was written: no inverted edge, no second current owner',
+      left.length === 1 && left[0].is_current === true && left[0].valid_to === null,
+      `${left.length} edge(s)`);
+  }
+
   check('  …and exactly one current owner, the buyer, from the sale date', current.length === 1 && current[0].customer_id === A.customerId
     && current[0].valid_from.toISOString() === soldAt.toISOString(), `${current.length} current`);
   const card = await prisma.jobCard.findUnique({ where: { id: A.cardId }, select: { status: true, sale_of_stock_item_id: true, stock_item_id: true, customer_id: true } });

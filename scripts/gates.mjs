@@ -192,6 +192,7 @@ const TIERS = {
     'dev-restart-gate',
     'diary-drag-gate',
     'stock-fillable-gate',
+    'ownership-edge-gate',
     'held-on-lift-gate',
     'fast-set-gate',
     'backup-gate',
