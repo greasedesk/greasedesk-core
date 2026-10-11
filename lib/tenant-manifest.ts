@@ -175,6 +175,9 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   // ── THEIR OWN TRAIL, AND THEIR OWN IMPORTS ────────────────────────────────────────────────────
   AuditLog: TENANT(),
   ImportBatch: TENANT(),
+  // Their own record of asking for their own data. Exported, so the history travels with them —
+  // including, recursively, the export that carried it.
+  ExportJob: TENANT(),
   StagedInvoice: TENANT(),
   StagedLine: VIA('StagedInvoice'),
 

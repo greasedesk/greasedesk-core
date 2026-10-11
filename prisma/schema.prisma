@@ -585,6 +585,7 @@ model Group {
   stockDisposals        StockDisposal[]
   stockCostSnapshots    StockCostSnapshot[]
   stockCosts            StockCost[]
+  export_jobs ExportJob[]
 }
 
 /**
@@ -5596,4 +5597,50 @@ model BackupRun {
   recorded_at DateTime @default(now())
 
   @@index([started_at])
+}
+
+/// ── A TENANT'S OWN COPY OF ITS DATA ────────────────────────────────────────────────────────────
+/// One row per export a garage asks for. NOT a request-bound action: the rows are trivial (14,461
+/// on the live tenant) but the photos are not, and an export cannot know its own size in advance —
+/// JobCardPhoto records no byte count and the bytes live in R2, so 85 videos could be 200 MB or
+/// 4 GB. A request would be betting on a number nobody has measured.
+///
+/// The previous exports stay listed: a second request must not silently replace the first, because
+/// the first may be the one somebody has already sent to their accountant.
+model ExportJob {
+  id       String @id @default(uuid())
+  group_id String
+  /// Who asked. Kept even if they later leave — the audit question is who took the data.
+  requested_by_user_id String
+  /// lib/tenant-export-job EXPORT_STATUSES.
+  status   String @default("queued")
+  ///
+  /// @nulls: started_at, finished_at, expires_at, object_key, bytes, row_total, file_count, blob_count, blob_missing, manifest_json, failed_reason, downloaded_at
+  /// ONE MEANING: a null is a stage this job has not reached. A queued job has no start time, a
+  /// failed one has no size, a ready one that nobody has fetched has no downloaded_at — and `0`
+  /// would say the opposite in every case ("an empty export", "downloaded zero times" versus "never
+  /// offered"). `blob_missing` is the exception worth reading twice: 0 means every photo was found
+  /// and copied, NULL means nobody counted, and those must not be confused when somebody asks
+  /// whether their photos are in the file.
+  started_at   DateTime?
+  finished_at  DateTime?
+  /// When the download link stops working. Stated to the garage rather than left to be discovered.
+  expires_at   DateTime?
+  object_key   String?
+  bytes        BigInt?
+  row_total    Int?
+  file_count   Int?
+  blob_count   Int?
+  blob_missing Int?
+  /// Per-file row counts and the omissions, as written into the zip's own manifest.json. Stored so
+  /// the audit question "what was in it" is answerable without fetching the file.
+  manifest_json Json?
+  failed_reason String?
+  downloaded_at DateTime?
+  download_count Int @default(0)
+  requested_at  DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([group_id, requested_at])
 }

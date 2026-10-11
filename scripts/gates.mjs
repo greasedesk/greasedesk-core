@@ -190,6 +190,7 @@ const TIERS = {
     'car-sale-gate',
     'tenant-manifest-gate',
     'backup-run-gate',
+    'tenant-export-gate',
     'historical-sale-gate',
     'dev-restart-gate',
     'diary-drag-gate',
