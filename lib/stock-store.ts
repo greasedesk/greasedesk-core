@@ -20,6 +20,10 @@ import {
   groupPrepLines, prepCost, type PrepCardGroup, type PrepCost,
 } from '@/lib/stock-prep';
 import { projectStock, type Projection } from '@/lib/stock-projection';
+import { writeAudit } from '@/lib/audit';
+import {
+  IS_CAR_FACT, PURCHASE_PAPERWORK_KEYS, checkPaperworkEdit, mergeTicks, type PurchasePaperworkKey,
+} from '@/lib/stock-paperwork';
 import { summariseSold, type SoldRow, type SoldSummary } from '@/lib/stock-sold';
 import { afterSaleWork } from '@/lib/stock-after-sale';
 import type { AfterSaleFigures } from '@/lib/stock-after-sale-rules';
@@ -858,6 +862,19 @@ export type StockDetail = {
   book: {
     stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
     vin: string | null; colour: string | null;
+    /**
+     * ── THE CAR'S OWN MOT, ON THE PAGE FOR THE CAR ────────────────────────────────────────────
+     * The data was always on the Vehicle; this page was the one surface that did not show it. On
+     * LC09XFU the stored expiry was stale — the car had been tested on the Friday — and nothing
+     * here said either the date OR how old the answer was, so there was nothing to distrust.
+     *
+     * `motCheckedAt` travels WITH the expiry for that reason: a date alone cannot tell "expired"
+     * from "we last asked in June". See lib/mot-verification — a miss stamps nothing, so this is
+     * when DVSA last ANSWERED, not when we last tried.
+     */
+    motExpiry: string | null; motCheckedAt: string | null;
+    /** Whether the car has gone — decides which fields this page may still offer (IS_CAR_FACT). */
+    disposed: boolean;
     sale: null | { recordedNotInvoiced: boolean; receiptRef: string | null; invoiceNumber: string | null;
       buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[]; saleMileage: number | null };
   };
@@ -874,7 +891,8 @@ export async function stockDetail(
       services_pence: true, vat_status: true, source: true, mileage_warranted: true,
       projected_sale_pence: true, arrived_at: true, status: true,
       stock_number: true, seller_name: true, purchase_ref: true, not_on_paperwork: true,
-      vehicle: { select: { registration: true, make: true, model: true, vin: true, colour: true } },
+      vehicle: { select: { id: true, registration: true, make: true, model: true, vin: true, colour: true,
+        mot_expiry: true, mot_checked_at: true } },
       disposal: { select: {
         id: true, disposed_at: true, kind: true, sale_pence: true, recorded_not_invoiced: true, receipt_ref: true,
         buyer_name: true, buyer_address: true, not_on_paperwork: true,
@@ -935,6 +953,9 @@ export async function stockDetail(
       stockNumber: it.stock_number, sellerName: it.seller_name, purchaseRef: it.purchase_ref,
       notOnPaperwork: it.not_on_paperwork ?? [],
       vin: it.vehicle?.vin ?? null, colour: it.vehicle?.colour ?? null,
+      motExpiry: it.vehicle?.mot_expiry ? it.vehicle.mot_expiry.toISOString() : null,
+      motCheckedAt: it.vehicle?.mot_checked_at ? it.vehicle.mot_checked_at.toISOString() : null,
+      disposed: !!it.disposal,
       sale: it.disposal && hasSalePrice(it.disposal.kind as DisposalKind) ? {
         recordedNotInvoiced: it.disposal.recorded_not_invoiced, receiptRef: it.disposal.receipt_ref,
         invoiceNumber: saleInvoice?.invoice_number ?? null,
@@ -1279,4 +1300,138 @@ export async function stockPrepDetail(groupId: string, stockItemId: string): Pro
     },
   });
   return { mode: 'live', groups: groupPrepLines(cards as never) };
+}
+
+/**
+ * ── FILLING IN THE STOCK BOOK AFTER ENTRY ───────────────────────────────────────────────────────
+ * The book printed "not recorded" against VIN, Colour, Seller and Purchase reference on LC09XFU and
+ * offered no route to record any of them: a panel naming its own gaps with no way to close them.
+ *
+ * TWO WRITERS, BECAUSE THERE ARE TWO RULES (owner's ruling, 2026-10-11), and they are split on the
+ * SUBJECT rather than on convenience:
+ *
+ *   updateCarFacts      VIN and colour live on VEHICLE. Facts about the car, so they stay editable
+ *                       after disposal — a car does not change colour because it changed hands, and
+ *                       a VIN mistyped in April is still mistyped in October.
+ *   updatePurchaseFacts seller and reference live on STOCK ITEM. Terms of the deal: they fed the
+ *                       margin, so they freeze at disposal with the money, exactly as
+ *                       updateStockItem's figures do.
+ *
+ * `not_on_paperwork` is ONE column spanning both groups, so each writer merges only the keys it owns
+ * (lib/stock-paperwork::mergeTicks). A writer saving the whole list would erase the other's ticks
+ * every time, and the ticks are what distinguish "nobody looked" from "somebody looked and it was
+ * not there" — the distinction the column exists for.
+ */
+const CAR_FACT_KEYS = PURCHASE_PAPERWORK_KEYS.filter((k) => IS_CAR_FACT[k]) as PurchasePaperworkKey[];
+const PURCHASE_TERM_KEYS = PURCHASE_PAPERWORK_KEYS.filter((k) => !IS_CAR_FACT[k]) as PurchasePaperworkKey[];
+
+/** Blank means "clear it back to unknown", which must stay reachable, so '' maps to null not skip. */
+const asText = (v: unknown): string | null | undefined => {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+};
+
+export async function updateCarFacts(a: {
+  groupId: string; userId: string; stockItemId: string;
+  vin?: unknown; colour?: unknown; notOnPaperwork?: unknown;
+}): Promise<{ id: string } | { refused: string }> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, vehicle_id: true, not_on_paperwork: true,
+      vehicle: { select: { id: true, vin: true, colour: true, make: true, model: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+
+  const vin = asText(a.vin);
+  const colour = asText(a.colour);
+  const ticked = a.notOnPaperwork === undefined ? (it.not_on_paperwork ?? []).filter((k) => (CAR_FACT_KEYS as readonly string[]).includes(k)) : a.notOnPaperwork;
+
+  // The CONTRADICTION rule survives into editing; the completeness rule does not — see
+  // checkPaperworkEdit. Judged against what the row will HOLD, not only against what was sent.
+  const after = {
+    vin: vin === undefined ? it.vehicle?.vin : vin,
+    colour: colour === undefined ? it.vehicle?.colour : colour,
+    make_model: it.vehicle?.make || it.vehicle?.model || null,
+  };
+  const bad = checkPaperworkEdit(CAR_FACT_KEYS, after, ticked);
+  if (bad) return { refused: bad };
+
+  const vehicleData: Record<string, unknown> = {};
+  if (vin !== undefined) vehicleData.vin = vin;
+  if (colour !== undefined) vehicleData.colour = colour;
+
+  const nextTicks = mergeTicks(it.not_on_paperwork, CAR_FACT_KEYS, ticked as string[]);
+  await prisma.$transaction(async (tx) => {
+    if (Object.keys(vehicleData).length) {
+      await tx.vehicle.update({ where: { id: it.vehicle_id }, data: vehicleData });
+    }
+    await tx.stockItem.update({ where: { id: it.id }, data: { not_on_paperwork: nextTicks } });
+    await writeAudit(tx, {
+      groupId: a.groupId, userId: a.userId, entity: 'stock_item', entityId: it.id,
+      action: 'stock.car_facts_edited',
+      // BEFORE AND AFTER, because a VIN correction is the kind of change somebody later disputes.
+      diff: {
+        vin: vin !== undefined ? { from: it.vehicle?.vin ?? null, to: vin } : undefined,
+        colour: colour !== undefined ? { from: it.vehicle?.colour ?? null, to: colour } : undefined,
+        notOnPaperwork: { from: it.not_on_paperwork ?? [], to: nextTicks },
+      },
+    });
+  });
+  return { id: it.id };
+}
+
+export async function updatePurchaseFacts(a: {
+  groupId: string; userId: string; stockItemId: string;
+  sellerName?: unknown; purchaseRef?: unknown; notOnPaperwork?: unknown;
+}): Promise<{ id: string } | { refused: string }> {
+  const it = await prisma.stockItem.findFirst({
+    where: { id: a.stockItemId, group_id: a.groupId },
+    select: { id: true, seller_name: true, purchase_ref: true, mileage_warranted: true,
+      not_on_paperwork: true, disposal: { select: { id: true } } },
+  });
+  if (!it) return { refused: 'That stock record is not on this account.' };
+
+  // THE SAME FREEZE updateStockItem applies, for the same reason and in the same words: these are
+  // terms of the purchase and they fed the margin.
+  if (it.disposal) {
+    return {
+      refused: 'This car has been sold and the terms of its purchase were frozen at disposal. '
+        + 'Re-running a past quarter has to give what it gave then. The VIN and the colour can '
+        + 'still be corrected — those are facts about the car, not terms of the deal.',
+    };
+  }
+
+  const sellerName = asText(a.sellerName);
+  const purchaseRef = asText(a.purchaseRef);
+  const ticked = a.notOnPaperwork === undefined ? (it.not_on_paperwork ?? []).filter((k) => (PURCHASE_TERM_KEYS as readonly string[]).includes(k)) : a.notOnPaperwork;
+
+  const after = {
+    seller_name: sellerName === undefined ? it.seller_name : sellerName,
+    purchase_ref: purchaseRef === undefined ? it.purchase_ref : purchaseRef,
+    mileage: it.mileage_warranted,
+  };
+  const bad = checkPaperworkEdit(PURCHASE_TERM_KEYS, after, ticked);
+  if (bad) return { refused: bad };
+
+  const data: Record<string, unknown> = {};
+  if (sellerName !== undefined) data.seller_name = sellerName;
+  if (purchaseRef !== undefined) data.purchase_ref = purchaseRef;
+  const nextTicks = mergeTicks(it.not_on_paperwork, PURCHASE_TERM_KEYS, ticked as string[]);
+  data.not_on_paperwork = nextTicks;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.stockItem.update({ where: { id: it.id }, data });
+    await writeAudit(tx, {
+      groupId: a.groupId, userId: a.userId, entity: 'stock_item', entityId: it.id,
+      action: 'stock.purchase_edited',
+      diff: {
+        sellerName: sellerName !== undefined ? { from: it.seller_name ?? null, to: sellerName } : undefined,
+        purchaseRef: purchaseRef !== undefined ? { from: it.purchase_ref ?? null, to: purchaseRef } : undefined,
+        notOnPaperwork: { from: it.not_on_paperwork ?? [], to: nextTicks },
+      },
+    });
+  });
+  return { id: it.id };
 }

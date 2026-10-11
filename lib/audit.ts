@@ -72,6 +72,8 @@ export type AuditAction =
   | 'stock.sold'            // a car sold out of stock: disposal, ownership to the buyer, sale card and invoice, one transaction
   | 'stock.boundary_declared'      // "every car sale from today is invoiced here" — stamps Group.car_sales_invoiced_from, once
   | 'stock.boundary_moved_earlier' // the declaration narrowed; never later
+  | 'stock.car_facts_edited'   // VIN/colour (+ their paperwork ticks) corrected — allowed after disposal
+  | 'stock.purchase_edited'    // seller/purchase reference (+ ticks) corrected — refused after disposal
   | 'stock.recorded_historical' // a car sold BEFORE car sales were invoiced here: stock item, costs, buyer and a disposal marked recorded-not-invoiced; nothing minted
   | 'invoice.minted'
   // DVSA moved the expiry between the card being looked at and the document being frozen. Only

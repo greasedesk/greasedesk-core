@@ -41,6 +41,59 @@ export const PAPERWORK_LABELS: Record<PaperworkKey, string> = {
   sale_mileage: 'Mileage at sale',
 };
 
+/**
+ * ── A FACT ABOUT THE CAR, OR A TERM OF THE DEAL? (owner's ruling, 2026-10-11) ───────────────────
+ * On a car that has been SOLD, the VIN and the colour stay editable: they are facts about the car,
+ * and a car does not change colour because it changed hands. The seller, the purchase reference and
+ * the mileage at purchase are TERMS OF THE DEAL — they fed the margin, and they freeze at disposal
+ * with the money, because re-running a filed quarter has to give what it gave then.
+ *
+ * TOTAL OVER EVERY KEY BY CONSTRUCTION, checked at boot: a key added later cannot inherit an answer
+ * by being forgotten. Sale-side keys are terms of THAT deal, so they freeze too.
+ */
+export const IS_CAR_FACT: Record<PaperworkKey, boolean> = {
+  // facts about the car
+  make_model: true, vin: true, colour: true,
+  // terms of the purchase
+  seller_name: false, purchase_ref: false, mileage: false,
+  // terms of the sale
+  buyer_name: false, buyer_address: false, receipt_ref: false, sale_mileage: false,
+};
+
+// FAIL AT BOOT, not at the first field somebody cannot edit on a sold car.
+for (const k of [...PURCHASE_PAPERWORK_KEYS, ...SALE_PAPERWORK_KEYS]) {
+  if (typeof IS_CAR_FACT[k] !== 'boolean') {
+    throw new Error(`UNCLASSIFIED_PAPERWORK_KEY: '${k}' has no entry in IS_CAR_FACT. `
+      + 'Every paperwork key must say whether it is a fact about the CAR (editable after disposal) '
+      + 'or a term of the DEAL (frozen with the money).');
+  }
+}
+
+/** May this field still be changed once the car has gone? One predicate, so the writer and the
+ *  screen that decides whether to show an input cannot drift apart. */
+export const editableAfterDisposal = (key: PaperworkKey): boolean => IS_CAR_FACT[key] === true;
+
+/**
+ * ── MERGING TICKS WITHOUT CLOBBERING SOMEONE ELSE'S ─────────────────────────────────────────────
+ * `not_on_paperwork` is ONE column holding keys from both groups, and after this slice it has TWO
+ * writers: the deal-terms editor and the car-facts editor, with different disposal rules. A writer
+ * that saved the whole list would erase the other's ticks every time, so each one merges only the
+ * keys it OWNS and leaves every other entry exactly as it found it.
+ *
+ * Unknown strings already in the column are preserved too: this list is a record of what a person
+ * said, and a reader that silently drops what it does not recognise is a reader that loses facts.
+ */
+export function mergeTicks(
+  existing: readonly string[] | null | undefined,
+  owned: readonly PaperworkKey[],
+  ticked: readonly string[],
+): string[] {
+  const ownedSet = new Set<string>(owned);
+  const kept = (existing ?? []).filter((k) => !ownedSet.has(k));
+  const added = owned.filter((k) => ticked.includes(k));
+  return [...new Set([...kept, ...added])];
+}
+
 /** What the book prints. "Not supplied" says somebody looked; "not recorded" says nobody did. */
 export const NOT_SUPPLIED_WORDS = 'not supplied';
 export const NOT_RECORDED_WORDS = 'not recorded';
@@ -97,6 +150,35 @@ export function checkPaperwork(
 }
 
 /** The fields of a book row that nobody was asked for — what makes a row incomplete rather than finished. */
+/**
+ * ── THE SAME COLUMN, EDITED LATER, IS A DIFFERENT QUESTION ──────────────────────────────────────
+ * `checkPaperwork` demands every key be filled OR ticked, because at ENTRY a blank is somebody not
+ * having been asked and the form's job is to ask. Editing afterwards is the opposite situation: the
+ * whole point is filling one gap at a time, and demanding the colour before accepting a VIN is how
+ * a fillable panel becomes an unfillable form.
+ *
+ * So this is a SEPARATE function rather than a flag on that one. The contradiction rule survives —
+ * filled AND ticked still means one of the two is wrong — and the completeness rule does not. They
+ * are asserted to DISAGREE on blank-and-unticked, so neither can quietly become the other.
+ */
+export function checkPaperworkEdit(
+  keys: readonly PaperworkKey[],
+  values: Partial<Record<PaperworkKey, unknown>>,
+  ticked: unknown,
+): string | null {
+  if (!Array.isArray(ticked) || ticked.some((t) => typeof t !== 'string')) {
+    return 'The list of things not on the paperwork could not be read.';
+  }
+  const unknownTick = (ticked as string[]).find((t) => !(keys as readonly string[]).includes(t));
+  if (unknownTick) return `“${unknownTick}” is not a field that can be marked as not on the paperwork here.`;
+  for (const k of keys) {
+    if (filled(values[k]) && (ticked as string[]).includes(k)) {
+      return `${PAPERWORK_LABELS[k]} is filled in AND ticked as not on the paperwork. One of those is wrong — clear the field or untick it.`;
+    }
+  }
+  return null;
+}
+
 export function notRecordedLabels(fields: Partial<Record<PaperworkKey, PaperworkField>>): string[] {
   return (Object.keys(fields) as PaperworkKey[])
     .filter((k) => fields[k]?.state === 'not_recorded')

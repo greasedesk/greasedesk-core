@@ -18,7 +18,8 @@ import { requireTenantApi } from '@/lib/admin-guard';
 import { prisma } from '@/lib/db';
 import {
   addStockCost, creditStockCost, findOrCreateVehicle, findPriorSale, findVehicleByReg, recordDisposal,
-  setStockStatus, soldInPeriod, stockDetail, stockList, takeIntoStock, updateStockItem,
+  setStockStatus, soldInPeriod, stockDetail, stockList, takeIntoStock, updateCarFacts,
+  updatePurchaseFacts, updateStockItem,
 } from '@/lib/stock-store';
 import { resolveRange } from '@/lib/dashboard-periods';
 import { ALL_TIME_FROM, SOLD_EXTRA_PRESET } from '@/lib/stock-sold';
@@ -204,6 +205,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         groupId: scope.groupId, userId: scope.userId, stockItemId: String(b.stockItemId ?? ''),
         reversesId: String(b.reversesId ?? ''), amountPence: b.amountPence,
         incurredOn: parseDate(b.incurredOn), description: b.description,
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    /**
+     * FILLING IN THE BOOK AFTER ENTRY. Two actions, not one, because the disposal rule differs: car
+     * facts stay editable after the car has gone, purchase terms do not. A single action taking a
+     * field list would have to decide per field inside itself, and its refusal would stop being
+     * able to say WHICH rule it was applying — which is most of a refusal's value.
+     */
+    if (b.action === 'edit-car-facts') {
+      const out = await updateCarFacts({
+        groupId: scope.groupId, userId: scope.userId, stockItemId: String(b.stockItemId ?? ''),
+        vin: b.vin, colour: b.colour, notOnPaperwork: b.notOnPaperwork,
+      });
+      if ('refused' in out) return res.status(409).json({ message: out.refused });
+      return res.status(200).json({ ok: true, id: out.id });
+    }
+
+    if (b.action === 'edit-purchase') {
+      const out = await updatePurchaseFacts({
+        groupId: scope.groupId, userId: scope.userId, stockItemId: String(b.stockItemId ?? ''),
+        sellerName: b.sellerName, purchaseRef: b.purchaseRef, notOnPaperwork: b.notOnPaperwork,
       });
       if ('refused' in out) return res.status(409).json({ message: out.refused });
       return res.status(200).json({ ok: true, id: out.id });

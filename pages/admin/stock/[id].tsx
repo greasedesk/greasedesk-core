@@ -66,6 +66,11 @@ type Detail = {
   book: {
     stockNumber: number | null; sellerName: string | null; purchaseRef: string | null; notOnPaperwork: string[];
     vin: string | null; colour: string | null;
+    /** The car's own MOT, with WHEN DVSA last answered beside it — a date with no provenance gives
+     *  nobody a reason to doubt it, which is how LC09XFU's stale expiry went unnoticed. */
+    motExpiry: string | null; motCheckedAt: string | null;
+    /** Whether the car has gone: decides which fields this page may offer (lib/stock-paperwork). */
+    disposed: boolean;
     sale: null | { recordedNotInvoiced: boolean; receiptRef: string | null; invoiceNumber: string | null;
       buyerName: string | null; buyerAddress: string | null; notOnPaperwork: string[]; saleMileage: number | null };
   };
@@ -77,6 +82,10 @@ export default function StockCarPage() {
   const [d, setD] = useState<Detail | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The stock book's editor. `null` = reading; otherwise which half is open. See the panel below. */
+  const [bookEdit, setBookEdit] = useState<null | 'car' | 'purchase'>(null);
+  const [bookDraft, setBookDraft] = useState<Record<string, string>>({});
+  const [bookTicks, setBookTicks] = useState<string[]>([]);
   const [form, setForm] = useState({ acquiredAt: '', purchase: '', premium: '', services: '', warranted: 'unknown', projected: '' });
   const [cost, setCost] = useState({ kind: 'delivery_in' as StockCostKind, description: '', amount: '', incurredOn: '', vatTreatment: 'standard_not_recoverable' });
   const [credit, setCredit] = useState<{ id: string; amount: string; on: string } | null>(null);
@@ -295,7 +304,97 @@ export default function StockCarPage() {
                         <dd className="text-ink whitespace-pre-line" data-testid={id}>{value}</dd>
                       </React.Fragment>
                     ))}
+                    {/* ── THE CAR'S OWN MOT ─────────────────────────────────────────────────
+                        It is a car the garage owns and its MOT matters the same as a customer's.
+                        `motCheckedAt` is printed BESIDE the date, not instead of it: on LC09XFU the
+                        stored expiry had been overtaken by a test on the Friday, and a date with no
+                        provenance gives nobody a reason to doubt it. A miss stamps nothing
+                        (lib/mot-verification), so this is when DVSA last ANSWERED. */}
+                    <dt className="text-muted">MOT expires</dt>
+                    <dd className="text-ink" data-testid="sb-mot">
+                      {bk.motExpiry ? new Date(bk.motExpiry).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : 'not recorded'}
+                      {bk.motCheckedAt && (
+                        <span className="block text-xs text-muted" data-testid="sb-mot-checked">
+                          DVSA last answered {new Date(bk.motCheckedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
+                        </span>
+                      )}
+                      {!bk.motCheckedAt && <span className="block text-xs text-muted" data-testid="sb-mot-checked">never checked against DVSA</span>}
+                    </dd>
                   </dl>
+
+                  {/* ── FILLING THE GAPS THE PANEL NAMES ───────────────────────────────────
+                      A panel that lists what it does not know and offers no way to say it is the
+                      defect this slice exists for. TWO editors, not one, because the rule differs:
+                      the VIN and the colour are facts about the CAR and stay editable after the car
+                      has gone; the seller and the reference are terms of the DEAL and freeze with
+                      the money. The page shows exactly what the writer will accept, so a person is
+                      never offered an input whose save is refused. */}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" disabled={busy} data-testid="sb-edit-car"
+                      onClick={() => { setBookEdit('car'); setBookDraft({ vin: bk.vin ?? '', colour: bk.colour ?? '' }); setBookTicks(bk.notOnPaperwork.filter((k) => k === 'vin' || k === 'colour')); }}
+                      className="rounded-lg bg-surface-muted px-3 py-1.5 text-sm text-ink">Edit VIN and colour</button>
+                    {!bk.disposed && (
+                      <button type="button" disabled={busy} data-testid="sb-edit-purchase"
+                        onClick={() => { setBookEdit('purchase'); setBookDraft({ sellerName: bk.sellerName ?? '', purchaseRef: bk.purchaseRef ?? '' }); setBookTicks(bk.notOnPaperwork.filter((k) => k === 'seller_name' || k === 'purchase_ref')); }}
+                        className="rounded-lg bg-surface-muted px-3 py-1.5 text-sm text-ink">Edit seller and reference</button>
+                    )}
+                    {bk.disposed && (
+                      <p className="text-xs text-muted" data-testid="sb-purchase-frozen">
+                        The seller and the purchase reference froze when this car was sold — they are terms of the
+                        deal and they fed the margin. The VIN and the colour can still be corrected.
+                      </p>
+                    )}
+                    <button type="button" disabled={busy} data-testid="sb-mot-refresh"
+                      onClick={() => {
+                        setBusy(true); setMsg(null);
+                        fetch('/api/mot-refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vehicleId: d.vehicleId }) })
+                          .then(async (r) => { const b = await r.json().catch(() => ({})); setMsg(r.ok ? (b.message ?? 'Checked with DVSA.') : (b.message ?? 'Could not check with DVSA.')); if (r.ok) await load(); })
+                          .catch(() => setMsg('Could not check with DVSA.'))
+                          .finally(() => setBusy(false));   // cleared in finally, per the standing rule
+                      }}
+                      className="rounded-lg bg-accent-soft px-3 py-1.5 text-sm text-accent">Check the MOT with DVSA</button>
+                  </div>
+
+                  {bookEdit && (() => {
+                    const fields = bookEdit === 'car'
+                      ? [['vin', 'vin', 'VIN'], ['colour', 'colour', 'Colour']] as const
+                      : [['sellerName', 'seller_name', 'Seller'], ['purchaseRef', 'purchase_ref', 'Purchase invoice or receipt']] as const;
+                    return (
+                      <div className="mt-3 rounded-lg border border-line p-3" data-testid="sb-editor">
+                        {fields.map(([draftKey, tickKey, label]) => (
+                          <div key={draftKey} className="mb-2">
+                            <label className="block text-xs text-muted mb-1" htmlFor={`sb-in-${draftKey}`}>{label}</label>
+                            <input id={`sb-in-${draftKey}`} data-testid={`sb-in-${draftKey}`}
+                              className="w-full rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink"
+                              value={bookDraft[draftKey] ?? ''} disabled={bookTicks.includes(tickKey)}
+                              onChange={(e) => setBookDraft((s) => ({ ...s, [draftKey]: e.target.value }))} />
+                            {/* THE TICK IS A FACT, NOT A BLANK: it says somebody looked and it was
+                                not there, which a null cannot say. Ticking disables the input
+                                because filled-AND-ticked is refused by the writer anyway. */}
+                            <label className="mt-1 flex items-center gap-2 text-xs text-muted">
+                              <input type="checkbox" data-testid={`sb-tick-${tickKey}`}
+                                checked={bookTicks.includes(tickKey)}
+                                onChange={(e) => setBookTicks((s) => (e.target.checked ? [...s, tickKey] : s.filter((k) => k !== tickKey)))} />
+                              Not on the paperwork
+                            </label>
+                          </div>
+                        ))}
+                        <div className="mt-2 flex gap-2">
+                          <button type="button" disabled={busy} data-testid="sb-save"
+                            onClick={() => post(
+                              bookEdit === 'car'
+                                ? { action: 'edit-car-facts', vin: bookDraft.vin ?? '', colour: bookDraft.colour ?? '', notOnPaperwork: bookTicks }
+                                : { action: 'edit-purchase', sellerName: bookDraft.sellerName ?? '', purchaseRef: bookDraft.purchaseRef ?? '', notOnPaperwork: bookTicks },
+                              () => setBookEdit(null),
+                            )}
+                            className="rounded-lg bg-accent px-3 py-1.5 text-sm text-white">Save</button>
+                          <button type="button" disabled={busy} data-testid="sb-cancel"
+                            onClick={() => setBookEdit(null)}
+                            className="rounded-lg bg-surface-muted px-3 py-1.5 text-sm text-ink">Cancel</button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </section>
               );
             })()}

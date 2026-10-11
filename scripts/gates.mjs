@@ -191,6 +191,7 @@ const TIERS = {
     'historical-sale-gate',
     'dev-restart-gate',
     'diary-drag-gate',
+    'stock-fillable-gate',
     'held-on-lift-gate',
     'fast-set-gate',
     'backup-gate',
@@ -636,7 +637,27 @@ const secs = green.concat(red).reduce((a, r) => a + (r.seconds ?? 0), 0);
 console.log(`\n${'='.repeat(76)}`);
 // FOUR NUMBERS, ALWAYS. Unrun is never folded into green or red — a tier that reads
 // "27 green · 1 red" when a clause declined to start is a tier reporting coverage it does not have.
-console.log(`${green.length} green · ${red.length} RED · ${unrunGates.length} UNRUN · ${unmet.length} of those an unmet requirement · ${Math.round(secs)}s`);
+/**
+ * ── AND THE DENOMINATOR, BECAUSE FOUR NUMBERS WITH A MOVING TOTAL ARE WORTHLESS ────────────────
+ * Four sweeps were reported clean from a checkout whose `scripts/` did not yet contain
+ * held-on-lift-gate: the tier ran 85 gates where main's ran 86, and nothing said so. The runner was
+ * not WRONG — `discover()` reads the directory, so 85 of 85 was true of that branch — but the
+ * reader was told a tier passed without being told how big the tier was.
+ *
+ * UNACCOUNTED IS ITS OWN CATEGORY, not a fifth word for red. A planned gate that produced none of
+ * the four outcomes was neither tested nor declined: it was lost. UNRUN is a DECISION the gate made
+ * and is already counted; exit 124 is already RED. This counts what fell through both.
+ */
+const planned = new Set(plan);
+const accounted = new Set(all.map((r) => r.gate));
+const unaccounted = [...planned].filter((g) => !accounted.has(g));
+console.log(`ran ${all.length} of ${planned.size} registered${unaccounted.length ? ` — ${unaccounted.length} UNACCOUNTED` : ''}`);
+console.log(`${green.length} green · ${red.length} RED · ${unrunGates.length} UNRUN · ${unmet.length} of those an unmet requirement · ${Math.round(secs)}s`)
+if (unaccounted.length) {
+  console.log('\nUNACCOUNTED — planned, but produced no result at all:');
+  for (const g of unaccounted) console.log(`  ${g}`);
+  console.log('  These were neither tested nor declined. A tier with any of these has not reported coverage.');
+};
 if (red.length) {
   console.log('\nRED:');
   for (const r of red) console.log(`  ${r.gate.padEnd(32)} ${r.failures != null ? `${r.failures} of ${r.assertions}` : `exit ${r.code}`}  ${r.firstFailure ?? ''}`);
