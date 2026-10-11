@@ -75,13 +75,36 @@ try {
   check('the verify step restores what it DOWNLOADED from the bucket',
     has('aws s3 cp "s3://$R2_BUCKET/$PREFIX/db-$STAMP.dump.gpg" "roundtrip.dump.gpg"') && has('rm -f "db-$STAMP.dump"'),
     'verifying the local file would say nothing about what reached R2');
-  check('  …into Postgres 18, the version the source runs', has('image: postgres:18') && has('postgresql-client-18'));
+  // ONE NUMBER, ASSERTED AS AN AGREEMENT. The workflow now derives the package, the PATH and its own
+  // version check from a single PGMAJOR, so the literal 'postgresql-client-18' is no longer in the
+  // file — and matching that literal is all this clause used to do. What it is REALLY about is that
+  // the client, the restore container and the source's major are the same number: pg_dump refuses a
+  // server newer than itself, and a dump restored by an OLDER server is not the thing we promise to
+  // be able to restore. Still pinned to 18 as well, because that is the source's major today and all
+  // three have to move together when Neon's does.
+  const pgMajor = wf.match(/PGMAJOR=(\d+)/)?.[1];
+  // lib/anchored-match's keyRegex is built for JS/TS object literals and would not match a YAML
+  // mapping — the same reason the exact-text matchers above do not use it, stated further up. The
+  // waiver has to sit on the line DIRECTLY above the matcher, so it is the last comment line here.
+  // @anchored-ok: `image: postgres:<n>` is a YAML line in a workflow file, not a JS object key
+  const verifyImage = wf.match(/image: postgres:(\d+)/)?.[1];
+  check('  …into Postgres 18, the version the source runs',
+    !!pgMajor && pgMajor === verifyImage && pgMajor === '18' && has('"postgresql-client-${PGMAJOR}"'),
+    `client ${pgMajor ?? '(no PGMAJOR)'} / restore container ${verifyImage ?? '(none)'}`);
   check('  …and fails the job on any difference', has('node scripts/backup-verify.mjs "manifest-$STAMP.json"'));
   check('the passphrase goes to gpg on a FILE DESCRIPTOR, never in argv', has('--passphrase-fd 0') && !has('--passphrase "$BACKUP_PASSPHRASE"'));
   check('the dump is encrypted before it leaves the runner', has('--symmetric --cipher-algo AES256') && has('db-$STAMP.dump.gpg'));
   check('the dump uses the DIRECT endpoint secret, not a pooled one',
     has('DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}') && has('--format=custom --no-owner --no-privileges'));
-  check('nothing echoes a connection string or a passphrase', !/echo[^\n]*(DATABASE_URL|PASSPHRASE)/.test(wf));
+  // NARROWED TO THE HAZARD, WHICH IS A VALUE AND NOT A NAME. The preflight step reports WHICH
+  // secrets the job can see, and names them in its ::error:: lines — that is the entire point of it,
+  // and a rule forbidding the NAME forbids saying which secret is missing. What must never reach a
+  // public log is an EXPANSION: `echo "$DATABASE_URL"`, `echo "${BACKUP_PASSPHRASE}"`. The $ sigil
+  // is the difference between naming a secret and disclosing one, so that is what this matches.
+  // Red-proved against both planted forms — narrowing a safety rule without re-proving it is how a
+  // rule becomes decoration.
+  check('nothing echoes a connection string or a passphrase',
+    !/echo[^\n]*\$\{?(?:BACKUP_)?(?:DATABASE_URL|PASSPHRASE)/.test(wf));
   check('the job is scheduled AND runnable by hand — a backup you cannot rehearse is one nobody rehearses',
     has('  schedule:') && has('  workflow_dispatch:'));
   check('a failure keeps the manifests to read afterwards', has('if: failure()') && has('upload-artifact'));

@@ -61,6 +61,67 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # ── WHICH SECRETS CAN THIS JOB ACTUALLY SEE? ──────────────────────────────────────────────
+      # FIRST step, before checkout, so a missing secret costs seconds instead of a minute — and so
+      # ALL SIX are named in one run. Nine consecutive nights failed one cause at a time, each night
+      # reporting only the first thing it tripped over; discovering six secrets six nights apart is
+      # not a diagnosis, it is a queue.
+      #
+      # It also replaces a refusal that named the wrong conclusion. With an empty connection string
+      # pg_dump falls back to a local Unix socket and reports
+      #   "connection to server on socket /var/run/postgresql/.s.PGSQL.5432 failed: No such file or
+      #    directory ... Is the server running locally?"
+      # which reads as a networking fault and is in fact an unset variable. Four nights were spent
+      # believing the first sentence.
+      #
+      # NO VALUE IS EVER PRINTED — not a length, not a prefix. This repository is PUBLIC. Only
+      # present/MISSING per name, and two shape booleans on the connection string. GitHub masks
+      # secret values as *** anyway; this step is written so there is nothing to mask.
+      - name: Preflight — which secrets are visible to this job
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Deliberately NOT -e: every missing name must be reported, not only the first.
+          set -uo pipefail
+          missing=0
+          for n in BACKUP_DATABASE_URL BACKUP_PASSPHRASE R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [ -z "${!n:-}" ]; then
+              echo "  MISSING  $n"
+              missing=$((missing + 1))
+            else
+              echo "  present  $n"
+            fi
+          done
+
+          # Shape, not content. A secret that is SET but wrong fails later with a worse message.
+          if [ -n "${BACKUP_DATABASE_URL:-}" ]; then
+            case "$BACKUP_DATABASE_URL" in
+              postgres://*|postgresql://*) echo "  shape    BACKUP_DATABASE_URL scheme ok" ;;
+              *) echo "::error::BACKUP_DATABASE_URL is set but does not begin postgres:// or postgresql://"; missing=$((missing + 1)) ;;
+            esac
+            # pg_dump cannot use the pooler: it needs a plain session, and the header says so.
+            case "$BACKUP_DATABASE_URL" in
+              *-pooler.*) echo "::error::BACKUP_DATABASE_URL points at the POOLER. pg_dump needs the DIRECT endpoint."; missing=$((missing + 1)) ;;
+              *) echo "  shape    BACKUP_DATABASE_URL is not the pooler host" ;;
+            esac
+          fi
+
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$missing secret(s) are missing or malformed for this job — see the list above. Nothing was dumped."
+            echo "A name printed MISSING above is EMPTY as this job sees it. Four things produce that:"
+            echo "  1. the name differs from the workflow's (it reads secrets.BACKUP_DATABASE_URL etc., exactly)"
+            echo "  2. it is an ENVIRONMENT secret, and this job declares no 'environment:', so it cannot see one"
+            echo "  3. it is an ORGANISATION secret whose repository-access policy excludes this repo"
+            echo "  4. it is a VARIABLE (vars.*) rather than a SECRET (secrets.*)"
+            exit 1
+          fi
+          echo "all six secrets are visible to this job"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -71,12 +132,34 @@ jobs:
       - name: Install Postgres 18 client
         run: |
           set -euo pipefail
+          # ── INSTALLING THE CLIENT IS NOT THE SAME AS USING IT ──────────────────────────────────
+          # The runner image ships postgresql-client-16 and it stays FIRST on PATH, so for three
+          # nights this step's own `pg_dump --version` printed 16.15 immediately after installing
+          # 18 — and nobody read it, because the step still exited 0. pg_dump REFUSES to dump a
+          # server newer than itself, so against Neon's 18.6 the backup would have aborted on a
+          # version mismatch the moment the connection string arrived: one fixed defect revealing
+          # the next. The same applies to the verify step's pg_restore.
+          #
+          # ONE NUMBER, THREE USES: the package, the PATH, and the assertion below cannot disagree.
+          PGMAJOR=18
           sudo install -d /usr/share/postgresql-common/pgdg
           sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-18
+          sudo apt-get install -y -qq "postgresql-client-${PGMAJOR}"
+          # GITHUB_PATH so EVERY later step gets it (the dump and the verify restore both need it);
+          # the export is for the assertion in this step, which runs before GITHUB_PATH takes effect.
+          echo "/usr/lib/postgresql/${PGMAJOR}/bin" >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/${PGMAJOR}/bin:$PATH"
+          # ASSERT, do not merely print. A version line nobody reads is how this hid for three runs;
+          # a wrong client now fails HERE, named, instead of as a mismatch abort two steps later.
+          # Raising PGMAJOR is required when Neon's major moves: the client must be >= the server.
           pg_dump --version
+          pg_restore --version
+          pg_dump --version | grep -qE "^pg_dump \(PostgreSQL\) ${PGMAJOR}\." \
+            || { echo "::error::pg_dump is not ${PGMAJOR}.x — got $(pg_dump --version). Client 16 is still winning on PATH."; exit 1; }
+          pg_restore --version | grep -qE "^pg_restore \(PostgreSQL\) ${PGMAJOR}\." \
+            || { echo "::error::pg_restore is not ${PGMAJOR}.x — got $(pg_restore --version)."; exit 1; }
 
       - run: npm ci
       - run: npx prisma generate
@@ -91,8 +174,12 @@ jobs:
           # --no-owner/--no-privileges: the restore target has different roles, and a dump that only
           # restores onto an identically-roled server is a dump that does not restore.
           pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file="db-$STAMP.dump"
-          node scripts/backup-manifest.mjs "manifest-$STAMP.json"
+          # IMMEDIATELY after pg_dump, before anything that can fail. This line is the ONLY evidence
+          # the dump did anything at all, and it used to sit after the manifest script: the first run
+          # that ever reached pg_dump then failed in the manifest, so the size was never printed and
+          # the file died with the runner. The one measurement, gated behind the likeliest failure.
           ls -l "db-$STAMP.dump" | awk '{print "dump bytes:", $5}'
+          node scripts/backup-manifest.mjs "manifest-$STAMP.json"
 
       - name: Encrypt
         env:
