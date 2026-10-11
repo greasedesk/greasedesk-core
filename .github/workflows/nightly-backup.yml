@@ -171,6 +171,7 @@ jobs:
           set -euo pipefail
           STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
           echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          echo "BACKUP_STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
           # --no-owner/--no-privileges: the restore target has different roles, and a dump that only
           # restores onto an identically-roled server is a dump that does not restore.
           pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file="db-$STAMP.dump"
@@ -208,6 +209,7 @@ jobs:
           aws s3 cp "db-$STAMP.dump.gpg"        "s3://$R2_BUCKET/$PREFIX/db-$STAMP.dump.gpg"        --endpoint-url "$ENDPOINT" --only-show-errors
           aws s3 cp "manifest-$STAMP.json.gpg"  "s3://$R2_BUCKET/$PREFIX/manifest-$STAMP.json.gpg"  --endpoint-url "$ENDPOINT" --only-show-errors
           echo "uploaded $PREFIX/db-$STAMP.dump.gpg"
+          echo "BACKUP_OBJECT_KEY=$PREFIX/db-$STAMP.dump.gpg" >> "$GITHUB_ENV"
 
       - name: Restore the UPLOADED copy, and verify it
         env:
@@ -230,6 +232,37 @@ jobs:
           printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --quiet --decrypt --passphrase-fd 0 --output roundtrip.dump roundtrip.dump.gpg
           pg_restore --no-owner --no-privileges --dbname "$DATABASE_URL" roundtrip.dump
           node scripts/backup-verify.mjs "manifest-$STAMP.json"
+
+      # ── TELL THE APP. Until this existed, a backup left only a GitHub Actions run, and eleven
+      # consecutive failures in September were invisible to everyone who was not looking at a tab.
+      - name: Report the verified run
+        env:
+          BACKUP_RUN_URL: ${{ secrets.BACKUP_RUN_URL }}
+          BACKUP_RUN_TOKEN: ${{ secrets.BACKUP_RUN_TOKEN }}
+          PGMAJOR: '18'
+        run: node scripts/backup-report.mjs verified
+
+      # `if: failure()` AND `always()` on the report would double-post; this one runs only when an
+      # earlier step gave up, and names which one. `${{ job.status }}` is not specific enough to act
+      # on, so the step that failed is read from the step outcomes GitHub already tracks.
+      - name: Report the failure
+        if: failure()
+        env:
+          BACKUP_RUN_URL: ${{ secrets.BACKUP_RUN_URL }}
+          BACKUP_RUN_TOKEN: ${{ secrets.BACKUP_RUN_TOKEN }}
+          PGMAJOR: '18'
+        run: |
+          # FIRST failure wins. A chain of `|| STEP=...` lets the LAST check overwrite the others,
+          # so a dump that never ran would be reported as a failed download — every later artefact
+          # is missing too. Ordered earliest-to-latest, stopping at the first thing absent.
+          if   [ -z "${STAMP:-}" ];                 then STEP="dump — never started, so no stamp was assigned"
+          elif [ ! -f "manifest-$STAMP.json" ];     then STEP="dump or manifest"
+          elif [ ! -f "db-$STAMP.dump.gpg" ] && [ -z "${BACKUP_OBJECT_KEY:-}" ]; then STEP="encrypt"
+          elif [ -z "${BACKUP_OBJECT_KEY:-}" ];     then STEP="upload to R2"
+          elif [ ! -f "roundtrip.dump.gpg" ];       then STEP="download back from R2"
+          else STEP="restore or verify"
+          fi
+          node scripts/backup-report.mjs failed "$STEP"
 
       - name: Keep the manifests when something went wrong
         if: failure()

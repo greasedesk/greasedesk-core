@@ -5548,3 +5548,52 @@ model PurchaseModelDefaults {
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
+
+/// ── THE EVIDENCE A NIGHTLY BACKUP LEAVES BEHIND ────────────────────────────────────────────────
+/// Eleven consecutive nights failed in September and nobody could see it, because the only record a
+/// backup left was a GitHub Actions run nobody was watching. One row per attempt, written by the
+/// workflow through pages/api/backup-run once the round-trip has finished.
+///
+/// DELIBERATELY NO group_id. The dump is the WHOLE database, every tenant in one file, so there is
+/// no tenant this row belongs to — and showing it to a garage as "your backup" would be false.
+/// lib/tenant-manifest classifies it accordingly, and the boot invariant there refused to load
+/// until it did.
+///
+/// `outcome` is the only field that decides anything; lib/backup-runs states every value it can
+/// take. The rest are evidence.
+model BackupRun {
+  id String @id @default(uuid())
+    /// @nulls: finished_at, failed_step, object_key, bytes, sha256, database_name, table_count, total_rows, migrations, pg_version, golden_json
+    /// ONE MEANING FOR ALL OF THEM: a null is a measurement the run never reached, and nothing else.
+    /// A dump that died has no byte count, no object in the bucket and no manifest to count tables
+    /// from, so those are null rather than zero — recording a zero would read as a successful backup of
+    /// an empty database, which is a different and much worse thing to believe. `failed_step` inverts
+    /// it: null means the run did not fail, and a failed run without one is refused before it is
+    /// written (lib/backup-runs::submissionRefusal), because "something went wrong" is not evidence.
+  /// The run's own stamp (db-<STAMP>.dump.gpg). UNIQUE so a retried workflow step records the same
+  /// attempt once; declared inside the table, which keeps the migration non-constraining.
+  stamp       String   @unique
+  started_at  DateTime
+  finished_at DateTime?
+  /// lib/backup-runs BACKUP_OUTCOMES. 'verified' means a real pg_restore of the file PULLED BACK
+  /// FROM R2 reproduced the source exactly — not that an upload returned 200.
+  outcome     String
+  /// Which step gave up, on a run that did not finish. NULL on a verified run.
+  failed_step String?
+  /// What the bucket holds: the key, the size, and the digest of the encrypted object.
+  object_key  String?
+  bytes       BigInt?
+  sha256      String?
+  /// What the dump contained, as backup-manifest.mjs measured it at the source.
+  database_name String?
+  table_count   Int?
+  total_rows    Int?
+  migrations    Int?
+  pg_version    String?
+  /// The golden-slice comparison, source against restored: a fixed historical month's invoice
+  /// count, line count, gross and hash. This is what makes 'verified' a measurement.
+  golden_json Json?
+  recorded_at DateTime @default(now())
+
+  @@index([started_at])
+}

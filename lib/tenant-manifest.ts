@@ -213,6 +213,9 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   NavLink: OURS('navigation on our own marketing site'),
   Document: OURS('our legal and policy content, versioned for the public site'),
   StripeEvent: OURS('our billing webhook log'),
+  // The dump is the whole database, so there is no tenant this row belongs to. A garage may SEE
+  // that platform backups cover its data; it cannot take a row describing six other garages.
+  BackupRun: OURS('evidence of a whole-database backup covering every tenant — not a record of any one of them'),
   InboundEvent: OURS('webhook delivery de-duplication keyed on the provider’s id'),
   ConsentEvent: OURS('a public-site visitor’s cookie choice, keyed on their own consent id with no tenant anywhere'),
   CommissionRate: OURS('our reseller rate card'),

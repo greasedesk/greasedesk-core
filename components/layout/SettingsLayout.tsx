@@ -87,11 +87,15 @@ const TABS: TopTab[] = [
    */
   {
     name: 'Account', key: 'account', href: '/admin/settings/users',
-    match: ['/admin/settings/licences', '/admin/settings/rep'],
+    match: ['/admin/settings/licences', '/admin/settings/rep', '/admin/settings/backups'],
     subtabs: [
       // href resolved per-user in hrefFor — the placeholder is never navigated to.
       { name: 'My Account', href: '/admin/settings/users' },
       { name: 'Licence & Subscriptions', href: '/admin/settings/licences', adminOnly: true },
+      // Backup & Restore sits under Account rather than becoming a fifth top tab: it is about this
+      // tenant's relationship with us — what we hold, what they can take, who to ask for a restore
+      // — not about how the workshop is configured. ADMIN only, because it names what leaves.
+      { name: 'Backup & Restore', href: '/admin/settings/backups', adminOnly: true },
     ],
     // My Rep was a TAB here. Knowing who to call is not a setting, and four levels down under a
     // label naming a person most garages do not have is not where anyone looks when the diary is
