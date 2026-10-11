@@ -29,6 +29,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { writeAudit } from '@/lib/audit';
+import { notVoided } from '@/lib/invoice-void';
 import { customerPhoneFields } from '@/lib/contact-routes';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { ensureIdentityAndCurrentOwner } from '@/lib/vehicle-identity';
@@ -82,7 +83,22 @@ const text = (v: unknown, cap = 200): string | null =>
 /** The tenant's first car sale invoiced through GreaseDesk, dated by its sale — the second limit. */
 async function firstInvoicedSale(groupId: string): Promise<{ date: Date; invoiceNumber: string } | null> {
   const first = await prisma.invoice.findFirst({
-    where: { group_id: groupId, series: 'vehicle_sale' },
+    // ── A VOIDED SALE DOES NOT MOVE THE BOUNDARY (2026-10-11) ─────────────────────────────────
+    // This safety net exists so a declared boundary cannot be used to record history over a period
+    // the garage demonstrably WAS invoicing: if a real vehicle_sale invoice predates the declared
+    // date, that invoice is the evidence and it wins. A VOIDED invoice is not that evidence. Void
+    // retires the number and the transaction; the document is retained only so the gap in a gapless
+    // series can be explained (VATREC5010), not as a claim that the car was invoiced here.
+    //
+    // Without this filter the net had a trap. TMBS's first car sale went through the live path on
+    // 2026-10-06 dated 7 July, before any boundary was declared — because with none declared the
+    // HISTORICAL path refuses outright and the live path was the only open door. Voiding it to
+    // re-record it as history would not have released the boundary: the row survives the void by
+    // design, stayed the earliest by sequence_value, and would have pinned the boundary at 7 July
+    // for ever — blocking every genuine pre-GreaseDesk sale from that date on.
+    //
+    // `notVoided` is the shared shape every money reader spreads, not a second definition of void.
+    where: { group_id: groupId, series: 'vehicle_sale', ...notVoided },
     orderBy: { sequence_value: 'asc' },
     select: { invoice_number: true, stock_disposal_id: true, date_issued: true },
   });

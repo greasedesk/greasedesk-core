@@ -80,6 +80,19 @@ try {
   const firstEarlier = HR.effectiveBoundary(decl, { date: new Date('2026-03-12T10:00:00Z'), invoiceNumber: 'VS1' });
   check('an invoiced sale BEFORE the declaration still closes the door behind it', firstEarlier?.basis === 'first_invoice' && firstEarlier.invoiceNumber === 'VS1');
   check('an invoiced sale AFTER the declaration changes nothing', HR.effectiveBoundary(decl, { date: new Date('2026-10-01'), invoiceNumber: 'VS1' })?.basis === 'declared');
+  /**
+   * ── AND A VOIDED SALE IS NOT EVIDENCE OF INVOICING (2026-10-11) ───────────────────────────────
+   * The clauses above test `effectiveBoundary`, a pure function over a date it is HANDED. The change
+   * is one level down, in `firstInvoicedSale`, which decides WHICH invoice gets handed to it — so it
+   * is a query and only a row can prove it. The pair below is discriminating by construction: the
+   * same invoice pins the boundary while live and does not once voided.
+   *
+   * Why it matters, concretely: TMBS's first car sale went through the live path dated 7 July before
+   * any boundary was declared (with none declared the historical path refuses outright, so the live
+   * path was the only open door). Voiding it to re-record it as history would NOT have released the
+   * boundary — the row survives a void by design, stayed earliest by sequence_value, and would have
+   * pinned the boundary at 7 July for ever, blocking every genuine pre-GreaseDesk sale after it.
+   */
   check('the same day goes to the declaration', HR.effectiveBoundary(decl, { date: new Date('2026-09-17T15:00:00Z'), invoiceNumber: 'VS1' })?.basis === 'declared');
   check('the day before the boundary is history', HR.boundaryRefusal(new Date('2026-09-16T23:30:00Z'), onlyDecl) === null);
   const same = HR.boundaryRefusal(new Date('2026-09-17T00:05:00Z'), onlyDecl) ?? '';
@@ -287,6 +300,43 @@ try {
   check('an invoiced sale EARLIER than the declaration becomes the boundary — the earlier of the two', boundary?.basis === 'first_invoice'
     && boundary?.date.toISOString() === boundaryDay.toISOString() && boundary?.invoiceNumber === bInv?.invoice_number,
     `${boundary?.basis} ${boundary?.date?.toISOString?.()} ${boundary?.invoiceNumber}`);
+
+  /**
+   * ── AND A VOIDED SALE IS NOT EVIDENCE OF INVOICING (2026-10-11) ───────────────────────────────
+   * DISCRIMINATING BY CONSTRUCTION: the clause above and this one are the SAME invoice, live and
+   * then voided. The safety net exists so a declared boundary cannot be used to record history over
+   * a period the garage demonstrably WAS invoicing — and a void retires the number and the
+   * transaction. The document is retained only so a gap in a gapless series can be explained
+   * (VATREC5010), not as a claim that the car was invoiced here.
+   *
+   * It is a row-level clause because the change is in `firstInvoicedSale`, which decides WHICH
+   * invoice `effectiveBoundary` is handed. The pure-function clauses above cannot see it.
+   *
+   * Without this, TMBS was stuck: its first car sale went through the live path dated 7 July before
+   * any boundary existed (with none declared the historical path refuses outright, so the live path
+   * was the only open door). Voiding it to re-record it as history would NOT have released the
+   * boundary — the row survives the void by design and stayed earliest by sequence_value — pinning
+   * the boundary at 7 July for ever and blocking every genuine pre-GreaseDesk sale after it.
+   */
+  if ('invoiceId' in bSale) {
+    await prisma.invoice.update({
+      where: { id: bSale.invoiceId },
+      data: { status: 'void', voided_at: new Date(), voided_by: user.id,
+        void_category: 'issued_in_error', void_reason: 'gate fixture: proving a void releases the boundary' },
+    });
+    const afterVoid = await HS.historicalBoundary(ZZ_GROUP);
+    check('  …and VOIDING that sale hands the boundary back to the declaration',
+      afterVoid?.basis === 'declared', `basis=${afterVoid?.basis ?? 'null'} date=${afterVoid?.date?.toISOString().slice(0, 10) ?? '-'}`);
+    check('  …which is a DIFFERENT answer from the live invoice, so the filter is load-bearing',
+      boundary?.basis === 'first_invoice' && afterVoid?.basis === 'declared');
+    // Put it back: the clauses after this one are about a LIVE first invoiced sale.
+    await prisma.invoice.update({
+      where: { id: bSale.invoiceId },
+      data: { status: 'issued', voided_at: null, voided_by: null, void_category: null, void_reason: null },
+    });
+    check('  …and the fixture is restored, so the clauses below still face a live sale',
+      (await HS.historicalBoundary(ZZ_GROUP))?.basis === 'first_invoice');
+  }
   const bDisp = await prisma.stockDisposal.findFirst({ where: { stock_item_id: bItem.id }, select: { buyer_name: true, buyer_address: true, recorded_not_invoiced: true, receipt_ref: true } });
   check('a LIVE sale freezes its buyer onto the disposal for the book', bDisp?.buyer_name === `${PREFIX} Live Buyer` && /Tipton/.test(bDisp?.buyer_address ?? ''),
     `${bDisp?.buyer_name} / ${bDisp?.buyer_address}`);
