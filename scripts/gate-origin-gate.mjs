@@ -194,5 +194,64 @@ check('  …and says so in the summary, not only the header',
   (runnerSrc.match(/reapLine/g) ?? []).length >= 3,
   'a suite that quietly clears its own obstacles is the defect it was built to stop');
 
+/**
+ * ── THE CAP MUST RUN TEARDOWN ───────────────────────────────────────────────────────────────────
+ * Until 2026-10-12 a capped gate was SIGKILLed, which cannot be trapped: its `finally` never ran,
+ * its fixtures stayed, and the NEXT run refused because it found residue. One mechanism, three
+ * symptoms, and only the refusal was honest. quote-line-order-gate lost a vehicle and four job
+ * cards to it.
+ *
+ * ASSERTED BY SIGNALLING A REAL CHILD, not by reading the runner's source. A source scan would pass
+ * on a runner that sends SIGTERM to a gate whose handler never runs — which is precisely the
+ * failure, since SIGTERM's DEFAULT action also skips `finally`. So: spawn something that registers
+ * a teardown and hangs, signal it the way the runner does, and look for the side effect.
+ */
+console.log('\n— a capped gate gets to sweep —');
+{
+  const { spawn: spawnChild } = await import('node:child_process');
+  const { writeFileSync, existsSync, mkdtempSync, rmSync } = await import('node:fs');
+  const os = await import('node:os');
+  const { pathToFileURL } = await import('node:url');
+  const preflightUrl = pathToFileURL(`${process.cwd()}/scripts/_gate-preflight.mjs`).href;
+  const dir = mkdtempSync(`${os.tmpdir()}/gate-term-`);
+  const marker = `${dir}/swept`;
+  const child = `${dir}/hanger.mjs`;
+  writeFileSync(child, [
+    `import '${preflightUrl}';`,
+    `const { onTeardown } = await import('${preflightUrl}');`,
+    "import { writeFileSync as w } from 'node:fs';",
+    `onTeardown(() => { w(${JSON.stringify(marker)}, 'yes'); });`,
+    // A TIMER, not just a pending promise. `await new Promise(() => {})` keeps NOTHING on the
+    // event loop, so node exits straight away and the child never lives long enough to be
+    // signalled — which is how the first version of this clause failed while the mechanism it
+    // tests was working. A gate that hangs for real is holding a handle open; so does this.
+    "setInterval(() => {}, 1000);",
+    'await new Promise(() => {});',
+  ].join('\n'));
+
+  const proc = spawnChild('node', [child], { env: { ...process.env, GATE_ALLOW_PIPE: '1' }, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 3000));          // let preflight finish and the handler install
+  proc.kill('SIGTERM');
+  const exitCode = await new Promise((r) => {
+    proc.on('close', (c) => r(c));
+    setTimeout(() => r('STILL RUNNING AFTER 10s'), 10_000);
+  });
+  const swept = existsSync(marker);
+  rmSync(dir, { recursive: true, force: true });
+
+  check('a gate that registers a teardown runs it on SIGTERM', swept,
+    swept ? 'the sweep ran before exit' : 'NOTHING SWEPT — the handler did not fire');
+  check('  …and then exits rather than ignoring the signal', exitCode === 143, `exit ${exitCode}`);
+
+  /** The runner's half: SIGTERM first, SIGKILL only after a grace period, and the timeout still
+   *  counted. Read from source because it is the SEQUENCE that matters here; the child above is
+   *  what proves a signalled gate actually cleans up. */
+  check('the runner sends SIGTERM before SIGKILL, with a grace period',
+    /kill\('SIGTERM'\)/.test(runnerSrc) && /TEARDOWN_GRACE_S \* 1000/.test(runnerSrc) && /kill\('SIGKILL'\)/.test(runnerSrc));
+  check('  …and a tidy cleanup is still reported as a timeout',
+    /timedOut = true;\s*\n\s*child\.kill\('SIGTERM'\)/.test(runnerSrc),
+    'cleaning up is not finishing');
+}
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

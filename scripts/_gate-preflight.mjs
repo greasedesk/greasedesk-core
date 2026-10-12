@@ -234,6 +234,58 @@ export async function trackCredentials(prisma, groupId) {
   };
 }
 
+/**
+ * ── TEARDOWN THAT SURVIVES THE RUNNER'S CAP ─────────────────────────────────────────────────────
+ * A gate that exceeds its `@gate-timeout` used to be SIGKILLed, and SIGKILL cannot be trapped — so
+ * its `finally` never ran and its fixtures stayed. One mechanism, three symptoms: a false RED, the
+ * residue, and the NEXT run refusing because it found residue. The refusal was the only honest one.
+ *
+ * The runner now sends SIGTERM first and waits. SIGTERM's DEFAULT action also skips `finally`, so a
+ * handler is required — and installing one in ninety gates is not the fix. It goes here, in the
+ * file every gate already imports, and a gate hands over the sweep IT ALREADY HAS:
+ *
+ *     onTeardown(sweep);           // once, right after the sweep is defined
+ *     ...
+ *     } finally { await sweep(); } // unchanged; the same function, two callers
+ *
+ * ONE SWEEP WITH TWO CALLERS, never two sweeps. The alternative — the runner cleaning up by itself
+ * from a declared prefix — can only remove what the prefix describes, and teardown cannot remove
+ * what it never learned about. The gate is the only thing that knows what it made.
+ *
+ * Registered functions must be IDEMPOTENT: a gate killed while its own `finally` is mid-sweep will
+ * run parts of it twice. Every existing sweep is a `deleteMany`, which already is.
+ */
+const TEARDOWNS = [];
+let tearingDown = false;
+
+export function onTeardown(fn) {
+  if (typeof fn !== 'function') throw new Error('onTeardown needs a function');
+  TEARDOWNS.push(fn);
+}
+
+/** Runs every registered sweep, newest first, and never lets one failure skip the others. */
+async function runTeardowns(why) {
+  if (tearingDown) return;
+  tearingDown = true;
+  for (const fn of [...TEARDOWNS].reverse()) {
+    try { await fn(); } catch (e) { console.log(`  teardown step failed during ${why}: ${describeError(e).slice(0, 120)}`); }
+  }
+}
+
+/**
+ * THE GRACE PERIOD IS THE RUNNER'S; this end just has to be quick and say so. The exit code stays
+ * the one the signal implies, so the runner still reports the gate as never having returned — the
+ * fixtures are gone but the TIMEOUT is not forgiven, because a gate that cannot finish inside its
+ * own declared budget is still a problem to look at.
+ */
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    console.log(`\n${sig} — sweeping this gate's fixtures before exit. The timeout still counts.`);
+    await runTeardowns(sig);
+    process.exit(143);
+  });
+}
+
 export function declineToRun(reason) {
   console.log(`\nUNRUN — ${reason}`);
   console.log('  Nothing was tested. This is not a failure of the code under test.');

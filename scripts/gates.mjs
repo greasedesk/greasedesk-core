@@ -188,11 +188,13 @@ const TIERS = {
     'customer-car-gate',
     'sale-invoice-gate',
     'car-sale-gate',
+    'held-on-lift-gate',
     'tenant-manifest-gate',
     'backup-run-gate',
     'tenant-export-gate',
     'quote-options-gate',
     'quote-options-flow-gate',
+    'quote-supersede-gate',
     'historical-sale-gate',
     'dev-restart-gate',
     'diary-drag-gate',
@@ -228,11 +230,6 @@ const TIERS = {
    */
   manual: ['demo-generation-gate'],
   slow: [
-    // MOVED FROM CORE 2026-10-12. It takes ~300s on its own and brushed the runner's per-gate cap
-    // during a 1008s core run — reported as RED with no clause count, which reads exactly like a
-    // failure and was a timeout. Run standalone it is 64 of 64. Core should be cheap enough to run
-    // often; a gate that can time out in it makes every core result need a second look.
-    'held-on-lift-gate',
     'rep-site-mobile-gate',
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',
@@ -389,8 +386,32 @@ const staleClient = async (origin) => {
  * 300s because the slowest honest gate measured ~90s. Raise it for a specific gate with
  * `// @gate-timeout: 600`, which is a decision someone makes in the gate rather than a ceiling
  * quietly lifted for everybody.
+ *
+ * ── RE-DERIVED 2026-10-12, AND THE PREMISE HOLDS ────────────────────────────────────────────────
+ * 130 gate timings across a clean core and a clean slow run: median 6.2s, p90 23.3s, slowest
+ * phone-capture-timing at 92.7s. NOTHING over 150s. So 300s is still ~3.2x the slowest honest gate
+ * and the original sentence above needs no correction.
+ *
+ * WHAT LOOKED LIKE A STALE CAP WAS SERVER PRESSURE. held-on-lift-gate was capped at 300s during a
+ * 1008s core run and measures 50.9s clean; quote-line-order-gate was capped at its own 240s and
+ * runs in far less. Neither gate is slow — the dev server was at 2.4 GB RSS. The runner ALREADY
+ * prints `[server NNNmb->NNNmb]` on every tier line, which is where that was visible all along.
+ *
+ * The lesson is the one this suite keeps relearning: a timing measured under pressure is not the
+ * gate's cost. A gate was moved between tiers on the 300s figure before anyone re-measured it, and
+ * the move has been reverted.
  */
 const DEFAULT_TIMEOUT_S = 300;
+
+/**
+ * How long a capped gate gets to run its registered teardowns before SIGKILL. Measured, not chosen:
+ * the heaviest sweep in the suite (car-sale-gate's, which walks photos, lines, invoices, cards,
+ * vehicles and identities) runs in well under two seconds against this database, and a sweep is
+ * `deleteMany` calls with no browser or server in the way. Ten seconds is five times the slowest
+ * one — enough for a cold Neon compute, short enough that a gate ignoring SIGTERM cannot hold the
+ * suite open for long.
+ */
+const TEARDOWN_GRACE_S = 10;
 
 function run(gate) {
   return new Promise((resolve) => {
@@ -398,13 +419,33 @@ function run(gate) {
     const src = readFileSync(path.join(ROOT, 'scripts', `${gate}.mjs`), 'utf8');
     const limit = Number((src.match(/@gate-timeout:\s*(\d+)/) ?? [])[1] ?? DEFAULT_TIMEOUT_S) * 1000;
     const child = spawn('node', [path.join('scripts', `${gate}.mjs`)], { cwd: ROOT, env: gateEnv() });
-    const killer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, limit);
+    /**
+     * ── SIGTERM, THEN GRACE, THEN SIGKILL ─────────────────────────────────────────────────────
+     * This was one line: `child.kill('SIGKILL')`. SIGKILL cannot be trapped, so a capped gate's
+     * `finally` never ran and its fixtures stayed — one mechanism producing a false RED, the
+     * residue, and the next run's refusal.
+     *
+     * SIGTERM first. _gate-preflight installs a handler that runs the sweeps the gate registered
+     * with `onTeardown` and exits 143. Then SIGKILL after the grace period, because a gate that
+     * ignores SIGTERM must not hold the suite open — which is the hang this cap exists for.
+     *
+     * The TIMEOUT STILL COUNTS either way: `timedOut` is set when the cap fires, not when the
+     * child dies, so a gate that cleans up tidily is still reported as never having returned.
+     * Cleaning up is not finishing.
+     */
+    const killer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      hardKiller = setTimeout(() => { child.kill('SIGKILL'); }, TEARDOWN_GRACE_S * 1000);
+    }, limit);
+    let hardKiller = null;
     let timedOut = false;
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { out += d; });
     child.on('close', (code) => {
       clearTimeout(killer);
+      if (hardKiller) clearTimeout(hardKiller);
       const m = out.match(/(\d+) failures of (\d+)/g);
       const last = m ? m[m.length - 1].match(/(\d+) failures of (\d+)/) : null;
       resolve({

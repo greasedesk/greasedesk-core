@@ -26,7 +26,7 @@
  * Fixtures on ZZ Gate Garage only. Never TMBS.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
+const { gatePrisma, zzSite, serverReady, describeError, gateOrigin, declineToRun , onTeardown} = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { issueInvoiceForCard, snapshotInvoiceLines } = await import('../lib/invoice-issue.ts');
 const { chromium } = await import('playwright-core');
@@ -38,6 +38,39 @@ const REG = 'ZZ76QLO';
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 let fix = null, browser = null;
+
+const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
+
+/**
+ * ── ONE SWEEP, TWO CALLERS ──────────────────────────────────────────────────────────────────────
+ * Registered with `onTeardown` so the runner's cap can run it over SIGTERM, and called from the
+ * `finally` as before. THIS GATE IS WHY THE MECHANISM EXISTS: it was SIGKILLed at 240s on
+ * 2026-10-12, so its finally never ran and it left one vehicle and four job cards — then refused to
+ * run onto its own residue, which was the only honest symptom of the three.
+ *
+ * DELETES ONLY. The verification that follows in the `finally` asserts a CLAUSE, and a clause means
+ * nothing during a kill — the run is already not a run. Registering it as well would report a pass
+ * for a gate that never finished.
+ *
+ * IDEMPOTENT, as every registered sweep must be: a gate killed mid-sweep runs parts of it twice.
+ * Every statement is a deleteMany wrapped in step(), which already is.
+ */
+const sweepFixtures = async () => {
+  if (!fix) return;
+    for (const k of ['invoice', 'invoice2', 'invoice3']) {
+      if (!fix[k]) continue;
+      await step(`${k} lines`, () => prisma.invoiceLine.deleteMany({ where: { invoice_id: fix[k] } }));
+      await step(k, () => prisma.invoice.deleteMany({ where: { id: fix[k] } }));
+    }
+    await step('links', () => prisma.dueItemLine.deleteMany({ where: { group_id: ZZ } }));
+    await step('finding', () => fix.finding ? prisma.vehicleDueItem.deleteMany({ where: { id: fix.finding } }) : null);
+    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
+    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
+    await step('edge', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
+    await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
+    await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, id: fix.cust } }));
+};
+onTeardown(sweepFixtures);
 const BASE = gateOrigin();
 
 // Descriptions that appear nowhere else and are ORDER-BEARING, so a reordering is visible as a
@@ -339,19 +372,7 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (fix) {
-    const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
-    for (const k of ['invoice', 'invoice2', 'invoice3']) {
-      if (!fix[k]) continue;
-      await step(`${k} lines`, () => prisma.invoiceLine.deleteMany({ where: { invoice_id: fix[k] } }));
-      await step(k, () => prisma.invoice.deleteMany({ where: { id: fix[k] } }));
-    }
-    await step('links', () => prisma.dueItemLine.deleteMany({ where: { group_id: ZZ } }));
-    await step('finding', () => fix.finding ? prisma.vehicleDueItem.deleteMany({ where: { id: fix.finding } }) : null);
-    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
-    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
-    await step('edge', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
-    await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
-    await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, id: fix.cust } }));
+    await sweepFixtures();
     // ── THE VERIFICATION MUST NOT BE THE THING THAT CRASHES ──────────────────────────────────
     // It was. A Neon blip mid-run (P1017, "Server has closed the connection") threw out of this
     // count, out of the finally, and killed the process before the summary line — so the gate

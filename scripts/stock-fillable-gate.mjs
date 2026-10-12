@@ -300,7 +300,19 @@ await pg.waitForSelector('[data-testid="sb-editor"]', { timeout: 15000 });
 await pg.fill('[data-testid="sb-in-vin"]', 'ZZFILLSCREEN00001');
 await pg.fill('[data-testid="sb-in-colour"]', 'British Racing Green');
 await pg.click('[data-testid="sb-save"]');
-await pg.waitForTimeout(1500);
+/**
+ * WAIT FOR THE RENDERED PANEL, NOT A DURATION AND NOT THE DATABASE. These were
+ * `waitForTimeout(1500)` — a bet on the machine.
+ * The save round-trip plus the re-render fits in 1.5s on an idle box and does not under a full
+ * tier's load, so on 2026-10-12 this gate reported "the panel shows 'not recorded'": a true
+ * statement about a page that had simply not updated yet. Waiting for the DATABASE was the next wrong answer:
+ * the row was already written and it was the PANEL that had not re-rendered, so the DB clauses
+ * passed while the two screen clauses failed. Wait for the thing the clause is about.
+ */
+await pg.waitForFunction(
+  ([sel, want]) => document.querySelector(`[data-testid="${sel}"]`)?.textContent?.trim() === want,
+  ['sb-vin', 'ZZFILLSCREEN00001'], { timeout: 20000 },
+).catch(() => {});
 {
   const v = await prisma.vehicle.findUnique({ where: { id: bare.vehicleId }, select: { vin: true, colour: true } });
   check('typing a VIN and a colour INTO THE PANEL writes them to the car',
@@ -315,7 +327,10 @@ await pg.waitForSelector('[data-testid="sb-editor"]', { timeout: 15000 });
 await pg.check('[data-testid="sb-tick-seller_name"]');
 await pg.fill('[data-testid="sb-in-purchaseRef"]', 'KJM-9001');
 await pg.click('[data-testid="sb-save"]');
-await pg.waitForTimeout(1500);
+await pg.waitForFunction(
+  ([sel, want]) => document.querySelector(`[data-testid="${sel}"]`)?.textContent?.trim() === want,
+  ['sb-seller', PW.NOT_SUPPLIED_WORDS], { timeout: 20000 },
+).catch(() => {});
 {
   const s = await prisma.stockItem.findUnique({ where: { id: bare.stockId }, select: { not_on_paperwork: true, purchase_ref: true } });
   check('ticking "not on the paperwork" records that somebody LOOKED',
