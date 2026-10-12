@@ -46,6 +46,7 @@ export async function freezeQuoteVersion(args: {
     select: {
       item_type: true, description: true, qty: true, unit_price: true, vat_rate: true,
       vat_amount: true, unit_cost: true, labour_hours: true, labour_outsourced: true,
+      option_draft_id: true,
     },
   });
   if (!items.length) throw new Error('NO_LINES');
@@ -67,11 +68,20 @@ export async function freezeQuoteVersion(args: {
       unit_cost: it.unit_cost == null ? null : new Prisma.Decimal(Number(it.unit_cost).toFixed(2)),
       labour_hours: it.labour_hours == null ? null : new Prisma.Decimal(Number(it.labour_hours).toFixed(2)),
       labour_outsourced: it.labour_outsourced,
+      /** Carried so the freeze can split main from option. Stripped before any create. */
+      __draft: it.option_draft_id ?? null,
     };
   });
 
-  const netPennies = rows.reduce((s: number, r: any) => s + toPennies(r.line_total), 0);
-  const vatPennies = rows.reduce((s: number, r: any) => s + toPennies(r.line_vat), 0);
+  /**
+   * ── THE VERSION'S TOTALS ARE THE MAIN QUOTE, EXCLUDING OPTIONS ────────────────────────────────
+   * lib/quote-options::GROSS_PENNIES_MEANS states it and eight readers in quotes-list and
+   * quotes-metrics depend on it. Summing every row here would make a quote with three variations
+   * report the price of taking all three at once — a number nobody was ever offered.
+   */
+  const mainRows = rows.filter((r: any) => r.__draft === null);
+  const netPennies = mainRows.reduce((s: number, r: any) => s + toPennies(r.line_total), 0);
+  const vatPennies = mainRows.reduce((s: number, r: any) => s + toPennies(r.line_vat), 0);
 
   return prisma.$transaction(async (tx: any) => {
     // Supersede anything still open. An ACCEPTED version is never superseded — it is the record of
@@ -99,10 +109,45 @@ export async function freezeQuoteVersion(args: {
         vat_registered: args.vatRegistered,
         tax_label: args.taxLabel,
         created_by_user: args.createdByUserId ?? null,
-        lines: { create: rows },
+        // Main lines only; the option lines are created below, once their options have ids.
+        lines: { create: mainRows.map(({ __draft, ...r }: any) => ({ ...r, option_id: null })) },
       },
       select: { id: true, version: true },
     });
+
+    /**
+     * ── THE OPTIONS, COPIED DRAFT → FROZEN ────────────────────────────────────────────────────
+     * The same move JobCardItem → QuoteVersionLine makes, for the same reason: what the customer
+     * was offered must stop moving the moment it is sent. Each option's totals are summed HERE,
+     * once, from its own frozen lines — a draft option deliberately stores none, because a price
+     * held in two places is a price that drifts.
+     */
+    const drafts = await tx.quoteOptionDraft.findMany({
+      where: { job_card_id: args.jobCardId }, orderBy: { position: 'asc' },
+    });
+    for (const d of drafts) {
+      const mine = rows.filter((r: any) => r.__draft === d.id);
+      // An option with no lines is not an offer. Skipped rather than frozen as a £0 choice.
+      if (!mine.length) continue;
+      const oNet = mine.reduce((t: number, r: any) => t + toPennies(r.line_total), 0);
+      const oVat = mine.reduce((t: number, r: any) => t + toPennies(r.line_vat), 0);
+      const opt = await tx.quoteOption.create({
+        data: {
+          quote_version_id: created.id, kind: d.kind, position: d.position, title: d.title,
+          group_key: d.group_key,
+          net_pennies: oNet, vat_pennies: oVat, gross_pennies: oNet + oVat,
+          incentive_kind: d.incentive_kind, incentive_label: d.incentive_label,
+          incentive_ex_pennies: d.incentive_ex_pennies, incentive_vatable: d.incentive_vatable,
+          incentive_gross_off_pennies: d.incentive_gross_off_pennies,
+        },
+        select: { id: true },
+      });
+      await tx.quoteVersionLine.createMany({
+        data: mine.map(({ __draft, ...r }: any, i: number) => ({
+          ...r, quote_version_id: created.id, option_id: opt.id, position: 1000 + d.position * 100 + i,
+        })),
+      });
+    }
 
     return {
       id: created.id, version: created.version,

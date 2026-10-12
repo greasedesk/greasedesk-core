@@ -79,6 +79,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // the builder shows the estimator what the document will print. created_at alone is a tie:
       // every line on a card is written in one statement and shares the transaction's timestamp.
       items: { orderBy: [{ position: { sort: 'asc', nulls: 'last' } }, { created_at: 'asc' }] },
+      quote_option_drafts: { orderBy: { position: 'asc' } },
       // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
       // (source customer vs this card's customer, compared by ID at render).
       duplicated_from: { select: { id: true, customer_id: true, customer: { select: { name: true } }, vehicle: { select: { registration: true } } } },
@@ -463,6 +464,23 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     code: it.catalogue_item_id ? (codeById.get(it.catalogue_item_id) ?? '') : '',
     catalogue_item_id: it.catalogue_item_id ?? null,
     labour_hours: it.labour_hours == null ? null : Number(it.labour_hours),
+    option_draft_id: it.option_draft_id ?? null,
+  }));
+
+  /**
+   * THE CARD'S DRAFT OPTIONS. Shaped here rather than queried in the component, like every other
+   * prop on this page — the builder is given what to show and resolves nothing itself.
+   */
+  const options = ((row as any).quote_option_drafts ?? []).map((o: any) => ({
+    id: o.id,
+    kind: o.kind === 'variation' ? 'variation' : 'addition',
+    title: o.title,
+    group_key: o.group_key ?? null,
+    incentive_kind: o.incentive_kind ?? null,
+    incentive_label: o.incentive_label ?? null,
+    incentive_ex_pennies: o.incentive_ex_pennies ?? null,
+    incentive_vatable: o.incentive_vatable ?? null,
+    incentive_gross_off_pennies: o.incentive_gross_off_pennies ?? null,
   }));
 
   const flags = [
@@ -713,7 +731,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
     clock,
     garageNotes: row.garage_notes ?? '',
-    lines, catalogue, fixedServices, tiers, promos,
+    lines, options, catalogue, fixedServices, tiers, promos,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them
     labourRate: priceVisible && labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
     hasEstimate: (row.items as any[]).length > 0,

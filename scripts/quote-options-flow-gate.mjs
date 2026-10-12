@@ -18,7 +18,7 @@
  * FIXTURES on ZZ, prefix ZZQO, swept before and after.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady , onTeardown} = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
@@ -29,6 +29,36 @@ const XQ = 'ZZQO';
 const INTERNAL = 'ZZQO INTERNAL customer is a nightmare do not quote cheap';
 
 let prisma; let browser = null;
+
+const step = async (n, f) => { try { await f(); } catch (e) { console.log(`  teardown ${n}: ${describeError(e).slice(0, 110)}`); } };
+
+/**
+ * ── ONE SWEEP, TWO CALLERS, AND THE SIGNAL PATH ────────────────────────────────────────────────
+ * This gate had the sweep written TWICE — once before the run and once in the finally — and they
+ * had already drifted: only the second cleared the new option drafts. Two spellings of one rule is
+ * the defect this suite keeps finding in product code, written here in a gate about options.
+ * Registered with onTeardown so the runner's cap can run it over SIGTERM. Idempotent.
+ */
+const sweepFixtures = async () => {
+  // A signal can arrive before gatePrisma() resolves; there is nothing to sweep yet if it does.
+  if (!prisma) return 0;
+  const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: XQ } }, select: { id: true } });
+  const ids = vs.map((v) => v.id);
+  const cards = (await prisma.jobCard.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } })).map((c) => c.id);
+  await step('links', () => prisma.customerMagicLink.deleteMany({ where: { job_card_id: { in: cards } } }));
+  const vers = (await prisma.quoteVersion.findMany({ where: { job_card_id: { in: cards } }, select: { id: true } })).map((v) => v.id);
+  await step('version lines', () => prisma.quoteVersionLine.deleteMany({ where: { quote_version_id: { in: vers } } }));
+  await step('options', () => prisma.quoteOption.deleteMany({ where: { quote_version_id: { in: vers } } }));
+  await step('versions', () => prisma.quoteVersion.deleteMany({ where: { id: { in: vers } } }));
+  await step('drafts', () => prisma.quoteOptionDraft.deleteMany({ where: { job_card_id: { in: cards } } }));
+  await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: cards } } }));
+  await step('cards', () => prisma.jobCard.deleteMany({ where: { id: { in: cards } } }));
+  await step('vehicles', () => prisma.vehicle.deleteMany({ where: { id: { in: ids } } }));
+  await step('customers', () => prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: XQ } } }));
+  return ids.length;
+};
+onTeardown(sweepFixtures);
+
 try {
   const origin = gateOrigin();
   await serverReady(origin);
@@ -36,21 +66,7 @@ try {
   const { createMagicLink } = await import(`${R}/lib/magic-link.ts`);
   const { acceptQuote } = await import(`${R}/lib/quote-acceptance.ts`);
 
-  const sweep = async () => {
-    const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: XQ } }, select: { id: true } });
-    const ids = vs.map((v) => v.id);
-    const cards = (await prisma.jobCard.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } })).map((c) => c.id);
-    await prisma.customerMagicLink.deleteMany({ where: { job_card_id: { in: cards } } });
-    const vers = (await prisma.quoteVersion.findMany({ where: { job_card_id: { in: cards } }, select: { id: true } })).map((v) => v.id);
-    await prisma.quoteVersionLine.deleteMany({ where: { quote_version_id: { in: vers } } });
-    await prisma.quoteOption.deleteMany({ where: { quote_version_id: { in: vers } } });
-    await prisma.quoteVersion.deleteMany({ where: { id: { in: vers } } });
-    await prisma.jobCard.deleteMany({ where: { id: { in: cards } } });
-    await prisma.vehicle.deleteMany({ where: { id: { in: ids } } });
-    await prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: XQ } } });
-    return ids.length;
-  };
-  await sweep();
+  await sweepFixtures();
 
   const site = await prisma.site.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
   const user = await prisma.user.findFirst({ where: { group_id: ZZ_GROUP }, select: { id: true } });
@@ -108,8 +124,24 @@ try {
   browser = await chromium.launch({ channel: 'chrome' });
   const ctx = await browser.newContext({ viewport: { width: 1100, height: 1400 } });
   const page = await ctx.newPage();
+  const custErrors = [];
+  page.on('pageerror', (e) => custErrors.push(String(e.message).slice(0, 160)));
+  page.on('console', (m) => { if (m.type() === 'error') custErrors.push(m.text().slice(0, 160)); });
   await page.goto(link.url, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-testid="quote-options"]', { timeout: 25000 });
+  /**
+   * TOLERANT, AND IT SAYS WHAT IT SAW. A bare `waitForSelector` here threw, ended the gate, and
+   * scored one RED on a timeout — which is what three red-proof mutations "proved" before anybody
+   * read the page. The page was saying, in words: "Too many links have been opened from this
+   * connection in the last hour." The magic-link limiter is 60 per IP per hour (lib/magic-link
+   * MAGIC_LIMITS) and re-running this gate fifteen times spends it.
+   *
+   * The RUNNER reaps loopback limiter rows at the start of a tier; a standalone re-run does not, so
+   * a gate that mints a link is cheap to run once and expensive to run in a loop. If this clause
+   * ever fails again, read the body before reading the code.
+   */
+  const custPanel = await page.waitForSelector('[data-testid="quote-options"]', { timeout: 60000 }).catch(() => null);
+  check('the customer page shows the options', !!custPanel, custPanel ? 'rendered' : `NOT RENDERED — ${((await page.textContent('body')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+  if (!custPanel) throw new Error('no options on the customer page; the clauses below describe a page that is not there');
 
   const narrative = await page.textContent('[data-testid="quote-narrative"]').catch(() => null);
   check('the garage’s own explanation leads the page', !!narrative && /needs a rebuild/.test(narrative), (narrative ?? 'ABSENT').trim().slice(0, 70));
@@ -234,23 +266,195 @@ try {
     versions[0] && grossAgreesWithRule(120000, { netPennies: 100000, vatPennies: 20000, grossPennies: 120000 }),
     'the sum of every option would have been £1,968.00');
 
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // AUTHORED AS A DRAFT, FROZEN AT SEND
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— A DRAFT OPTION BECOMES A FROZEN ONE —');
+  {
+    const { freezeQuoteVersion } = await import(`${R}/lib/quote-version.ts`);
+    const c2 = await prisma.customer.create({ data: { group_id: ZZ_GROUP, site_id: site.id, name: `${XQ} Draft` }, select: { id: true } });
+    const v2 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${XQ}02`, registration_normalized: `${XQ}02` }, select: { id: true } });
+    const card2 = await prisma.jobCard.create({ data: { group_id: ZZ_GROUP, site_id: site.id, customer_id: c2.id, vehicle_id: v2.id, status: 'quoted' }, select: { id: true } });
+
+    const dPump = await prisma.quoteOptionDraft.create({ data: { job_card_id: card2.id, kind: 'addition', position: 1, title: 'Water pump',
+      incentive_kind: 'amount_off', incentive_label: '50 off', incentive_ex_pennies: 5000, incentive_vatable: true, incentive_gross_off_pennies: 6000 }, select: { id: true } });
+    const dGold = await prisma.quoteOptionDraft.create({ data: { job_card_id: card2.id, kind: 'variation', position: 2, group_key: 'service', title: 'Gold' }, select: { id: true } });
+    const dSilver = await prisma.quoteOptionDraft.create({ data: { job_card_id: card2.id, kind: 'variation', position: 3, group_key: 'service', title: 'Silver' }, select: { id: true } });
+    /** A draft option nobody put a line on. Not an offer — see the clause below. */
+    await prisma.quoteOptionDraft.create({ data: { job_card_id: card2.id, kind: 'addition', position: 4, title: 'Nothing on it' } });
+
+    const item = (description, unit_price, vat_amount, option_draft_id) => ({
+      job_card_id: card2.id, description, qty: 1, unit_price, vat_rate: 20, vat_amount,
+      item_type: 'fixed', option_draft_id,
+    });
+    await prisma.jobCardItem.createMany({ data: [
+      item('Engine rebuild', 800, 160, null),
+      item('Gaskets', 200, 40, null),
+      item('Water pump', 100, 20, dPump.id),
+      item('Gold service', 200, 40, dGold.id),
+      item('Silver service', 125, 25, dSilver.id),
+    ] });
+
+    const frozen = await freezeQuoteVersion({ groupId: ZZ_GROUP, jobCardId: card2.id, vatRegistered: true, taxLabel: 'VAT', createdByUserId: user.id });
+    const fv = await prisma.quoteVersion.findUnique({
+      where: { id: frozen.id },
+      select: { gross_pennies: true, net_pennies: true,
+        options: { orderBy: { position: 'asc' } },
+        lines: { select: { description: true, option_id: true } } },
+    });
+    /** THE RULE, AT THE MOMENT IT IS WRITTEN. A version whose gross counted every option would
+     *  report the price of taking all three at once — a number nobody was ever offered. */
+    check('the frozen version gross is the MAIN quote, excluding every option',
+      fv.gross_pennies === 120000 && fv.net_pennies === 100000,
+      `${fv.gross_pennies}p (main plus all options would be ${120000 + 12000 + 24000 + 15000}p)`);
+    check('each draft option became a frozen one, in order',
+      fv.options.map((o) => o.title).join(', ') === 'Water pump, Gold, Silver',
+      fv.options.map((o) => o.title).join(', '));
+    /** AN OPTION WITH NO LINES IS NOT AN OFFER. Freezing it would print a zero-priced choice. */
+    check('  …and the draft nobody put a line on was NOT frozen as a zero-priced choice',
+      !fv.options.some((o) => o.title === 'Nothing on it'), `${fv.options.length} option(s)`);
+    const pump = fv.options.find((o) => o.title === 'Water pump');
+    check('an option frozen total is the sum of its OWN lines',
+      pump.net_pennies === 10000 && pump.vat_pennies === 2000 && pump.gross_pennies === 12000,
+      `net ${pump.net_pennies} vat ${pump.vat_pennies}`);
+    check('  …and its incentive came across whole', pump.incentive_kind === 'amount_off'
+      && pump.incentive_ex_pennies === 5000 && pump.incentive_gross_off_pennies === 6000 && pump.incentive_vatable === true);
+    check('the main lines carry no option and the option lines carry theirs',
+      fv.lines.filter((l) => l.option_id === null).map((l) => l.description).sort().join(', ') === 'Engine rebuild, Gaskets'
+      && fv.lines.filter((l) => l.option_id !== null).length === 3,
+      `${fv.lines.filter((l) => l.option_id === null).length} main, ${fv.lines.filter((l) => l.option_id !== null).length} on options`);
+    check('  …and the variations share one group, so they read as one choice',
+      new Set(fv.options.filter((o) => o.kind === 'variation').map((o) => o.group_key)).size === 1);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // AND A GARAGE CAN ACTUALLY BUILD ONE
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\n— THE AUTHORING SURFACE —');
+  {
+    const c3 = await prisma.customer.create({ data: { group_id: ZZ_GROUP, site_id: site.id, name: `${XQ} Author` }, select: { id: true } });
+    const v3 = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${XQ}03`, registration_normalized: `${XQ}03` }, select: { id: true } });
+    /**
+     * `stage_details_done` IS THE GATE. The Quote tab is reachable only once Details is complete
+     * (lib/jobcard-tabs: `quote: { reachable: detailsComplete }`), so a fixture that skips it lands
+     * on a card showing a padlock — which is exactly what the first version of this clause hit, and
+     * reported as "the panel is missing" for five diagnostics before the page said 🔒Quote out loud.
+     * The estimator does this by filling in the customer and pressing done; the fixture has to too.
+     */
+    const card3 = await prisma.jobCard.create({ data: { group_id: ZZ_GROUP, site_id: site.id, customer_id: c3.id, vehicle_id: v3.id, status: 'quoted', stage_details_done: true }, select: { id: true } });
+    await prisma.jobCardItem.createMany({ data: [
+      { job_card_id: card3.id, description: 'Engine rebuild', qty: 1, unit_price: 800, vat_rate: 20, vat_amount: 160, item_type: 'fixed' },
+      { job_card_id: card3.id, description: 'Water pump', qty: 1, unit_price: 100, vat_rate: 20, vat_amount: 20, item_type: 'part' },
+    ] });
+
+    /**
+     * A FRESH CONTEXT FOR THE STAFF SESSION. `ctx` has been driving the CUSTOMER's magic-link page
+     * and carries its cookies; signing a garage user in on top of that is a state no real browser
+     * is in, and it is not what this clause is about.
+     */
+    const staff = await browser.newContext({ viewport: { width: 1280, height: 1200 } });
+    const pg = await staff.newPage();
+    const jsErrors = [];
+    pg.on('pageerror', (e) => jsErrors.push(String(e.message).slice(0, 180)));
+    pg.on('console', (m) => { if (m.type() === 'error') jsErrors.push(m.text().slice(0, 180)); });
+    await pg.goto(`${origin}/admin/login`, { waitUntil: 'domcontentloaded' });
+    await pg.fill('input[type="email"]', 'owner@zzgategarage.test');
+    await pg.fill('input[type="password"]', 'GateGarage!2026');
+    await Promise.all([pg.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), pg.click('button[type="submit"]')]);
+    await pg.goto(`${origin}/admin/jobcards/${card3.id}?tab=quote`, { waitUntil: 'domcontentloaded' });
+    /**
+     * THIS WORKSPACE IS CLIENT-RENDERED: the server sends the nav and __NEXT_DATA__, and every
+     * control appears only after hydration. So the wait is for HYDRATION, not for a response — and
+     * hydration on a dev server that this gate has just spent two minutes hammering is slower than
+     * on an idle one, which is why 25s passed standalone and failed here.
+     *
+     * TOLERANT, because a throw ends the gate and every clause after it goes unrun — a missing
+     * panel would then be reported as silence rather than as the one thing that is wrong.
+     */
+    await pg.waitForLoadState('networkidle').catch(() => {});
+    const panel = await pg.waitForSelector('[data-testid="estimate-options"]', { timeout: 60000 }).catch(() => null);
+    check('the estimate screen offers an options section at all', !!panel,
+      panel ? 'it is reachable' : `NOT RENDERED at ${pg.url().replace(origin, '')} — main says: ${((await pg.locator('main').first().textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)}`);
+    if (!panel) throw new Error('no options panel; the clauses below describe a screen that is not there');
+    check('  …and explains the two kinds before any exist',
+      /added to the quote if the customer wants it/.test((await pg.textContent('[data-testid="no-options"]')) ?? ''),
+      ((await pg.textContent('[data-testid="no-options"]')) ?? 'ABSENT').trim().slice(0, 80));
+
+    await pg.click('[data-testid="add-addition"]');
+    await pg.waitForSelector('[data-testid="option-editor"]', { timeout: 10000 });
+    await pg.fill('[data-testid="option-title"]', 'Water pump');
+    /** TICK THE LINE THAT BELONGS TO IT. Unticked everywhere stays the main quote. */
+    const ticks = pg.locator('[data-testid="option-line-tick"] input');
+    await ticks.nth(1).check();
+    await pg.selectOption('[data-testid="option-incentive"]', 'amount_off');
+    await pg.fill('[data-testid="incentive-label"]', '50 off with the rebuild');
+    await pg.fill('[data-testid="incentive-amount"]', '60.00');
+    // Saved by the card's own save, the way an estimator leaves the screen.
+    await pg.keyboard.press('Tab');
+    await pg.waitForFunction(async () => {
+      const r = await fetch(window.location.pathname, { method: 'HEAD' }); return !!r;
+    }, { timeout: 5000 }).catch(() => {});
+    await pg.waitForTimeout(2500);   // autosave debounce; the DB poll below is the real condition
+
+    /**
+     * WAIT FOR THE CONDITION THIS CLAUSE IS ABOUT. Waiting merely for the draft to EXIST passed on
+     * the first autosave — fired after the title was typed and before the incentive was — and then
+     * reported null incentive figures as a defect. The clause is about the incentive, so that is
+     * what the wait is for.
+     */
+    const landed = await (async () => {
+      const deadline = Date.now() + 25000;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await prisma.quoteOptionDraft.findFirst({ where: { job_card_id: card3.id } });
+        if (last?.incentive_gross_off_pennies === 6000) return last;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      return last;
+    })();
+    check('an option typed on the screen reaches the database', !!landed && landed.title === 'Water pump',
+      landed ? `${landed.kind} "${landed.title}"` : 'NOTHING SAVED');
+    check('  …with the incentive, and BOTH figures derived from the one number typed',
+      !!landed && landed.incentive_kind === 'amount_off' && landed.incentive_gross_off_pennies === 6000
+      && landed.incentive_ex_pennies === 5000 && landed.incentive_vatable === true,
+      landed ? `gross off ${landed.incentive_gross_off_pennies}p, ex ${landed.incentive_ex_pennies}p` : '—');
+    const tagged = await prisma.jobCardItem.findMany({ where: { job_card_id: card3.id }, select: { description: true, option_draft_id: true } });
+    check('  …and the ticked line belongs to it while the other stays the main quote',
+      tagged.find((x) => x.description === 'Water pump')?.option_draft_id === landed?.id
+      && tagged.find((x) => x.description === 'Engine rebuild')?.option_draft_id === null,
+      tagged.map((x) => `${x.description}=${x.option_draft_id ? 'option' : 'main'}`).join(', '));
+    /**
+     * ── REMOVING AN OPTION IS REGROUPING, NOT DELETING ────────────────────────────────────────
+     * Its lines go back to the MAIN quote. Deleting work somebody typed because they changed their
+     * mind about how to group it is the kind of loss nobody notices until the invoice is short.
+     * Found by a 0 RED: nothing reached the removal path, so the rule was unproved.
+     */
+    await pg.click('[data-testid="remove-option"]');
+    const survived = await (async () => {
+      const deadline = Date.now() + 25000;
+      let rows = [];
+      while (Date.now() < deadline) {
+        const drafts = await prisma.quoteOptionDraft.count({ where: { job_card_id: card3.id } });
+        rows = await prisma.jobCardItem.findMany({ where: { job_card_id: card3.id }, select: { description: true, option_draft_id: true } });
+        if (drafts === 0) return rows;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      return rows;
+    })();
+    check('removing an option returns its work to the main quote rather than deleting it',
+      survived.length === 2 && survived.every((x) => x.option_draft_id === null),
+      survived.map((x) => `${x.description}=${x.option_draft_id ? 'option' : 'main'}`).join(', ') || 'NO LINES LEFT');
+
+    await staff.close();
+  }
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (prisma) {
     try {
-      const vs = await prisma.vehicle.findMany({ where: { group_id: ZZ_GROUP, registration: { startsWith: XQ } }, select: { id: true } });
-      const ids = vs.map((v) => v.id);
-      const cards = (await prisma.jobCard.findMany({ where: { vehicle_id: { in: ids } }, select: { id: true } })).map((c) => c.id);
-      await prisma.customerMagicLink.deleteMany({ where: { job_card_id: { in: cards } } });
-      const vers = (await prisma.quoteVersion.findMany({ where: { job_card_id: { in: cards } }, select: { id: true } })).map((v) => v.id);
-      await prisma.quoteVersionLine.deleteMany({ where: { quote_version_id: { in: vers } } });
-      await prisma.quoteOption.deleteMany({ where: { quote_version_id: { in: vers } } });
-      await prisma.quoteVersion.deleteMany({ where: { id: { in: vers } } });
-      await prisma.jobCard.deleteMany({ where: { id: { in: cards } } });
-      await prisma.vehicle.deleteMany({ where: { id: { in: ids } } });
-      await prisma.customer.deleteMany({ where: { group_id: ZZ_GROUP, name: { startsWith: XQ } } });
+      await sweepFixtures();
       const left = await prisma.vehicle.count({ where: { group_id: ZZ_GROUP, registration: { startsWith: XQ } } });
       check('teardown left none of this gate’s rows', left === 0, `${left} left`);
     } catch (e) { check('teardown ran', false, describeError(e).slice(0, 120)); }

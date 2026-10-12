@@ -31,6 +31,18 @@ type IncomingLine = {
   unit_price?: number | string; unit_cost?: number | string; vatable?: boolean;
   catalogue_item_id?: string | null; // origin hook (tenant-validated below)
   labour_hours?: number | string | null; // fixed lines: charged labour content (from the service)
+  /** Which draft option this line belongs to. NULL/absent = the main quote. A CLAIM, intersected
+   *  against this card's own drafts in the write below — the same treatment `id` gets. */
+  option_draft_id?: string | null;
+};
+
+/** A draft option as the builder sends it. `id` absent = new. */
+type IncomingOption = {
+  id?: string;
+  kind?: string; title?: string; group_key?: string | null; position?: number;
+  incentive_kind?: string | null; incentive_label?: string | null;
+  incentive_ex_pennies?: number | null; incentive_vatable?: boolean | null;
+  incentive_gross_off_pennies?: number | null;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -42,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, vatRate, items } = (req.body || {}) as { jobCardId?: string; vatRate?: number | string; items?: IncomingLine[] };
+  const { jobCardId, vatRate, items, options } = (req.body || {}) as { jobCardId?: string; vatRate?: number | string; items?: IncomingLine[]; options?: IncomingOption[] };
   if (!jobCardId) return res.status(400).json({ message: 'Missing jobCardId.' });
   if (!Array.isArray(items)) return res.status(400).json({ message: 'items must be an array.' });
 
@@ -82,6 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       groupId: user.group_id as string, jobCardId, items, vatRate: rate, vatRegistered: vat.registered,
       grossEntry: card.site?.pricing_display_mode === 'inc_vat',
       costWritable: finWrite.seeMargin, actorUserId: user.id as string,
+      options,
     });
   } catch (e: any) {
     if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
@@ -152,8 +165,12 @@ export async function performEstimateSave(args: {
   costWritable?: boolean;
   /** For the cost audit: who typed it. */
   actorUserId?: string | null;
+  /** The card's draft options, reconciled in the same transaction as the lines that point at them.
+   *  UNDEFINED means "this caller does not manage options" and leaves them untouched — the import
+   *  paths and the demo generator save estimates without ever having heard of an option. */
+  options?: IncomingOption[];
 }) {
-  const { groupId, jobCardId, items, vatRate, vatRegistered } = args;
+  const { groupId, jobCardId, items, vatRate, vatRegistered, options } = args;
   const grossEntry = args.grossEntry === true;
   const costWritable = args.costWritable === true;
 
@@ -352,12 +369,71 @@ export async function performEstimateSave(args: {
     const keeping = new Set(named);
     const gone = existing.filter((r) => !keeping.has(r.id)).map((r) => r.id);
     if (gone.length) await tx.jobCardItem.deleteMany({ where: { id: { in: gone } } });
+
+    /**
+     * ── THE DRAFT OPTIONS, RECONCILED BEFORE THE LINES THAT POINT AT THEM ──────────────────────
+     * Same shape as the line reconcile above and in the same transaction, because a line saved
+     * against an option that was removed in the same keystroke would be an orphan nobody could see
+     * on the screen they were looking at.
+     *
+     * AN ID FROM THE CLIENT IS A CLAIM. Every option id — both the ones being updated and the ones
+     * lines point at — is intersected with the drafts THIS CARD actually has, exactly as line ids
+     * are. Nothing here trusts the browser about what belongs to whom.
+     */
+    const existingOpts = (await tx.quoteOptionDraft.findMany({
+      where: { job_card_id: jobCardId }, select: { id: true },
+    })) as Array<{ id: string }>;
+    const optsOnCard = new Set(existingOpts.map((o) => o.id));
+    const incomingOpts = Array.isArray(options) ? options : null;
+    const idMap = new Map<string, string>();        // client id → stored id, for new drafts
+
+    if (incomingOpts) {
+      const keptOpts = new Set(incomingOpts.map((o) => o.id).filter((id): id is string => !!id && optsOnCard.has(id)));
+      const goneOpts = existingOpts.filter((o) => !keptOpts.has(o.id)).map((o) => o.id);
+      if (goneOpts.length) {
+        // A removed option's lines return to the MAIN quote rather than vanishing: deleting work
+        // somebody typed because they regrouped it is not what "remove this option" means.
+        await tx.jobCardItem.updateMany({ where: { option_draft_id: { in: goneOpts } }, data: { option_draft_id: null } });
+        await tx.quoteOptionDraft.deleteMany({ where: { id: { in: goneOpts } } });
+      }
+      for (let i = 0; i < incomingOpts.length; i++) {
+        const o = incomingOpts[i];
+        const data = {
+          kind: o.kind === 'variation' ? 'variation' : 'addition',
+          position: i,
+          title: String(o.title ?? '').trim().slice(0, 120),
+          group_key: o.kind === 'variation' ? (String(o.group_key ?? '').trim().slice(0, 60) || 'options') : null,
+          incentive_kind: o.incentive_kind === 'amount_off' || o.incentive_kind === 'included' ? o.incentive_kind : null,
+          incentive_label: o.incentive_kind ? String(o.incentive_label ?? '').trim().slice(0, 120) : null,
+          incentive_ex_pennies: o.incentive_kind === 'amount_off' ? Math.max(0, Math.round(Number(o.incentive_ex_pennies ?? 0))) : null,
+          incentive_vatable: o.incentive_kind === 'amount_off' ? !!o.incentive_vatable : null,
+          incentive_gross_off_pennies: o.incentive_kind === 'amount_off' ? Math.max(0, Math.round(Number(o.incentive_gross_off_pennies ?? 0))) : null,
+        };
+        if (o.id && optsOnCard.has(o.id)) await tx.quoteOptionDraft.update({ where: { id: o.id }, data });
+        else {
+          const made = await tx.quoteOptionDraft.create({ data: { job_card_id: jobCardId, ...data }, select: { id: true } });
+          if (o.id) idMap.set(o.id, made.id);        // the builder's provisional id → the real one
+        }
+      }
+    }
+    const liveOpts = new Set(((await tx.quoteOptionDraft.findMany({
+      where: { job_card_id: jobCardId }, select: { id: true },
+    })) as Array<{ id: string }>).map((o) => o.id));
+    const optionFor = (claim: string | null | undefined): string | null => {
+      if (!claim) return null;
+      const mapped = idMap.get(claim) ?? claim;
+      return liveOpts.has(mapped) ? mapped : null;   // an unknown option is the MAIN quote, not an error
+    };
+
     for (let i = 0; i < rows.length; i++) {
       const id = claimed[i];
       // ADDS MINT SERVER-SIDE. A client that chooses primary keys is a client that can collide
       // with one, and `id` is absent on a new row precisely so it has nothing to choose.
-      if (id === null) await tx.jobCardItem.create({ data: rows[i] });
-      else await tx.jobCardItem.update({ where: { id }, data: rows[i] });
+      // The claim comes off the RAW payload row: `inputs` is the normalised pricing shape and has
+      // no business carrying an option id through lib/quote-totals.
+      const withOption = { ...rows[i], option_draft_id: optionFor((items[i] as IncomingLine | undefined)?.option_draft_id) };
+      if (id === null) await tx.jobCardItem.create({ data: withOption });
+      else await tx.jobCardItem.update({ where: { id }, data: withOption });
     }
     await tx.jobCard.update({
       where: { id: jobCardId },

@@ -1564,7 +1564,7 @@ export default function DiaryPage(props: PageProps) {
                     duplicatedFrom={pane.data.duplicatedFrom} costsInherited={pane.data.costsInherited}
                     vehicleIdLabel={pane.data.vehicleIdLabel} vehicleLookupProvider={pane.data.vehicleLookupProvider}
                     garageNotes={pane.data.garageNotes} currency={pane.data.currency} locale={pane.data.locale}
-                    vatRate={pane.data.vatRate} vatRegistered={pane.data.vatRegistered} lines={pane.data.lines}
+                    vatRate={pane.data.vatRate} vatRegistered={pane.data.vatRegistered} lines={pane.data.lines} options={pane.data.options}
                     catalogue={pane.data.catalogue} fixedServices={pane.data.fixedServices} promos={pane.data.promos} tiers={pane.data.tiers}
                     hasEstimate={pane.data.hasEstimate} resources={pane.data.resources} booking={pane.data.booking}
                     siteHours={pane.data.siteHours} siteId={pane.data.siteId} stages={pane.data.stages} skipped={pane.data.skipped}

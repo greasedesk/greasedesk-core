@@ -33,6 +33,9 @@ export type EstimateLine = {
   code?: string;                    // catalogue code typed on the line (match key; not persisted)
   catalogue_item_id?: string | null; // origin hook, persisted; remembers the catalogue item it came from
   labour_hours?: number | null; // fixed lines: inherited from the service
+  /** Which draft option this line belongs to. NULL = the main quote — the same rule the frozen
+   *  side and the customer's page use. */
+  option_draft_id?: string | null;
 };
 
 // Catalogue item (active, tenant-scoped) loaded once for client-side code matching. SIMPLE items only.
@@ -51,6 +54,24 @@ export type TierLite = { id: string; name: string };
 // Internal row = a line plus a stable client id used as the React key.
 type Row = EstimateLine & { _uid: string };
 
+/**
+ * ── A DRAFT OPTION, AS THE BUILDER HOLDS IT ────────────────────────────────────────────────────
+ * Mirrors QuoteOptionDraft. `id` may be provisional for an option added in this session; the save
+ * endpoint maps a provisional id to the stored one for the lines pointing at it, so a line can be
+ * assigned to an option that does not exist on the server yet.
+ */
+export type DraftOption = {
+  id: string;
+  kind: 'addition' | 'variation';
+  title: string;
+  group_key: string | null;
+  incentive_kind: 'amount_off' | 'included' | null;
+  incentive_label: string | null;
+  incentive_ex_pennies: number | null;
+  incentive_vatable: boolean | null;
+  incentive_gross_off_pennies: number | null;
+};
+
 let _seq = 0;
 const uid = () => `row-${_seq++}`;
 
@@ -62,6 +83,7 @@ type Props = {
   initialVatRate: number;
   labourRate?: number | null; // per-site default labour rate (Financial settings) — pre-fills new labour lines
   initialLines: EstimateLine[];
+  initialOptions?: DraftOption[];   // the card's draft options; absent = none authored yet
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
   catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
   fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
@@ -221,12 +243,13 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
 export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
 export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () => EstimateLine[] };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, initialOptions = [], vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
   const { t } = useTranslation('jobcard');
   // SEEDED FROM THE SERVER ID where the line already exists. _uid is still just React's key — its
   // job is focus retention across a keystroke — but keying it to the real row means a re-render
   // cannot silently detach a line from the row it represents. A NEW row has no id and mints one.
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: l.id ?? uid() })));
+  const [options, setOptions] = useState<DraftOption[]>(initialOptions);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
@@ -349,7 +372,10 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
 
   // THE draft persistence: a serialised snapshot of what's on the server, and the payload builder.
   // The estimate lives on the DRAFT JobCard's JobCardItem rows (Option B) — this writes to them.
-  const serialize = (ls: Row[], vr: string) => JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest) });
+  // Options are part of what a save persists, so they are part of what "dirty" means. Leaving them
+  // out would make renaming an option or changing an incentive a change the autosave cannot see.
+  const serialize = (ls: Row[], vr: string, os: DraftOption[] = options) =>
+    JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest), options: os });
   const lastSavedRef = useRef<string>(serialize(initialLines.map((l) => ({ ...l, _uid: '' } as Row)), String(initialVatRate)));
 
   // Persist the estimate lines. Also updates lastSavedRef, so autosave never re-posts an unchanged
@@ -360,7 +386,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       const items = lines.map(({ _uid, code, ...rest }) => rest); // strip client-only id + transient code
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items }),
+        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items, options }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -408,8 +434,12 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       setSaveState(r.ok ? 'saved' : 'error');
     }, 900);
     return () => clearTimeout(timer);
+    // `options` BELONGS HERE. It is part of what a save persists and part of what `serialize`
+    // compares, so leaving it out made renaming an option or setting an incentive a change the
+    // autosave could not see — the edit sat in local state and was lost on navigate. Found by a
+    // gate that typed an incentive on the real screen and found nulls in the database.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, vatRate, canEdit]);
+  }, [lines, vatRate, canEdit, options]);
 
   // Each row carries its original index so per-line totals map back to totals.lines[idx].
   const withIdx = lines.map((l, idx) => ({ l, idx }));
@@ -510,6 +540,107 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
             <button onClick={applyPromo} disabled={!pickPromo} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">{t('estimate.applyPromo')}</button>
           </div>
           {promoMsg && <p className="text-xs text-warn mt-1">{promoMsg}</p>}
+        </div>
+      )}
+
+      {/* ── OPTIONS ─────────────────────────────────────────────────────────────────────────────
+          Where a garage builds "the main job, plus any of these, or one of those". Lines are
+          assigned from HERE rather than with a dropdown on every row: the grouping is one decision
+          about the whole quote, and reading it in one place is how you see that bronze/silver/gold
+          are alternatives rather than three separate extras.
+
+          A line not ticked anywhere is the MAIN quote. That is the same rule the frozen side uses
+          (QuoteVersionLine.option_id NULL) and the same one the customer's page reads. */}
+      {canEdit && (
+        <div className="border-t border-line mt-4 pt-4" data-testid="estimate-options">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-sm font-semibold text-ink">Options</span>
+            <span className="flex gap-2">
+              <button type="button" data-testid="add-addition"
+                onClick={() => setOptions((os) => [...os, { id: `new-${Date.now()}-${os.length}`, kind: 'addition', title: 'Optional extra', group_key: null, incentive_kind: null, incentive_label: null, incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null }])}
+                className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink">Add an extra</button>
+              <button type="button" data-testid="add-variation"
+                onClick={() => setOptions((os) => [...os, { id: `new-${Date.now()}-${os.length}`, kind: 'variation', title: 'Alternative', group_key: 'service', incentive_kind: null, incentive_label: null, incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null }])}
+                className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink">Add an alternative</button>
+            </span>
+          </div>
+          {options.length === 0 && (
+            <p className="text-xs text-muted" data-testid="no-options">
+              No options. An <strong>extra</strong> is added to the quote if the customer wants it; an{' '}
+              <strong>alternative</strong> is one of a set they choose between — and they can decline them all.
+            </p>
+          )}
+          {options.map((o, oi) => (
+            <div key={o.id} className="rounded-lg border border-line p-3 mb-2" data-testid="option-editor" data-kind={o.kind}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs uppercase tracking-wide text-muted">{o.kind === 'variation' ? 'One of' : 'Extra'}</span>
+                <input className={inputCls} style={{ maxWidth: 220 }} value={o.title} data-testid="option-title"
+                  onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, title: e.target.value } : x)))} />
+                {o.kind === 'variation' && (
+                  <label className="text-xs text-muted flex items-center gap-1">
+                    group
+                    <input className={inputCls} style={{ maxWidth: 110 }} value={o.group_key ?? ''} data-testid="option-group"
+                      onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, group_key: e.target.value } : x)))} />
+                  </label>
+                )}
+                <select className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink" data-testid="option-incentive"
+                  value={o.incentive_kind ?? ''}
+                  onChange={(e) => {
+                    const k = (e.target.value || null) as DraftOption['incentive_kind'];
+                    setOptions((os) => os.map((x, i) => (i === oi ? {
+                      ...x, incentive_kind: k,
+                      incentive_label: k ? (x.incentive_label ?? '') : null,
+                      incentive_ex_pennies: k === 'amount_off' ? (x.incentive_ex_pennies ?? 0) : null,
+                      incentive_vatable: k === 'amount_off' ? (x.incentive_vatable ?? true) : null,
+                      incentive_gross_off_pennies: k === 'amount_off' ? (x.incentive_gross_off_pennies ?? 0) : null,
+                    } : x)));
+                  }}>
+                  <option value="">no incentive</option>
+                  <option value="amount_off">money off</option>
+                  <option value="included">something included</option>
+                </select>
+                {o.incentive_kind && (
+                  <input className={inputCls} style={{ maxWidth: 220 }} placeholder="wording the customer reads"
+                    data-testid="incentive-label" value={o.incentive_label ?? ''}
+                    onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, incentive_label: e.target.value } : x)))} />
+                )}
+                {o.incentive_kind === 'amount_off' && (
+                  <label className="text-xs text-muted flex items-center gap-1">
+                    off the total
+                    <input className={inputCls} style={{ maxWidth: 100 }} type="number" step="0.01" min="0"
+                      data-testid="incentive-amount"
+                      value={((o.incentive_gross_off_pennies ?? 0) / 100).toFixed(2)}
+                      onChange={(e) => {
+                        // The ex-VAT figure the LINE needs and the gross figure the DOCUMENT promises
+                        // are both frozen, so both are derived here from the one number typed, using
+                        // this quote's own rate. lib/quote-options refuses a pair that disagrees.
+                        const gross = Math.max(0, Math.round(Number(e.target.value || 0) * 100));
+                        const rate = vatRegistered ? Number(vatRate || 0) : 0;
+                        const ex = Math.round(gross / (1 + rate / 100));
+                        setOptions((os) => os.map((x, i) => (i === oi
+                          ? { ...x, incentive_gross_off_pennies: gross, incentive_ex_pennies: ex, incentive_vatable: rate > 0 }
+                          : x)));
+                      }} />
+                  </label>
+                )}
+                <button type="button" data-testid="remove-option" className="text-sm text-danger ml-auto"
+                  onClick={() => setOptions((os) => os.filter((_, i) => i !== oi))}>Remove</button>
+              </div>
+              {/* WHICH WORK BELONGS TO IT. Unticked everywhere = the main quote. */}
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                {lines.length === 0 && <span className="text-xs text-muted">Add some work first, then tick what belongs to this option.</span>}
+                {lines.map((l) => (
+                  <label key={l._uid} className="text-xs text-ink flex items-center gap-1" data-testid="option-line-tick">
+                    <input type="checkbox" checked={l.option_draft_id === o.id}
+                      onChange={(e) => setLines((ls) => ls.map((x) => (x._uid === l._uid
+                        ? { ...x, option_draft_id: e.target.checked ? o.id : null }
+                        : x)))} />
+                    {l.description || '(untitled line)'}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

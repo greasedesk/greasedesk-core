@@ -3108,6 +3108,7 @@ model JobCard {
   battery_readings   BatteryReading[]
   schedule_readings  ServiceScheduleReading[]
   clockSessions   JobClockSession[]
+  quote_option_drafts QuoteOptionDraft[]
 }
 
 model JobCardPhoto {
@@ -3191,6 +3192,13 @@ model JobCardItem {
   @@index([job_card_id])
   @@index([catalogue_item_id])
   due_item_links   DueItemLine[]
+  ///
+  /// @nulls: option_draft_id
+  /// NULL means THE MAIN QUOTE, exactly as QuoteVersionLine.option_id does on the frozen side.
+  /// An estimate line belongs to an option while it is a draft, and freezeQuoteVersion carries the
+  /// membership across. No foreign key, like every other *_id added to an existing table here.
+  option_draft_id String?
+
 }
 
 // Lightweight labelled diary entry — NOT a job card (no customer/vehicle/quote). A note may be
@@ -5722,4 +5730,38 @@ model QuoteOption {
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([quote_version_id, position])
+}
+
+/// ── AN OPTION WHILE THE QUOTE IS STILL A DRAFT ─────────────────────────────────────────────────
+/// The garage-side half of QuoteOption. The estimate lives on JobCardItem until a quote is SENT, at
+/// which point freezeQuoteVersion copies it into QuoteVersionLine — so an option needs the same two
+/// homes, and this is the first one. Mirroring that pattern rather than inventing a second shape is
+/// the whole design: one draft table, one frozen table, one copy at freeze.
+///
+/// NOTHING HERE IS FROZEN. Totals are absent on purpose: a draft option's price is the sum of its
+/// live estimate lines and recomputing it in two places is how the two drift. The frozen totals are
+/// computed once, at freeze, onto QuoteOption.
+model QuoteOptionDraft {
+  id          String @id @default(uuid())
+  job_card_id String
+  /// lib/quote-options OPTION_KINDS: 'addition' | 'variation'.
+  kind      String
+  position  Int
+  title     String
+  ///
+  /// @nulls: group_key, incentive_kind, incentive_label, incentive_ex_pennies, incentive_vatable, incentive_gross_off_pennies
+  /// Same meanings as QuoteOption's, because this is the same thing before it is frozen:
+  /// `group_key` is NULL on an addition and required on a variation, and the five incentive columns
+  /// are NULL together or set together.
+  group_key                   String?
+  incentive_kind              String?
+  incentive_label             String?
+  incentive_ex_pennies        Int?
+  incentive_vatable           Boolean?
+  incentive_gross_off_pennies Int?
+  created_at DateTime @default(now())
+
+  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([job_card_id, position])
 }

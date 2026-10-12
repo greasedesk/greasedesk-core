@@ -164,7 +164,13 @@ try {
     const save = [...ed.querySelectorAll('button')].find((b) => /^save$/i.test((b.textContent || '').trim()));
     const wasDisabled = !!save.disabled;
     save.click();
-    await new Promise((r) => setTimeout(r, 1500));
+    // WAIT FOR THE LIST, NOT A DURATION. 1500ms is a bet on the machine: it holds on an idle box
+    // and not under a full tier's load, where this reported "the product is not in the list" about
+    // a page that had simply not re-rendered yet. The clause is about the list, so that is the wait.
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline && !document.body.innerText.includes(code)) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
     return { opened: true, openTop, wasDisabled, listHasIt: document.body.innerText.includes(code) };
   }, addCode);
   check('Add opens the editor, and in the viewport', added.opened && added.openTop >= 0 && added.openTop < 768,
