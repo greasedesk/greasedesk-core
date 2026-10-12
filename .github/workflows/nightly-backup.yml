@@ -47,7 +47,19 @@ concurrency:
 
 jobs:
   backup:
-    runs-on: ubuntu-latest
+    # ── PINNED 2026-10-12, DELIBERATELY ──────────────────────────────────────────────────────────
+    # `ubuntu-latest` migrates to Ubuntu 26 from 19 October 2026. This job is the ONE backup that is
+    # restore-verified — it pulls its own dump back from R2, decrypts it, restores it into Postgres
+    # 18 and compares a golden month against the source — so the first sign of an image change
+    # breaking it would be a FAILED RESTORE on a night when the backup was needed.
+    #
+    # A floating label is the right default for a job whose failure costs a re-run. It is the wrong
+    # one here. Pinned so the move happens when somebody chooses it.
+    #
+    # TO REVISIT: run this on ubuntu-26 by hand (workflow_dispatch from a branch) and check pg_dump
+    # 18 still installs and the restore still verifies, THEN move the pin. Not done tonight because
+    # a dispatch writes a real object to the live bucket, which is not a 9pm change.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       # The restore target. Postgres 18 because the source is 18.6 — a dump restored by an older

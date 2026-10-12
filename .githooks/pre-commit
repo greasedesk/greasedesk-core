@@ -7,9 +7,23 @@
 # valid when found (see .gitignore:15). .gitignore stops the files it knows about; this stops the
 # secret that arrives in a file nobody thought to ignore.
 #
-# Scans ONLY what is staged, so it is fast and cannot be confused by unstaged working-tree noise.
 # BLOCKS the commit on any finding (non-zero exit). Bypassable with `git commit --no-verify` — which
 # is deliberate, for the rare false positive, and should be a conscious act.
+#
+# ── WHAT IT CHECKS, AND WHAT IT CANNOT (rewritten 2026-10-12) ─────────────────────────────────────
+# This hook printed "no leaks found" on eight commits in one day while CI was RED about a finding
+# from eleven days earlier, and the pass was read as the answer eight times. Two reasons, both fixed:
+#
+#   1. IT USED THE WRONG RULES. It ran `gitleaks git --staged` with no --config, so it scanned with
+#      gitleaks' DEFAULTS while CI scanned with gitleaks.toml. Two checks sharing a name and not a
+#      rulebook. It now passes the repo config, so a local pass means what CI means.
+#   2. IT SCANNED TOO LITTLE AND SAID TOO MUCH. Staged-only cannot see a secret already committed
+#      and not yet pushed, which is the whole window between a mistake and its disclosure. It now
+#      scans the staged diff AND every commit not yet on the upstream branch.
+#
+# It still cannot scan HISTORY — that is ~80 seconds, which does not belong in a pre-commit hook —
+# so on success it SAYS SO, naming what it did not look at. A check whose reassurance does not match
+# its scope is worse than no check, because it is trusted.
 
 if ! command -v gitleaks >/dev/null 2>&1; then
   # FAIL CLOSED on a repo with this history: a missing scanner must not silently mean "no secrets".
@@ -18,8 +32,24 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 1
 fi
 
-gitleaks git --staged --redact --no-banner
+# The same rulebook CI uses. Without this the two checks disagree silently.
+CONFIG="--config gitleaks.toml"
+
+gitleaks git --staged $CONFIG --redact --no-banner
 status=$?
+
+# EVERYTHING NOT YET PUSHED. A secret committed an hour ago and not yet pushed is still private and
+# still fixable; once pushed to a public repo it is disclosed and only rotation helps. This is the
+# window the hook exists to protect, and staged-only missed all of it.
+unpushed=0
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+if [ $status -eq 0 ] && [ -n "$upstream" ]; then
+  unpushed="$(git rev-list --count "$upstream..HEAD" 2>/dev/null || echo 0)"
+  if [ "$unpushed" -gt 0 ]; then
+    gitleaks git $CONFIG --redact --no-banner --log-opts "$upstream..HEAD"
+    status=$?
+  fi
+fi
 
 if [ $status -ne 0 ]; then
   echo "" >&2
@@ -36,5 +66,13 @@ if [ $status -ne 0 ]; then
   echo "────────────────────────────────────────────────────────────────────────" >&2
   exit 1
 fi
+
+# ── SAY WHAT WAS NOT CHECKED ──────────────────────────────────────────────────────────────────────
+# Loud enough that this cannot be mistaken for CI's answer. The failure being prevented is a human
+# reading "no leaks found" and concluding the repository is clean.
+total="$(git rev-list --count HEAD 2>/dev/null || echo '?')"
+echo "pre-commit: clean — staged changes + ${unpushed} unpushed commit(s), using gitleaks.toml."
+echo "            NOT CHECKED: the rest of this repo's ${total} commits of history."
+echo "            CI scans all of it on push. A pass here is not that answer."
 
 exit 0

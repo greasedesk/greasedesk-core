@@ -18,6 +18,9 @@ permissions:
 
 jobs:
   scan:
+    # Left floating on purpose: this job installs one binary and reads the repo. If an image change
+    # breaks it, the signal is an obviously-failed scan on the next push, not a bad restore months
+    # later — so the nightly backup is pinned and this is not.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout FULL history
