@@ -55,7 +55,12 @@ jobs:
       verify_db:
         image: postgres:18
         env:
-          POSTGRES_PASSWORD: verify
+          # NO PASSWORD, BY DESIGN. This container is reachable only from inside this job and is
+          # destroyed with it, so a password here protects nothing and only puts a credential-shaped
+          # string in a public repository — which it did: the connection URI below failed the
+          # secret scan on every push from 2026-10-01 to 2026-10-12. `trust` removes the string
+          # rather than explaining it away.
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: verify
         ports: ['5432:5432']
         options: >-
@@ -220,7 +225,7 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
           # The RESTORED copy, not the source. Nothing in this step can reach Neon.
-          DATABASE_URL: postgresql://postgres:verify@localhost:5432/verify
+          DATABASE_URL: postgresql://postgres@localhost:5432/verify
         run: |
           set -euo pipefail
           PREFIX="$(node -e "import('./scripts/_backup-compare.mjs').then(m => console.log(m.retentionPrefix(new Date())))")"
