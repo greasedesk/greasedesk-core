@@ -286,6 +286,32 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   });
 }
 
+/**
+ * ── THE LIMITER PAGE IS NOT A FAILURE, AND IT SAYS SO ITSELF ───────────────────────────────────
+ * Magic links are rate limited to 60 per IP per hour (lib/magic-link MAGIC_LIMITS). The RUNNER
+ * reaps loopback rows once per tier; a gate run STANDALONE does not, so a gate that mints a
+ * customer link poisons itself after enough re-runs — and then reports "the panel is missing",
+ * which is true of the page and false about the code.
+ *
+ * That happened on 2026-10-12: fifteen re-runs spent exactly 60, and the next hour went to reading
+ * source while the page said, in words, "Too many links have been opened from this connection in
+ * the last hour."
+ *
+ * A gate that opens a customer link passes the page body through this before concluding anything.
+ */
+export const LIMITER_EXHAUSTED = /Too many links have been opened from this connection/i;
+
+export function declineIfLimiterExhausted(bodyText) {
+  if (!LIMITER_EXHAUSTED.test(String(bodyText ?? ''))) return false;
+  declineToRun(
+    'the magic-link limiter is spent (60 per IP per hour) — this run minted one too many, which is a '
+    + 'property of how often this gate has been re-run, not of the code. The tier runner reaps loopback '
+    + 'rows; a standalone re-run does not. Clear them with `node scripts/_reap-loopback-limits.mjs '
+    + 'http://localhost:3010` and run again.',
+  );
+  return true;
+}
+
 export function declineToRun(reason) {
   console.log(`\nUNRUN — ${reason}`);
   console.log('  Nothing was tested. This is not a failure of the code under test.');

@@ -203,6 +203,22 @@ try {
   check('a description full of plausible separators still forges no field boundary',
     [...trick.keys()][0].split('\0').length === 4, `${[...trick.keys()][0].split('\0').length} fields`);
 
+  /**
+   * ── THE LIMITER MATCHER, AGAINST THE REAL SENTENCE ────────────────────────────────────────────
+   * A gate that opens a customer link spends one of 60 per IP per hour, and a spent limiter renders
+   * a page that looks exactly like a missing feature. The matcher is asserted against the words the
+   * page actually prints, and against an ordinary page, because a matcher that fires on everything
+   * would turn every genuine red into "not a failure".
+   */
+  console.log('\n— AN EXHAUSTED LIMITER NAMES ITSELF —');
+  const { LIMITER_EXHAUSTED } = await import('./_gate-preflight.mjs');
+  const realPage = 'Too many attemptsToo many links have been opened from this connection in the last hour. '
+    + 'Please wait a little while and try again.We use strictly-necessary cookies to keep the site working.';
+  check('it recognises the page the limiter actually serves', LIMITER_EXHAUSTED.test(realPage));
+  check('  …and does NOT fire on an ordinary quote page',
+    !LIMITER_EXHAUSTED.test('Your quote from ZZ Gate Garage. Accept quote. Decline quote. Choose one.'));
+  check('  …nor on a page that merely mentions a link', !LIMITER_EXHAUSTED.test('Open the link we sent you.'));
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

@@ -18,7 +18,7 @@
  * FIXTURES on ZZ, prefix ZZQO, swept before and after.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady , onTeardown} = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, gateOrigin, serverReady , onTeardown, declineIfLimiterExhausted} = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
@@ -140,6 +140,8 @@ try {
    * ever fails again, read the body before reading the code.
    */
   const custPanel = await page.waitForSelector('[data-testid="quote-options"]', { timeout: 60000 }).catch(() => null);
+  // Before concluding anything about the code, ask the page whether it is simply out of links.
+  if (!custPanel) declineIfLimiterExhausted(await page.textContent('body').catch(() => ''));
   check('the customer page shows the options', !!custPanel, custPanel ? 'rendered' : `NOT RENDERED — ${((await page.textContent('body')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
   if (!custPanel) throw new Error('no options on the customer page; the clauses below describe a page that is not there');
 

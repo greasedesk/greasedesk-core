@@ -20,7 +20,7 @@
  * removed in the finally. It refuses to start if a previous run left any behind.
  */
 import './_gate-preflight.mjs';
-const { serverReady, describeError, gateOrigin, declineToRun } = await import('./_gate-preflight.mjs');
+const { serverReady, describeError, gateOrigin, declineToRun , onTeardown} = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { prisma } = await import('../lib/db.ts');
 const { smsAllowance } = await import('../lib/sms-allowance.ts');
@@ -35,6 +35,7 @@ const ZZ = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 // overrides, which is what a genuinely different server is for.
 const B = gateOrigin();
 const MARK = 'qisgate_';
+onTeardown(async () => { try { await prisma.notificationLog.deleteMany({ where: { provider_message_id: { startsWith: MARK } } }); } catch { /* best effort on a signal */ } });
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
@@ -289,7 +290,14 @@ try {
       }
     }
   };
-  const d = await retry('teardown', () => prisma.notificationLog.deleteMany({ where: { provider_message_id: { startsWith: MARK } } }));
+  /**
+   * REGISTERED TOO, so the runner's cap can run it over SIGTERM. This gate is why that matters: it
+   * was capped at 300s on 2026-10-12, its `finally` never ran, and it left 100 filler rows — then
+   * correctly REFUSED the next run, which is the honest symptom of a mechanism that had none.
+   * Idempotent: a deleteMany run twice removes nothing the second time.
+   */
+  const sweepFiller = () => prisma.notificationLog.deleteMany({ where: { provider_message_id: { startsWith: MARK } } });
+  const d = await retry('teardown', sweepFiller);
   check('teardown removed every filler row', d.count === filled, `${d.count} of ${filled}`);
   const back = await retry('allowance', () => smsAllowance(prisma, ZZ));
   check('and the allowance is back', back.remaining > 0, `${back.remaining} left`);
