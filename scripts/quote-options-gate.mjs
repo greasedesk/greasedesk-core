@@ -170,6 +170,39 @@ try {
     Q.grossAgreesWithRule(120000, MAIN) === true && Q.grossAgreesWithRule(120000 + 36000, MAIN) === false,
     'the main gross agrees; main-plus-options does not');
 
+  /**
+   * ── THE MATERIAL KEY, WHICH NOTHING COVERED ───────────────────────────────────────────────────
+   * `materialBag` decides whether editing an estimate supersedes a quote that is out with a
+   * customer, and no gate asserted any of its rules. Found while fixing three source files that
+   * held RAW NUL BYTES — the separator in this very key was one of them — which made `grep` print
+   * nothing for the whole file and left this ungated surface invisible to a survey as well.
+   */
+  console.log('\n— WHAT COUNTS AS A MATERIAL EDIT —');
+  const V = await import(`${R}/lib/quote-version.ts`);
+  const ml = (d, q, u, vr) => ({ description: d, qty: q, unit_price: u, vat_rate: vr });
+  const bag = (ls, reg) => [...V.materialBag(ls, reg).entries()].sort().map(([k, n]) => `${k}×${n}`).join(' ');
+  check('the same lines in a different order are the same bag',
+    bag([ml('Pads', 1, 50, 20), ml('Discs', 2, 80, 20)], true) === bag([ml('Discs', 2, 80, 20), ml('Pads', 1, 50, 20)], true));
+  check('  …and a repeated line is counted, not collapsed',
+    bag([ml('Pads', 1, 50, 20), ml('Pads', 1, 50, 20)], true).includes('×2'));
+  check('surrounding whitespace in a description is not a material change',
+    bag([ml('  Pads  ', 1, 50, 20)], true) === bag([ml('Pads', 1, 50, 20)], true));
+  /** THE SUBTLE ONE, and the only rule with a reason attached: an unregistered quote prints no VAT
+   *  column, so a rate change there is invisible to the customer and must not supersede. */
+  check('a VAT rate change is material when registered',
+    bag([ml('Pads', 1, 50, 20)], true) !== bag([ml('Pads', 1, 50, 5)], true));
+  check('  …and NOT material when the garage is unregistered, because the page shows no VAT',
+    bag([ml('Pads', 1, 50, 20)], false) === bag([ml('Pads', 1, 50, 5)], false));
+  check('a price or quantity change is material either way',
+    bag([ml('Pads', 1, 50, 20)], false) !== bag([ml('Pads', 2, 50, 20)], false)
+    && bag([ml('Pads', 1, 50, 20)], false) !== bag([ml('Pads', 1, 51, 20)], false));
+  /** The separator must be something a customer cannot type, or a description could forge a field
+   *  boundary. Asserted as the property, not the character: the key for a description full of every
+   *  plausible separator still reads as ONE field. */
+  const trick = V.materialBag([ml('Pads 1 50 20, 1|50\t20', 1, 50, 20)], true);
+  check('a description full of plausible separators still forges no field boundary',
+    [...trick.keys()][0].split('\0').length === 4, `${[...trick.keys()][0].split('\0').length} fields`);
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

@@ -138,7 +138,7 @@ try {
     && R.suppressionDecision({ failed: true }, { channel: 'email', marketing: false }) === 'send');
   // THE REAL FAILURE, through the real send path: Postgres refuses a NUL byte in a text parameter,
   // so the address lookup inside isSuppressed genuinely throws.
-  const broken = 'broken ' + MARK;
+  const broken = 'broken\0' + MARK;
   const mFail = await send('mot_due', 'email', broken);
   const sFail = await send('quote_ready', 'email', broken);
   check('a reminder whose opt-out lookup THREW is refused, not sent', mFail.skipCode === 'marketing_check_failed', `${mFail.status}/${mFail.skipCode}`);

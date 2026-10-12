@@ -198,7 +198,6 @@ const TIERS = {
     'diary-drag-gate',
     'stock-fillable-gate',
     'ownership-edge-gate',
-    'held-on-lift-gate',
     'fast-set-gate',
     'backup-gate',
     'after-sale-gate',
@@ -229,6 +228,11 @@ const TIERS = {
    */
   manual: ['demo-generation-gate'],
   slow: [
+    // MOVED FROM CORE 2026-10-12. It takes ~300s on its own and brushed the runner's per-gate cap
+    // during a 1008s core run — reported as RED with no clause count, which reads exactly like a
+    // failure and was a timeout. Run standalone it is 64 of 64. Core should be cheap enough to run
+    // often; a gate that can time out in it makes every core result need a second look.
+    'held-on-lift-gate',
     'rep-site-mobile-gate',
     'battery-gate', 'bay-write-gate', 'closure-kind-gate', 'invoice-snapshot-gate', 'condition-visibility-gate', 'consent-reach-gate', 'intake-offer-gate',
     'marketing-send-gate', 'messages-tab-gate', 'mot-capture-gate', 'mot-refresh-gate',

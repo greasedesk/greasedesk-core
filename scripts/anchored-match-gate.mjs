@@ -201,5 +201,41 @@ check('no page, component, lib or middleware tests a path by prefix', appOffende
   appOffenders.length ? `\n    ${appOffenders.join('\n    ')}` : `${appFiles.length} files — startsWith('/m') in _app.tsx took every public page beginning with m out from under the consent banner`);
 check('  …and the sweep really read the app', appFiles.length >= 300 && appFiles.includes('middleware.ts'), `${appFiles.length} files`);
 
+/**
+ * ── THE INVERSE FAILURE: A FILE NO MATCHER CAN SEE ───────────────────────────────────────────────
+ * Everything above is about a matcher matching too much. This is about one matching NOTHING: a
+ * source file holding a raw control byte is "data" to every text tool, and `grep` prints nothing for
+ * the WHOLE FILE without saying so. A survey then reports a clean result it never looked for.
+ *
+ * Found twice. On 2026-10-12 three files held raw NULs — lib/quote-version.ts, lib/operator-auth.ts
+ * and scripts/marketing-optout-gate.mjs — each using NUL deliberately, as a field separator and as
+ * impossible sentinels, which is sound practice written the wrong way. The two-character escape
+ * `\0` is the SAME string at runtime and leaves the file readable, so the raw byte buys nothing.
+ *
+ * The detector is planted against first: a scan that finds nothing is exactly what this clause
+ * would look like if it were broken.
+ */
+console.log('\n— and no source file is invisible to a scan —');
+const firstControl = (buf) => {
+  for (let i = 0; i < buf.length; i += 1) {
+    const c = buf[i];
+    if (c < 9 || c === 11 || c === 12 || (c > 13 && c < 32)) return i;
+  }
+  return -1;
+};
+check('the detector finds a planted NUL', firstControl(Buffer.from('const x = 1;\0')) === 12);
+check('  …and a planted escape character, not only NUL', firstControl(Buffer.from('a\u001bb')) === 1);
+check('  …while ordinary source with tabs and newlines is clean',
+  firstControl(Buffer.from('const a = 1;\n\tif (a) {\r\n}\n')) === -1);
+const anyWalk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => (
+  e.name === 'node_modules' || e.name.startsWith('.') ? []
+    : e.isDirectory() ? anyWalk(join(d, e.name))
+    : /\.(ts|tsx|mjs|prisma)$/.test(e.name) ? [join(d, e.name)] : []));
+const scanned = ['lib', 'pages', 'components', 'scripts', 'prisma'].flatMap(anyWalk);
+const blind = scanned.filter((f) => firstControl(readFileSync(f)) !== -1);
+check(`no source file holds a raw control byte (${scanned.length} scanned)`, blind.length === 0,
+  blind.join(', ') || 'every file is readable by a text tool');
+check('  …and the sweep really read the tree', scanned.length >= 400, `${scanned.length} files`);
+
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);
