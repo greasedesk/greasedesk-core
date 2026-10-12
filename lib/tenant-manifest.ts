@@ -126,6 +126,8 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   DiaryNote: TENANT(),
   QuoteVersion: TENANT(),
   QuoteVersionLine: VIA('QuoteVersion'),
+  // Reachable through its version, which is how it avoids a second copy of the tenant id.
+  QuoteOption: VIA('QuoteVersion'),
 
   // ── THE MONEY: documents frozen at issue, and what settled them ───────────────────────────────
   Invoice: TENANT(),

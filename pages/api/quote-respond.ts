@@ -20,13 +20,29 @@ import { resolveOpsEmail, OPS_EMAIL_SELECT } from '@/lib/ops-email';
 import { formatMoney } from '@/lib/format-money';
 import { writeAudit } from '@/lib/audit';
 import { acceptQuote, refuseQuoteAnswer } from '@/lib/quote-acceptance';
+import type { Selection } from '@/lib/quote-options';
+
+/** Shape-only: ids stay strings and a group's value stays string-or-null. What those ids MEAN is
+ *  lib/quote-acceptance's question, and it refuses rather than narrowing. */
+function normaliseSelection(v: unknown): Selection | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as { additionIds?: unknown; variationByGroup?: unknown };
+  const ids = Array.isArray(o.additionIds) ? o.additionIds.filter((x): x is string => typeof x === 'string') : [];
+  const byGroup: Record<string, string | null> = {};
+  if (o.variationByGroup && typeof o.variationByGroup === 'object') {
+    for (const [k, val] of Object.entries(o.variationByGroup as Record<string, unknown>)) {
+      byGroup[k] = typeof val === 'string' ? val : null;
+    }
+  }
+  return { additionIds: ids, variationByGroup: byGroup };
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
-  const { token, action } = (req.body ?? {}) as { token?: string; action?: string };
+  const { token, action, selection } = (req.body ?? {}) as { token?: string; action?: string; selection?: unknown };
   if (!token || (action !== 'accept' && action !== 'decline')) {
     return res.status(400).json({ message: 'A token and an action (accept or decline) are required.' });
   }
@@ -85,6 +101,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await acceptQuote(tx, {
         groupId: card.group_id, jobCardId: card.id, via: 'link',
         actorUserId: null, attested: { ip, userAgent: ua }, at: now,
+        // PASSED STRAIGHT THROUGH, unvalidated here: lib/quote-acceptance resolves it against the
+        // options the version actually carries and refuses anything that does not fit. Checking it
+        // here as well would be a second opinion about what was agreed.
+        selection: normaliseSelection(selection),
       });
       return;
     }
@@ -107,6 +127,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ILLEGAL_TRANSITION as its own backstop; the check above should already have caught it, so
     // reaching here means the card moved between the check and the write. Same sentence either way.
     const msg = String(e?.message ?? '');
+    /**
+     * A REFUSED SELECTION IS THE CUSTOMER'S PROBLEM TO SOLVE, so it gets its own sentence rather
+     * than "something went wrong". Every one of these means the page they are holding no longer
+     * matches the quote — a stale tab, or a quote re-sent while they were reading.
+     */
+    if (msg.startsWith('SELECTION_REFUSED:')) {
+      return res.status(409).json({ code: 'selection_refused', message: msg.slice('SELECTION_REFUSED:'.length) });
+    }
+    if (msg === 'SELECTION_REQUIRED') {
+      return res.status(400).json({ code: 'selection_required', message: 'Please choose which options you would like before accepting.' });
+    }
+    if (msg === 'SELECTION_WITHOUT_OPTIONS' || msg.startsWith('OPTIONS_UNSENDABLE')) {
+      console.warn('[quote-respond] stale options page —', msg, 'card', card.id);
+      return res.status(409).json({ code: 'quote_changed', message: 'This quote has changed since you opened it — please ask the garage to send it again.' });
+    }
     if (msg.startsWith('ILLEGAL_TRANSITION') || msg === 'CARD_NOT_FOUND') {
       console.warn('[quote-respond] refused after check —', msg, 'card', card.id);
       return res.status(409).json({ code: 'already_actioned', message: 'This quote has already been actioned — please contact the garage.' });

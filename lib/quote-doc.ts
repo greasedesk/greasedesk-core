@@ -18,6 +18,7 @@
 import { prisma } from '@/lib/db';
 import { invoiceTotals, type InvoiceTotals } from '@/lib/invoice';
 import { poundsToPennies } from '@/lib/quote-totals';
+import type { OptionLite } from '@/lib/quote-options';
 import { presignGet } from '@/lib/r2';
 import { resolveContactRoutes, type ContactRoutes } from '@/lib/contact-routes';
 
@@ -48,10 +49,23 @@ export type QuoteDoc = {
   contact: ContactRoutes;
   customer: { name: string };
   vehicle: { reg: string | null; desc: string | null; mileage: number | null };
-  jobDescription: string | null;
+  /**
+   * ── THE GARAGE'S EXPLANATION, IN ITS OWN WORDS ────────────────────────────────────────────────
+   * Why this work and what they would do, above any line item. Read from QuoteVersion.narrative,
+   * so it is FROZEN with the version a customer was sent.
+   *
+   * This used to be `JobCard.garage_notes`, which the schema documents as "internal staff notes on
+   * the job" — rendered straight onto the customer's page. Nine versions on this database had one
+   * and all nine were gate fixtures, so nothing real leaked, but it was a leak waiting for its
+   * first real note. It is also card-level and LIVE: editing it would silently rewrite the wording
+   * of a quote already sent.
+   */
+  narrative: string | null;
   /** The operator's explanation of THIS revision. Shown above the work description. */
   revisionNote: string | null;
   lines: DocLine[];
+  /** Options on THIS version, for the selector and the printed layout (lib/quote-options). */
+  options: OptionLite[];
   totals: InvoiceTotals;
   currency: string;
   locale: string;
@@ -62,12 +76,25 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
     where: { id: quoteVersionId },
     select: {
       id: true, job_card_id: true, version: true, status: true, sent_at: true,
-      vat_registered: true, tax_label: true, note: true,
-      lines: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true } },
+      vat_registered: true, tax_label: true, note: true, narrative: true,
+      options: { orderBy: { position: 'asc' } },
+      /**
+       * THE MAIN QUOTE ONLY. `option_id: null` is what makes a line part of the quote itself rather
+       * than one of its alternatives — and without this filter the printed table and the totals
+       * carried EVERY option at once. Measured: a £1,200 quote with two additions and three
+       * variations rendered as £2,160, which is the main work plus every option on offer, including
+       * three mutually exclusive ones. It is the same rule as GROSS_PENNIES_MEANS, applied to the
+       * document instead of the column.
+       */
+      lines: {
+        where: { option_id: null },
+        orderBy: { position: 'asc' },
+        select: { description: true, qty: true, unit_price: true, vat_rate: true, line_vat: true, line_total: true },
+      },
       group: { select: { group_name: true, trading_name: true, vat_number: true, address: true, logo_r2_key: true, phone: true, whatsapp: true } },
       job_card: {
         select: {
-          garage_notes: true, odometer_in: true,
+          odometer_in: true,
           customer: { select: { name: true } },
           vehicle: { select: { registration: true, make: true, model: true, colour: true, mileage_at_create: true } },
           site: { select: { currency_code: true, locale: true, phone: true, whatsapp: true, site_name: true, address: true } },
@@ -78,6 +105,9 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
   if (!v) return null;
 
   // SAME mapping as invoice-doc: pounds→pennies at the edge, then ONE totals aggregation.
+  // ONE widened read for the three columns the generated client does not narrow here, instead of
+  // three separate casts: each `as any` is a place the type-checker stops seeing a missing select.
+  const vv = v as { narrative?: string | null; note?: string | null; options?: any[] };
   const lines: DocLine[] = v.lines.map((l: any) => ({
     description: l.description,
     qty: Number(l.qty),
@@ -120,9 +150,17 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       desc,
       mileage: v.job_card?.odometer_in ?? veh?.mileage_at_create ?? null,
     },
-    jobDescription: v.job_card?.garage_notes || null,
-    revisionNote: (v as any).note || null,
+    narrative: vv.narrative || null,
+    revisionNote: vv.note || null,
     lines,
+    options: (vv.options ?? []).map((o: any) => ({
+      id: o.id, kind: o.kind, groupKey: o.group_key, title: o.title, position: o.position,
+      netPennies: o.net_pennies, vatPennies: o.vat_pennies, grossPennies: o.gross_pennies,
+      incentive: o.incentive_kind === 'amount_off'
+        ? { kind: 'amount_off', label: o.incentive_label ?? '', exPennies: o.incentive_ex_pennies ?? 0,
+            vatable: !!o.incentive_vatable, grossOffPennies: o.incentive_gross_off_pennies ?? 0 }
+        : o.incentive_kind === 'included' ? { kind: 'included', label: o.incentive_label ?? '' } : null,
+    })),
     totals,
     currency: v.job_card?.site?.currency_code ?? 'GBP',
     locale: v.job_card?.site?.locale ?? 'en-GB',

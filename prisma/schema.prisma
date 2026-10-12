@@ -4750,6 +4750,22 @@ model QuoteVersion {
 
   group    Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
   job_card JobCard            @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  ///
+  /// @nulls: narrative, resolved_from_version, selection_json
+  /// `narrative` is the garage's explanation in its own words, FROZEN with the version — what a
+  /// customer reads before any line item. On the VERSION, not the card: JobCard.garage_notes is
+  /// live and documented as internal staff notes, so putting it there would silently rewrite the
+  /// wording of a quote already sent. NULL = none written.
+  ///
+  /// The other two are set only on a version MINTED BY AN ACCEPTANCE that resolved options, and are
+  /// NULL on every ordinary version — which is what "sent, not resolved" looks like in the data.
+  /// `selection_json` is what the customer actually chose, kept because the resolved lines alone
+  /// cannot say whether gold was picked or every variation declined.
+  narrative             String?
+  resolved_from_version Int?
+  selection_json        Json?
+
+  options  QuoteOption[]
   lines    QuoteVersionLine[]
 
   @@unique([job_card_id, version])
@@ -4775,9 +4791,20 @@ model QuoteVersionLine {
   labour_hours      Decimal? @db.Decimal(6, 2)
   labour_outsourced Boolean  @default(false)
 
+  ///
+  /// @nulls: option_id
+  /// NULL means THE MAIN QUOTE. The main quote's lines are exactly the ones with no option, which is
+  /// why this is a null and not a sentinel row: there is no option for them to point at.
+  /// option_id has NO foreign key, like StockDisposal.buyer_customer_id and Invoice.stock_disposal_id:
+  /// the column goes on an EXISTING table, so the constraint is an `ALTER TABLE ... ADD CONSTRAINT`
+  /// that classifies constraining and costs a second push. It joins the standing FK audit with the
+  /// other unconstrained *_id columns rather than being the one exception nobody can explain.
+  option_id String?
+
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade)
 
   @@index([quote_version_id, position])
+  @@index([option_id])
 }
 
 // COMING-SOON WAITLIST (country-first onboarding). When a visitor picks an unsupported country the
@@ -5643,4 +5670,56 @@ model ExportJob {
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([group_id, requested_at])
+}
+
+/// ── AN OPTION ON A QUOTE ───────────────────────────────────────────────────────────────────────
+/// Two kinds that look alike on a screen and behave oppositely in arithmetic (lib/quote-options):
+/// ADDITIONS are cumulative — the main quote plus any of them. VARIATIONS are exclusive — at most
+/// one from a `group_key`. A quote may hold both.
+///
+/// NOT A QuoteVersion: versions are a TIMELINE (`@@unique([job_card_id, version])`) and superseding
+/// revokes an older one's magic link, so three alternatives modelled as versions would supersede
+/// each other and kill the customer's link twice. NOT merely a line group either: an option has its
+/// own total, its own name on a document and its own acceptance state — it is a thing a customer
+/// says yes to.
+///
+/// NO group_id, deliberately: it is reachable through `quote_version`, and a second copy of the
+/// tenant id is a second thing to get wrong. lib/tenant-manifest classifies it parent-reachable.
+///
+/// AT MOST ONE PER GROUP, NEVER EXACTLY ONE. Declining every variation is a legitimate answer
+/// (owner's ruling 2026-10-12: forcing a choice turns a quote into an invoice), so there is no
+/// `is_default` column and nothing derives one.
+model QuoteOption {
+  id               String @id @default(uuid())
+  quote_version_id String
+  /// lib/quote-options OPTION_KINDS: 'addition' | 'variation'.
+  kind             String
+  position         Int
+  title            String
+  /// FROZEN AT SEND, like the version's own totals. lib/quote-options does display arithmetic on
+  /// these and never recomputes them.
+  net_pennies   Int
+  vat_pennies   Int
+  gross_pennies Int
+  ///
+  /// @nulls: group_key, incentive_kind, incentive_label, incentive_ex_pennies, incentive_vatable, incentive_gross_off_pennies
+  /// `group_key` is NULL on an addition and required on a variation — the null IS the kind's
+  /// consequence, not a missing value, and lib/quote-options refuses either shape inverted.
+  ///
+  /// The five incentive columns are NULL together or set together. An incentive is a promise on a
+  /// document a customer may hold to, so these are columns rather than JSON: the rule keeping
+  /// `incentive_gross_off_pennies` consistent with `incentive_ex_pennies` is assertable, and a
+  /// reader can see what a null means. Kind 'included' carries a label and NO money — a free
+  /// diagnostic is GIVEN, and discounting it would drop the bill for an item never charged for.
+  group_key                   String?
+  incentive_kind              String?
+  incentive_label             String?
+  incentive_ex_pennies        Int?
+  incentive_vatable           Boolean?
+  incentive_gross_off_pennies Int?
+  created_at DateTime @default(now())
+
+  quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([quote_version_id, position])
 }

@@ -48,6 +48,9 @@ import { vatPresentation } from '@/lib/margin-scheme';
 import DocumentLines from '@/components/DocumentLines';
 import CustomerInvoice, { type SerializedInvoiceDoc } from '@/components/customer/CustomerInvoice';
 import { useState } from 'react';
+import {
+  additions, printedQuote, resolveSelection, variationGroups, incentiveNote,
+} from '@/lib/quote-options';   // PURE — no db reach, so it is safe in the client bundle
 
 type Denied =
   | 'expired' | 'revoked' | 'not_found' | 'rate_limited' | 'wrong_purpose' | 'no_quote'
@@ -265,10 +268,17 @@ export default function CustomerLinkPage(props: Props) {
             </div>
           )}
 
-          {d.jobDescription && (
-            <div className="pb-2 text-sm">
-              <p className="text-xs uppercase tracking-wide text-muted mb-1">Work</p>
-              <p className="text-ink whitespace-pre-line">{d.jobDescription}</p>
+          {/* ── THE GARAGE'S EXPLANATION, FIRST ──────────────────────────────────────────────
+              In their own words, above any line item: why this work and what they would do. Read
+              from the VERSION so it is frozen with what was sent.
+
+              This block used to render JobCard.garage_notes, which the schema documents as
+              "internal staff notes on the job". Nothing real had leaked, but it was a leak waiting
+              for its first real note. */}
+          {d.narrative && (
+            <div className="pb-3 text-sm" data-testid="quote-narrative">
+              <p className="text-xs uppercase tracking-wide text-muted mb-1">What we recommend</p>
+              <p className="text-ink whitespace-pre-line">{d.narrative}</p>
             </div>
           )}
 
@@ -316,6 +326,15 @@ export default function CustomerLinkPage(props: Props) {
  */
 function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
   const [busy, setBusy] = useState<null | 'accept' | 'decline'>(null);
+  /**
+   * ── THE SELECTION LIVES WITH THE BUTTON THAT SENDS IT ─────────────────────────────────────────
+   * One owner for the choice and the POST, so there is no way to accept a selection the customer
+   * cannot see or see one that is not sent. `null` for a variation group is the DEFAULT and a
+   * legitimate final answer: declining every variation is an answer, and a pre-selected option
+   * would bill somebody for bronze who wanted no service.
+   */
+  const [addOn, setAddOn] = useState<string[]>([]);
+  const [variation, setVariation] = useState<Record<string, string | null>>({});
   const [outcome, setOutcome] = useState<string | null>(
     doc.status === 'accepted' || doc.status === 'declined' ? doc.status : null,
   );
@@ -327,7 +346,9 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
     try {
       const r = await fetch('/api/quote-respond', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, action }),
+        // The selection rides with the acceptance: lib/quote-acceptance REFUSES a yes to a quote
+        // with options and no choice, rather than picking one.
+        body: JSON.stringify({ token, action, selection: hasOptions ? { additionIds: addOn, variationByGroup: variation } : undefined }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j?.message || 'Something went wrong — please call the garage.'); return; }
@@ -357,6 +378,17 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
     </div>
   );
 
+  const opts = doc.options ?? [];
+  const hasOptions = opts.length > 0;
+  const main = { netPennies: doc.totals.netPennies, vatPennies: doc.totals.vatPennies, grossPennies: doc.totals.grossPennies };
+  const groups = hasOptions ? [...variationGroups(opts as any)] : [];
+  const adds = hasOptions ? additions(opts as any) : [];
+  const chosen = hasOptions
+    ? resolveSelection(main, opts as any, { additionIds: addOn, variationByGroup: variation })
+    : null;
+  const liveTotal = chosen?.ok ? chosen.resolution.displayGrossPennies : main.grossPennies;
+  const printed = hasOptions ? printedQuote(main, opts as any) : null;
+
   if (outcome === 'accepted') {
     return (
       <div className="mt-6 pt-5 border-t border-line">
@@ -378,9 +410,114 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
     );
   }
 
+  const money = (p: number) => `${doc.currency === 'GBP' ? '£' : ''}${(p / 100).toFixed(2)}`;
+
   return (
     <div className="mt-6 pt-5 border-t border-line">
-      <div className="flex flex-col sm:flex-row gap-2">
+
+      {/* ── ELECTRONIC: SELECTORS, AND A TOTAL THAT MOVES ───────────────────────────────────────
+          Hidden when printing — a printed radio button is a decision nobody can see the answer to.
+          Each variation group offers "None of these" FIRST and selected: declining them all is a
+          legitimate answer and the page must not imply otherwise. */}
+      {hasOptions && (
+        <div className="mb-5 print:hidden" data-testid="quote-options">
+          {groups.map(([groupKey, members]) => (
+            <fieldset key={groupKey} className="mb-4" data-testid="variation-group" data-group={groupKey}>
+              <legend className="text-xs uppercase tracking-wide text-muted mb-2">Choose one</legend>
+              <label className="flex items-center gap-2 py-1.5 text-sm cursor-pointer" data-testid="variation-none">
+                <input type="radio" name={`v-${groupKey}`} checked={(variation[groupKey] ?? null) === null}
+                  onChange={() => setVariation((v) => ({ ...v, [groupKey]: null }))} />
+                <span className="text-ink">None of these</span>
+              </label>
+              {members.map((o) => (
+                <label key={o.id} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
+                  data-testid="variation-row" data-option={o.id}>
+                  <span className="flex items-center gap-2">
+                    <input type="radio" name={`v-${groupKey}`} checked={variation[groupKey] === o.id}
+                      onChange={() => setVariation((v) => ({ ...v, [groupKey]: o.id }))} />
+                    <span className="text-ink">{o.title}</span>
+                  </span>
+                  <span className="text-ink tabular-nums">{money(o.grossPennies)}</span>
+                </label>
+              ))}
+            </fieldset>
+          ))}
+
+          {adds.length > 0 && (
+            <fieldset data-testid="addition-group">
+              <legend className="text-xs uppercase tracking-wide text-muted mb-2">You can also add</legend>
+              {adds.map((o) => (
+                <label key={o.id} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
+                  data-testid="addition-row" data-option={o.id}>
+                  <span className="flex items-center gap-2">
+                    <input type="checkbox" checked={addOn.includes(o.id)}
+                      onChange={(e) => setAddOn((xs) => (e.target.checked ? [...xs, o.id] : xs.filter((x) => x !== o.id)))} />
+                    <span className="text-ink">{o.title}</span>
+                  </span>
+                  <span className="text-ink tabular-nums">{money(o.grossPennies)}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+
+          {chosen?.ok && chosen.resolution.includedLabels.map((l) => (
+            <p key={l} className="mt-2 text-sm text-ok" data-testid="included-note">Includes {l}</p>
+          ))}
+          {chosen?.ok && chosen.resolution.discounts.map((d) => (
+            <p key={d.label} className="mt-2 text-sm text-ok" data-testid="discount-note">
+              {d.label} — {money(d.grossOffPennies)} off
+            </p>
+          ))}
+
+          <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
+            <span className="text-sm font-semibold text-ink">Total with your choices</span>
+            <span className="text-lg font-semibold text-ink tabular-nums" data-testid="live-total">{money(liveTotal)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── PRINTED: NO CONTROLS, AND NO ARITHMETIC ASKED OF THE READER ─────────────────────────
+          Every variation carries a COMPLETE price including the main work — never a difference from
+          the cheapest, which a reader adds to the wrong base. Every addition carries its own price
+          AND the total with the main work. There is deliberately NO grand total while a choice is
+          open: one big number beside three mutually exclusive prices is the most misreadable thing
+          this page could print. */}
+      {printed && (
+        <div className="mb-5 hidden print:block" data-testid="printed-options">
+          {printed.variationGroups.map((g) => (
+            <table key={g.groupKey} className="w-full mb-4 text-sm" data-testid="printed-variations">
+              <caption className="text-left text-xs uppercase tracking-wide text-muted mb-1">Choose one — price shown includes the work above</caption>
+              <tbody>
+                {g.rows.map((r) => (
+                  <tr key={r.optionId} className="border-t border-line" data-testid="printed-variation-row">
+                    <td className="py-1.5 text-ink">{r.title}{r.incentiveNote ? ` — ${r.incentiveNote}` : ''}</td>
+                    <td className="py-1.5 text-right text-ink tabular-nums">{money(r.completeGrossPennies)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ))}
+          {printed.additions.length > 0 && (
+            <table className="w-full text-sm" data-testid="printed-additions">
+              <caption className="text-left text-xs uppercase tracking-wide text-muted mb-1">You can also add</caption>
+              <tbody>
+                {printed.additions.map((r) => (
+                  <tr key={r.optionId} className="border-t border-line" data-testid="printed-addition-row">
+                    <td className="py-1.5 text-ink">{r.title}{r.incentiveNote ? ` — ${r.incentiveNote}` : ''}</td>
+                    <td className="py-1.5 text-right text-ink tabular-nums">{money(r.ownGrossPennies)}</td>
+                    <td className="py-1.5 text-right text-muted tabular-nums whitespace-nowrap">with the work above: {money(r.withMainGrossPennies)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-3 text-sm text-ink" data-testid="printed-no-total">
+            There is no single total until you choose: {printed.openChoices.join(' and ')}. Tell us which and we will confirm the price.
+          </p>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-2 print:hidden">
         <button type="button" disabled={busy !== null} onClick={() => respond('accept')}
           className="flex-1 text-sm font-semibold rounded-lg px-4 py-3 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
           {busy === 'accept' ? 'Accepting…' : 'Accept quote'}

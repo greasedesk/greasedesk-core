@@ -33,9 +33,10 @@
  * never quoted and never accepted by anyone. Their `accepted_at` stays null, which is the honest
  * answer — nobody said yes, because nobody was ever asked.
  */
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
 import { findTransition, type JobStatus } from '@/lib/jobcard-status';
+import { resolveSelection, optionsRefusal, type Selection, type OptionLite } from '@/lib/quote-options';
 
 /** Which door the acceptance came through. Recorded in the audit diff, never in a status. */
 export type AcceptVia = 'link' | 'counter' | 'booked';
@@ -50,6 +51,21 @@ export type AcceptQuoteArgs = {
    *  absence is the honest signal that nobody but the garage witnessed the yes. */
   attested: { ip: string | null; userAgent: string | null } | null;
   at: Date;
+  /**
+   * WHICH OPTIONS. Required when the live version carries any, refused when it carries none.
+   * An acceptance is the act the job card, the parts and the invoice all follow from, so "yes" to a
+   * quote with three variations is not an answer — and defaulting one would bill somebody for
+   * bronze when they wanted no service at all.
+   */
+  selection?: Selection | null;
+};
+
+/** The live offer, exactly as selected above. */
+type LiveVersion = {
+  id: string; version: number;
+  net_pennies: number; vat_pennies: number; gross_pennies: number;
+  vat_registered: boolean; tax_label: string;
+  narrative: string | null; sent_to: string | null; created_by_user: string | null;
 };
 
 export type AcceptQuoteResult = {
@@ -58,6 +74,8 @@ export type AcceptQuoteResult = {
   version: number | null;
   /** TRUE when the card was already accepted and this call changed nothing. */
   alreadyAccepted: boolean;
+  /** The version MINTED to record a resolved selection, when the accepted quote had options. */
+  resolvedVersion: number | null;
 };
 
 /**
@@ -82,7 +100,7 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
       orderBy: { version: 'desc' },
       select: { id: true, version: true },
     })) as { id: string; version: number } | null;
-    return { versionId: existing?.id ?? null, version: existing?.version ?? null, alreadyAccepted: true };
+    return { versionId: existing?.id ?? null, version: existing?.version ?? null, alreadyAccepted: true, resolvedVersion: null };
   }
 
   // Accepting is a COMMERCIAL transition and must be a legal move from where the card actually is.
@@ -96,14 +114,59 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
   const live = (await tx.quoteVersion.findFirst({
     where: { job_card_id: card.id, status: 'sent' },
     orderBy: { version: 'desc' },
-    select: { id: true, version: true, gross_pennies: true },
-  })) as { id: string; version: number; gross_pennies: number } | null;
+    select: { id: true, version: true, gross_pennies: true, net_pennies: true, vat_pennies: true,
+      vat_registered: true, tax_label: true, narrative: true, sent_to: true, created_by_user: true },
+    // TYPED, not `as any`: a cast here is where the compiler stops noticing a forgotten select, and
+    // every field below is one the resolved version copies forward.
+  })) as LiveVersion | null;
+
+  // ── OPTIONS: THE SELECTION IS THE AGREEMENT ───────────────────────────────────────────────────
+  const options: OptionLite[] = live
+    ? (await tx.quoteOption.findMany({ where: { quote_version_id: live.id }, orderBy: { position: 'asc' } }))
+      .map((o: any) => ({
+        id: o.id, kind: o.kind, groupKey: o.group_key, title: o.title, position: o.position,
+        netPennies: o.net_pennies, vatPennies: o.vat_pennies, grossPennies: o.gross_pennies,
+        incentive: o.incentive_kind === 'amount_off'
+          ? { kind: 'amount_off' as const, label: o.incentive_label ?? '', exPennies: o.incentive_ex_pennies ?? 0,
+              vatable: !!o.incentive_vatable, grossOffPennies: o.incentive_gross_off_pennies ?? 0 }
+          : o.incentive_kind === 'included' ? { kind: 'included' as const, label: o.incentive_label ?? '' } : null,
+      }))
+    : [];
+
+  let resolved: { version: number; id: string } | null = null;
+  // `live &&` is what the typed row made visible: options are only ever loaded when a live version
+  // exists, and the cast that used to be here hid the fact that nothing said so.
+  if (live && options.length) {
+    if (!args.selection) throw new Error('SELECTION_REQUIRED');
+    const bad = optionsRefusal(options);
+    if (bad) throw new Error(`OPTIONS_UNSENDABLE:${bad}`);
+    const r = resolveSelection(
+      { netPennies: live.net_pennies, vatPennies: live.vat_pennies, grossPennies: live.gross_pennies },
+      options, args.selection,
+    );
+    if (!r.ok) throw new Error(`SELECTION_REFUSED:${r.refusal}`);
+    resolved = await mintResolvedVersion(tx, {
+      card: card.id, groupId: args.groupId, live, options, selection: args.selection,
+      chosen: [...r.resolution.chosenAdditions, ...r.resolution.chosenVariations],
+      discounts: r.resolution.discounts, at: args.at, args,
+    });
+  } else if (args.selection && (args.selection.additionIds.length || Object.keys(args.selection.variationByGroup).length)) {
+    // A selection against a quote with no options is a stale document in the customer's browser.
+    throw new Error('SELECTION_WITHOUT_OPTIONS');
+  }
 
   if (live) {
     await tx.quoteVersion.update({
       where: { id: live.id },
       data: {
-        status: 'accepted',
+        /**
+         * WITH OPTIONS, THE OFFER IS SUPERSEDED BY THE AGREEMENT. Exactly one version may read
+         * `accepted` — lib/invoice-issue takes it as the bill and lib/quotes-list as the agreed
+         * figure — so when a selection mints a resolved version, THAT is the accepted one and the
+         * options document steps aside. `superseded` already means "this one's link is revoked",
+         * which is precisely what should happen to a page of choices once a choice is made.
+         */
+        status: resolved ? 'superseded' : 'accepted',
         responded_at: args.at,
         responded_by_user: args.actorUserId,          // null = the customer answered
         responded_ip: args.attested?.ip ?? null,      // stays null on a garage-recorded answer
@@ -133,10 +196,104 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
       frozenVersion: !!live,              // false = no version; the invoice will use live JobCardItem
       from: card.status,
       at: args.at.toISOString(),
+      // WHAT WAS CHOSEN, in the trail as well as on the version: the resolved lines alone cannot
+      // say whether gold was picked or every variation declined.
+      optionCount: options.length || undefined,
+      selection: options.length ? (args.selection as unknown as Prisma.InputJsonValue) : undefined,
+      resolvedVersion: resolved?.version,
     },
   });
 
-  return { versionId: live?.id ?? null, version: live?.version ?? null, alreadyAccepted: false };
+  return {
+    versionId: resolved?.id ?? live?.id ?? null,
+    version: resolved?.version ?? live?.version ?? null,
+    alreadyAccepted: false,
+    resolvedVersion: resolved?.version ?? null,
+  };
+}
+
+/**
+ * ── THE RESOLVED VERSION ────────────────────────────────────────────────────────────────────────
+ * A flat quote holding exactly what was agreed: the main lines, the chosen options' lines, and one
+ * negative line per triggered discount. It exists so that lib/invoice-issue and lib/quote-diff are
+ * UNTOUCHED — both already work on one accepted version's flat lines, and teaching either of them
+ * about options would put the resolution rule in the billing path as well as here.
+ *
+ * TOTALS ARE SUMMED FROM THE FROZEN LINE FIGURES, never recomputed. lib/quote-totals takes a single
+ * VAT rate and these lines carry their own, so a recompute would quietly restate a mixed-rate quote.
+ *
+ * THE DISCOUNT LINE'S VAT FALLS OUT OF THE INCENTIVE'S OWN TWO FROZEN NUMBERS — ex and gross-off —
+ * so the saving printed on the offer and the line on the invoice cannot disagree, and no rate has
+ * to be guessed at.
+ */
+async function mintResolvedVersion(tx: Prisma.TransactionClient, a: {
+  card: string; groupId: string; live: LiveVersion; options: OptionLite[]; selection: Selection;
+  chosen: OptionLite[]; discounts: { label: string; exPennies: number; vatable: boolean; grossOffPennies: number }[];
+  at: Date; args: AcceptQuoteArgs;
+}): Promise<{ version: number; id: string }> {
+  const chosenIds = new Set(a.chosen.map((o) => o.id));
+  const src = await tx.quoteVersionLine.findMany({
+    where: { quote_version_id: a.live.id },
+    orderBy: { position: 'asc' },
+  });
+  const keep = src.filter((l: any) => l.option_id === null || chosenIds.has(l.option_id));
+
+  const dec = (n: number) => new Prisma.Decimal((n / 100).toFixed(2));
+  const discountLines = a.discounts.map((d, i) => {
+    // The VAT the saving takes off, straight from the incentive's own two frozen numbers.
+    const vatOff = d.vatable ? d.grossOffPennies - d.exPennies : 0;
+    return {
+      position: keep.length + i + 1,
+      item_type: 'misc' as const,
+      description: d.label,
+      qty: new Prisma.Decimal(1),
+      unit_price: dec(-d.exPennies),
+      vat_rate: d.vatable && d.exPennies ? new Prisma.Decimal(((vatOff / d.exPennies) * 100).toFixed(2)) : new Prisma.Decimal(0),
+      line_vat: dec(-vatOff),
+      line_total: dec(-d.exPennies),
+      unit_cost: null,
+      labour_hours: null,
+      labour_outsourced: false,
+      option_id: null,
+    };
+  });
+
+  const all = [
+    ...keep.map((l: any, i: number) => ({
+      position: i + 1, item_type: l.item_type, description: l.description, qty: l.qty,
+      unit_price: l.unit_price, vat_rate: l.vat_rate, line_vat: l.line_vat, line_total: l.line_total,
+      unit_cost: l.unit_cost, labour_hours: l.labour_hours, labour_outsourced: l.labour_outsourced,
+      option_id: null,   // resolved: these ARE the quote now, not alternatives within it
+    })),
+    ...discountLines,
+  ];
+  const net = all.reduce((t, l) => t + Number(l.line_total), 0);
+  const vat = all.reduce((t, l) => t + Number(l.line_vat), 0);
+
+  const next = ((await tx.quoteVersion.aggregate({
+    where: { job_card_id: a.card }, _max: { version: true },
+  }))._max.version ?? 0) + 1;
+
+  const created = await tx.quoteVersion.create({
+    data: {
+      group_id: a.groupId, job_card_id: a.card, version: next, status: 'accepted',
+      net_pennies: Math.round(net * 100), vat_pennies: Math.round(vat * 100),
+      gross_pennies: Math.round((net + vat) * 100),
+      vat_registered: a.live.vat_registered, tax_label: a.live.tax_label,
+      narrative: a.live.narrative, sent_to: a.live.sent_to, created_by_user: a.live.created_by_user,
+      sent_at: a.at,
+      responded_at: a.at,
+      responded_by_user: a.args.actorUserId,
+      responded_ip: a.args.attested?.ip ?? null,
+      responded_user_agent: a.args.attested?.userAgent ?? null,
+      resolved_from_version: a.live.version,
+      selection_json: a.selection as unknown as Prisma.InputJsonValue,
+      // NO magic_link_id: the credential belonged to the offer, and the agreement is not an offer.
+      lines: { create: all },
+    },
+    select: { id: true, version: true },
+  });
+  return created;
 }
 
 /**
