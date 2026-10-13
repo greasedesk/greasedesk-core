@@ -4,20 +4,28 @@
  * WHAT A TENANT'S DATA IS — every model classified, checked against the schema at boot.
  *
  * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
- * A per-tenant export written as `where: { group_id }` sees 68 of 117 models. The other 49 have no
+ * A per-tenant export written as `where: { group_id }` does NOT see every model. The rest have no
  * group_id at all: most are reachable only through a parent (an InvoiceLine via its Invoice, a
  * VehicleOwnership via its Vehicle), a handful are keyed on a user SUBJECT with no join to a tenant
  * anywhere (TwoFactorSecret by subject_id, VerificationToken whose `identifier` IS the email), and
  * the rest are ours, not theirs.
  *
- * The purge sweep solved the same problem in August and enumerated it against 73 models. There are
- * now 117. That list decayed by 44 models without anyone noticing, which is the argument for this
- * file: not that the classification is hard, but that it is only ever right on the day it is
- * written. An export built on a stale list is correct when it ships and silently incomplete
- * afterwards, and nobody finds out until a garage needs the data.
+ * The purge sweep solved the same problem in August 2026 and enumerated it by hand against the 73
+ * models there were then. By the time this file was written that list had decayed by 44 models
+ * without anyone noticing, which is the argument for this file: not that the classification is
+ * hard, but that it is only ever right on the day it is written. An export built on a stale list
+ * is correct when it ships and silently incomplete afterwards, and nobody finds out until a garage
+ * needs the data.
  *
- * So the invariants below are the point of the module, not a safety rail on it. Model 118 fails
- * the build instead of being quietly left out of every export from that day on.
+ * So the invariants below are the point of the module, not a safety rail on it. The NEXT model
+ * added to the schema fails the build instead of being quietly left out of every export from that
+ * day on.
+ *
+ * NO LIVE COUNT APPEARS IN THIS COMMENT, deliberately. Counts are derived in `MANIFEST_CENSUS`
+ * below, from the datamodel the invariant itself reads. A number written into prose has no reader
+ * to keep it honest: this paragraph used to carry four of them and three had already decayed
+ * (68 of 117, and "Model 118 fails the build", when the schema had reached 121) — the exact rot
+ * the paragraph is describing, in the paragraph describing it. Fixed 2026-10-13.
  *
  * ── TWO QUESTIONS, NOT ONE ──────────────────────────────────────────────────────────────────────
  * `reach` answers "can a query find this tenant's rows", and `take` answers "may it leave the
@@ -338,3 +346,19 @@ export const OMITTED_MODELS: readonly { model: string; because: string }[] = Obj
 export const BEYOND_A_GROUP_FILTER: readonly { model: string; reach: Reach }[] = Object.entries(TENANT_MANIFEST)
   .filter(([, e]) => e.take === 'export' && e.reach.by !== 'group' && e.reach.by !== 'self')
   .map(([model, e]) => ({ model, reach: e.reach })).sort((a, b) => a.model.localeCompare(b.model));
+
+/**
+ * THE CENSUS, derived from the same datamodel the boot invariant checks against. Anything wanting
+ * to state how many models there are — a comment, a report, a screen — reads this instead of
+ * writing a literal, because a literal has nobody to keep it honest and the schema moves.
+ */
+export const MANIFEST_CENSUS: Readonly<Record<
+  'models' | 'exported' | 'omitted' | 'reachedByGroupFilter' | 'beyondAGroupFilter', number
+>> = {
+  models: SCHEMA.size,
+  exported: EXPORTED_MODELS.length,
+  omitted: OMITTED_MODELS.length,
+  reachedByGroupFilter: Object.values(TENANT_MANIFEST)
+    .filter((e) => e.reach.by === 'group' || e.reach.by === 'self').length,
+  beyondAGroupFilter: BEYOND_A_GROUP_FILTER.length,
+};

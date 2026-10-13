@@ -76,6 +76,9 @@ export type AuditAction =
   | 'stock.purchase_edited'    // seller/purchase reference (+ ticks) corrected — refused after disposal
   | 'stock.item_deleted'       // a stock record removed outright — NO product path does this; a
                                // deliberate data correction, named so the trail does not go quiet
+  | 'data.orphan_cleared'      // a reference whose target no longer exists, cleared by hand. NO
+                               // product path writes this either: it is the cleanup a repair script
+                               // should have done, recorded so the next FK audit knows what it was
   | 'stock.recorded_historical' // a car sold BEFORE car sales were invoiced here: stock item, costs, buyer and a disposal marked recorded-not-invoiced; nothing minted
   | 'invoice.minted'
   // DVSA moved the expiry between the card being looked at and the document being frozen. Only
