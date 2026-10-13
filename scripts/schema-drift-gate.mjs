@@ -28,8 +28,10 @@
  * for the wrong reason.
  */
 import './_gate-preflight.mjs';
-const { describeError } = await import('./_gate-preflight.mjs');
+import './_ts.mjs';   // gatePrisma() reaches lib/db through the '@/' alias
+const { describeError, declineToRun, gatePrisma } = await import('./_gate-preflight.mjs');
 const { execFileSync } = await import('node:child_process');
+const { readFileSync, readdirSync } = await import('node:fs');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -80,6 +82,61 @@ try {
   ], { encoding: 'utf8', cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
 
   const ddl = realDdl(diff);
+
+  // ── THE PREMISE THIS GATE RESTS ON, SPLIT OUT AS A REQUIREMENT ───────────────────────────────
+  // "The database agrees with schema.prisma" is only a question about the CODE while no migration
+  // is deliberately pending. The two-push policy mandates the opposite state: a constraining
+  // migration is pushed, production is allowed to catch up, and only then is it applied. In that
+  // window this gate used to report RED about a tree that was exactly right, and a red that is
+  // true about its clause and false about the world teaches people to ignore reds.
+  //
+  // It is a REQUIREMENT, not a pass. The gate declines, says which migration, and the runner counts
+  // it as UNRUN — never as green, because nothing was tested.
+  //
+  // AND THE DECLINE IS NARROW, or it would be a blindfold. Drift must not be able to hide behind a
+  // pending migration, so every TABLE the diff names must be a table the pending SQL also names.
+  // Anything else is real drift arriving during the window, and still goes red.
+  // Known limit, stated rather than left to be discovered: drift on a table the pending migration
+  // ALSO touches is not distinguished. Narrowing that further means comparing statements, which
+  // breaks on formatting the moment a migration is written by hand.
+  const tablesIn = (sql) => new Set(
+    [...String(sql).matchAll(/(?:ALTER|CREATE|DROP)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:"[^"]+"\.)?"([^"]+)"/gi)].map((m) => m[1])
+      .concat([...String(sql).matchAll(/\bON\s+(?:"[^"]+"\.)?"([^"]+)"/gi)].map((m) => m[1])),
+  );
+  const prisma = await gatePrisma();
+  const onDisk = readdirSync('prisma/migrations', { withFileTypes: true })
+    .filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  const applied = (await prisma.$queryRawUnsafe(
+    'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL',
+  )).map((r) => r.migration_name);
+  const pendingNames = onDisk.filter((n) => !applied.includes(n));
+  const pendingSql = pendingNames
+    .map((n) => { try { return readFileSync(`prisma/migrations/${n}/migration.sql`, 'utf8'); } catch { return ''; } })
+    .join('\n');
+  // A pending migration is only DELIBERATE if it carries the classification header the chokepoint
+  // requires. Anything pending without one is not a planned window; it is a mess, and stays red.
+  const allDeclared = pendingNames.length > 0
+    && pendingNames.every((n) => /^\s*--\s*@migration:/m.test(
+      (() => { try { return readFileSync(`prisma/migrations/${n}/migration.sql`, 'utf8'); } catch { return ''; } })()));
+  if (pendingNames.length && allDeclared) {
+    const explained = tablesIn(pendingSql);
+    const unexplained = [...tablesIn(ddl.join('\n'))].filter((t) => !explained.has(t));
+    if (unexplained.length) {
+      check('the pending migration explains every table the diff names', false,
+        `drift on ${unexplained.join(', ')} is NOT accounted for by ${pendingNames.join(', ')} — real drift, arriving inside the two-push window`);
+    } else {
+      await prisma.$disconnect().catch(() => {});
+      declineToRun(
+        `${pendingNames.length} migration(s) pending BY DESIGN — ${pendingNames.join(', ')}. The two-push `
+        + 'policy pushes a constraining migration, waits for production to report the commit, then '
+        + 'applies it; inside that window the live database is legitimately behind prisma/schema.prisma. '
+        + `Every table the diff names (${[...tablesIn(ddl.join('\n'))].join(', ') || 'none'}) is named by the `
+        + 'pending SQL, so no unexplained drift is being hidden. Apply with '
+        + '`node scripts/migrate-apply.mjs` and this gate answers its real question again.',
+      );
+    }
+  }
+
   check('migrate diff proposes nothing', ddl.length === 0,
     ddl.length ? `${ddl.length} statement(s):\n    ${ddl.slice(0, 6).join('\n    ')}` : 'schema.prisma and the database describe the same thing');
   // NOT VACUOUS. If the command ever silently produced nothing at all — a changed flag, a failed

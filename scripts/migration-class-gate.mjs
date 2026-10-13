@@ -222,8 +222,30 @@ try {
   const noDry = runWrapper({ MIGRATE_APPLY_DIR: FIX }, []);
   check('the test seam REFUSES without --dry-run, so it can never apply anything', /EXIT 2/.test(noDry) && /could apply migrations from outside the repo/.test(noDry));
   const real = runWrapper({});
-  check('and against the real directory it reports nothing pending', /0 migration\(s\) pending/.test(real) && /Nothing to apply/.test(real),
-    'read from _prisma_migrations, not from parsed prose');
+  // ── THIS CLAUSE IS ABOUT THE WRAPPER, NOT ABOUT TODAY'S DATABASE ─────────────────────────────
+  // It used to read: "and against the real directory it reports nothing pending", asserting
+  // /0 migration\(s\) pending/. That is a fact about the world on the day it runs, and the two-push
+  // policy REQUIRES a world where it is false: between pushing a constraining migration and
+  // applying it, one is pending by design. The clause then went red about the wrapper while the
+  // wrapper was telling the truth — "a red that is true about its clause and false about the world
+  // is the thing that teaches people to ignore reds" (owner, 2026-10-13).
+  //
+  // So derive the pending set INDEPENDENTLY — the migration directories on disk minus the finished
+  // rows in _prisma_migrations — and assert the wrapper AGREES. That holds at nought pending and at
+  // seven, and it still catches a wrapper that parses prose or caches a stale answer.
+  const onDisk = readdirSync('prisma/migrations', { withFileTypes: true })
+    .filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  const applied = (await prisma.$queryRawUnsafe(
+    'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL',
+  )).map((r) => r.migration_name);
+  const trulyPending = onDisk.filter((n) => !applied.includes(n));
+  const reported = Number((real.match(/(\d+) migration\(s\) pending/) ?? [])[1] ?? -1);
+  check('it reports the real directory\'s pending count, whatever that count happens to be',
+    reported === trulyPending.length,
+    `_prisma_migrations leaves ${trulyPending.length} pending${trulyPending.length ? ` (${trulyPending.join(', ')})` : ''}; the wrapper said ${reported}`);
+  check('  …and says "Nothing to apply" exactly when nothing is',
+    /Nothing to apply/.test(real) === (trulyPending.length === 0),
+    'the two must agree in both directions, so a pending migration cannot read as a clean directory');
 
   // ── 7b. THE REFUSAL'S OWN PATH PARSER ────────────────────────────────────────────────────────
   /**
