@@ -71,15 +71,15 @@ const NEVER = {
   'StockDisposal.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
   'StockItem.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
   'PlatformOperator.user_id':'purge order — the operator account is itself a tenant User (verified 2026-10-13), so tx.user.deleteMany would be refused by this row.'.replace(/\s+/g,' '),
+  'UploadTelemetry.photo_id':'DECIDED 2026-10-13, no constraint. 18 orphans on the live tenant are telemetry outliving deleted photos, which is correct: the upload happened. The column is NOT NULL, so clearing them would mean DELETING real telemetry to satisfy a constraint we do not want.',
   'RepVisit.site_id':'OURS_PER_TENANT and NOT NULL — the visit outlives the tenant but the Site dies with it, and SET NULL is unavailable.'.replace(/\s+/g,' '),
   'RepVisit.group_id':'OURS_PER_TENANT — our rep\u2019s record of visiting them, written by our staff about our sales process.',
 };
 /** Deliberately undecided — the owner rules on these, they are not defaulted. */
 const PENDING = {
-  'UploadTelemetry.photo_id':'18 orphans (TMBS) — SET NULL vs no constraint, owner deciding',
-  'DueItemCustomerAnswer.magic_link_id':'4 orphans (TMBS) — SET NULL vs no constraint, owner deciding',
-  'JobCard.sale_of_stock_item_id':'1 orphan (TMBS) — residue of the VS1 repair, owner deciding',
-  'CommissionEntry.rate_id':'2 orphans (ZZ gate residue) — owner deciding',
+  'DueItemCustomerAnswer.magic_link_id':'DECIDED: SET NULL. Orphans cleared 2026-10-13; the FK is its own small change, after 20261013120000 is applied.',
+  'JobCard.sale_of_stock_item_id':'DECIDED: NO ACTION — SET NULL would silently stop the card being a sale card (lib/stock-prep.isSaleCard reads this column). Orphan cleared 2026-10-13.',
+  'CommissionEntry.rate_id':'DECIDED: NO ACTION — the column is the FROZEN link to the rate applied, so SET NULL would destroy the freeze. ZZ residue deleted 2026-10-13.',
 };
 const UNRESOLVED = {
   'SuperAdminAudit.operator_user_id':'target table not established — User or PlatformOperator',

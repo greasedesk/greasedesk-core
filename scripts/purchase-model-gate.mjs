@@ -1309,8 +1309,16 @@ try {
   const cols = await prisma.$queryRawUnsafe(`SELECT column_name FROM information_schema.columns WHERE table_name = 'PurchaseModel' AND column_name IN ('vehicle_id','status','inputs')`);
   check('  …vehicle_id, status and inputs all exist now', cols.length === 3, cols.map((c) => c.column_name).sort().join(', '));
   const fks = await prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM pg_constraint WHERE conrelid = '"PurchaseModel"'::regclass AND contype = 'f' AND pg_get_constraintdef(oid) LIKE '%Vehicle%'`);
-  check('  …and vehicle_id has NO foreign key yet', fks[0].n === 0,
-    'so the only migration a stock slice needs is the constraint itself, on its own rather than tangled into a feature');
+  // WAS: "…and vehicle_id has NO foreign key yet", asserting fks[0].n === 0, with the note that the
+  // only migration a stock slice needs is the constraint itself. That migration happened
+  // (20261013120000), so the clause was pinning the ABSENCE of a thing we had decided to add — a
+  // guard outliving its hazard. Inverted rather than deleted: the constraint existing, and being
+  // SET NULL, is now the thing worth holding, because a retired catalogue entry or a deleted car
+  // must not take the purchase model with it.
+  const vfk = await prisma.$queryRawUnsafe(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint
+    WHERE conrelid = '"PurchaseModel"'::regclass AND contype = 'f' AND pg_get_constraintdef(oid) LIKE '%vehicle_id%'`);
+  check('  …and vehicle_id now HAS its foreign key, ON DELETE SET NULL', vfk.length === 1 && /ON DELETE SET NULL/.test(vfk[0].d),
+    vfk[0]?.d ?? 'no foreign key on vehicle_id — migration 20261013120000 added one; if it was dropped, say why here');
 
   // ── 6. THE ENDPOINT IS TENANT-SCOPED ─────────────────────────────────────────────────────────
   console.log('\n— and another garage cannot reach it —');

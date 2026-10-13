@@ -82,6 +82,21 @@ const withOwnerOff = async (fn) => {
   }
 };
 const REP = 'prospect-gate-rep';
+// ── THE REP IDS ARE NOW REAL ROWS ────────────────────────────────────────────────────────────────
+// The sweep below identifies this gate's fixtures by a rep id that starts with REP, "and no real rep
+// has one (real ids are UUIDs)". That marker is kept — but from migration 20261013120000,
+// Prospect.created_by_rep_id and ProspectVisit.rep_id carry foreign keys to Rep, so an id that names
+// nobody is refused (P2003) and every fixture visit died at the first insert. The marker and the
+// constraint are both right; what was missing was the rows. Upserted, so a killed run leaves a
+// harmless three rows that the next run reuses rather than trips over.
+const REP_IDS = [REP, `${REP}-2`, `${REP}-killed`];
+for (const id of REP_IDS) {
+  await prisma.rep.upsert({
+    where: { id },
+    update: {},
+    create: { id, email: `${id}@gate.invalid`, name: `Gate Rep ${id}`, ref_code: `GATE-${id}` },
+  });
+}
 const addr = (label) => `${label}-${randomUUID().slice(0, 8)}@prospect-gate.invalid`;
 const made = { prospects: [], hashes: [] };
 const days = (n) => n * 86_400_000;
@@ -201,10 +216,13 @@ try {
   console.log('\n— signing up ends the sequence, and the log says that is why —');
   const signer = addr('signer');
   const willSign = await rec({ email: signer, consent: true });
-  const matched = await ST.markSignedUpByEmail(signer, 'gate-group-id');
+  // THE GROUP MUST EXIST. Prospect.signed_up_group_id carries a foreign key from migration
+  // 20261013120000 (SET NULL, so a purged tenant leaves the pipeline record standing), and the
+  // literal 'gate-group-id' named nobody. ZZ is where gate fixtures live.
+  const matched = await ST.markSignedUpByEmail(signer, ZZ_GROUP);
   const signedSeq = await seqOf(willSign.prospectId);
   const signedP = await pOf(willSign.prospectId);
-  check('an automatic email match marks the prospect signed up', matched === 1 && signedP.status === 'signed_up' && signedP.signed_up_group_id === 'gate-group-id');
+  check('an automatic email match marks the prospect signed up', matched === 1 && signedP.status === 'signed_up' && signedP.signed_up_group_id === ZZ_GROUP);
   check('  …STOPS the sequence with reason "signed_up"', signedSeq.state === 'stopped' && signedSeq.stopped_reason === 'signed_up',
     `${signedSeq.state} / ${signedSeq.stopped_reason} — the destination, not merely the removal`);
   check('  …and removes the person, keeping the garage', signedP.email === null && signedP.personal_stripped_reason === 'signed_up'
@@ -387,7 +405,7 @@ try {
     `${qUnsubSeq.state} / ${qUnsubSeq.stopped_reason} — it never needed sending on to be stoppable`);
   const qSignEmail = addr('queued-signer');
   const qSign = await withOwnerOff(() => rec({ email: qSignEmail, consent: true }));
-  await ST.markSignedUpByEmail(qSignEmail, 'gate-group-id');
+  await ST.markSignedUpByEmail(qSignEmail, ZZ_GROUP);
   const qSignSeq = await seqOf(qSign.prospectId);
   check('signup stops a QUEUED sequence, reason "signed_up"', qSignSeq.state === 'stopped' && qSignSeq.stopped_reason === 'signed_up',
     `${qSignSeq.state} / ${qSignSeq.stopped_reason}`);
@@ -506,6 +524,14 @@ setInterval(() => {}, 1 << 30);`;
   try {
     if (made.prospects.length) await prisma.prospect.deleteMany({ where: { id: { in: made.prospects } } });
     if (made.hashes.length) await prisma.prospectSuppression.deleteMany({ where: { email_hash: { in: made.hashes } } });
+    // AFTER the prospects, never before: Prospect.created_by_rep_id is NO ACTION, so a Rep with a
+    // surviving prospect refuses to go. A failure here means fixtures were left behind, which is
+    // worth SAYING rather than throwing over the top of the gate's real result.
+    try {
+      await prisma.rep.deleteMany({ where: { id: { in: REP_IDS } } });
+    } catch (e) {
+      console.log(`  (teardown) gate Rep rows left in place — a fixture prospect still references one: ${String(e.message ?? e).split('\n')[0]}`);
+    }
     const left = await prisma.prospect.count({ where: { id: { in: made.prospects } } });
     check('teardown removed every fixture', left === 0, `${made.prospects.length} prospects made, ${left} left`);
     const leases = await prisma.prospectSendingLease.count({ where: { prospect_id: { in: made.prospects } } });

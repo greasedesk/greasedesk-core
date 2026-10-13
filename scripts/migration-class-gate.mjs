@@ -129,6 +129,43 @@ try {
     check(`${what} REFUSES`, !d.allow && d.refusals.some((r) => want.test(r)), (d.refusals[0] ?? 'ALLOWED').split('\n')[0].slice(0, 110));
   }
 
+  // ── 3b. THE INVERTED CASE: A MIGRATION THAT MUST PRECEDE ITS OWN DEPLOY ─────────────────────
+  // On 2026-10-13 two correct guards deadlocked: the Vercel build runs `prisma migrate status` in
+  // an && chain and exits 1 on a pending migration, so the code could not deploy; and this module
+  // refused to apply until production reported that commit. The category had no way to be said, so
+  // the only way through was a human overriding a guard. These clauses are what makes it sayable.
+  console.log('\n— a constraining migration declared to PRECEDE its own deploy —');
+  const PRE = R.classifyMigration('m', `-- @migration: constraining adds keys to verified orphan-free columns\n-- @precedes-deploy: nothing deployed can breach them; the purge that stops sweeping by hand depends on them\n${CON_SQL}`);
+  check('it parses, and carries its why', PRE.klass === 'constraining' && PRE.precedesDeploy.declared
+    && /purge that stops sweeping/.test(PRE.precedesDeploy.why), PRE.refusal ?? PRE.precedesDeploy.why.slice(0, 70));
+  check('  …and app code that is NOT live stops blocking it', decide({ pending: [PRE], appFilesNotLive: ['lib/tenant-purge.ts'] }).allow,
+    'that is the whole point: the code must NOT be live yet');
+  check('  …uncommitted app code too', decide({ pending: [PRE], uncommittedAppFiles: ['lib/tenant-purge.ts'] }).allow);
+
+  // AND IT WAIVES NOTHING ELSE. Not knowing WHICH production is out there is a different failure.
+  for (const [what, o, want] of [
+    ['production unreachable', { version: { ok: false, why: 'fetch failed' } }, /unreachable production is not a safe production/],
+    ['a null commit', { version: { ok: true, commit: null, ref: null, env: 'production', source: 'unknown' } }, /no commit/],
+    ['a commit this clone cannot see', { liveIsAncestor: null }, /does not have even after a fetch/],
+    ['a commit that is not an ancestor', { liveIsAncestor: false }, /not an ancestor of HEAD/],
+    ['a client-generated default', { schemaDefaults: ['token String @default(uuid())'] }, /client-generated default/],
+  ]) {
+    const d = decide({ pending: [PRE], ...o });
+    check(`  …but ${what} STILL refuses`, !d.allow && d.refusals.some((r) => want.test(r)),
+      (d.refusals[0] ?? 'ALLOWED — the waiver is too wide').split('\n')[0].slice(0, 100));
+  }
+
+  // THE DECLARATION ITSELF IS CHECKED, so it cannot become a shrug that means "skip the guard".
+  check('@precedes-deploy WITHOUT a why refuses', R.classifyMigration('m', `-- @migration: constraining x\n-- @precedes-deploy:\n${CON_SQL}`).klass === null,
+    'name what depends on it, or it is a bypass with a tidier spelling');
+  check('  …two of them refuse', R.classifyMigration('m', `-- @migration: constraining x\n-- @precedes-deploy: a\n-- @precedes-deploy: b\n${CON_SQL}`).klass === null);
+  check('  …and on an ADDITIVE migration it refuses', R.classifyMigration('m', `-- @migration: additive\n-- @precedes-deploy: pointless\n${ADD_SQL}`).klass === null,
+    'an additive migration never waited for a deploy — the line means the author has the wrong model of the risk');
+  check('  …while ONE undeclared constraining migration in the batch blocks the lot', (() => {
+    const d = R.deployDecision({ ...base, pending: [PRE, CON], appFilesNotLive: ['lib/tenant-purge.ts'] });
+    return !d.allow && d.refusals.some((r) => /are not live yet/.test(r));
+  })(), 'the waiver is per BATCH, not per file: applying one early drags the other with it');
+
   console.log('\n— what the comparison ignores, and the hole that leaves —');
   check('prisma/migrations is ignored — under two pushes it is applied before it is pushed', !R.comparedByDeployCheck('prisma/migrations/20260911090000_x/migration.sql'));
   check('prisma/schema.prisma is ignored — it cannot safely travel in push 1', !R.comparedByDeployCheck('prisma/schema.prisma'),

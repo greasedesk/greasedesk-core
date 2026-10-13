@@ -169,6 +169,37 @@ export function headerRequired(migrationName: string): boolean {
   return migrationName > HEADER_REQUIRED_AFTER;
 }
 
+/**
+ * ── A CONSTRAINING MIGRATION THAT MUST PRECEDE ITS OWN DEPLOY ───────────────────────────────────
+ *
+ *   -- @precedes-deploy: <why nothing deployed is constrained, and what depends on these>
+ *
+ * The usual order is code first, migration second, because a constraining migration breaks a
+ * deployed writer that does not satisfy it. A real and opposite category exists: a migration that
+ * nothing deployed is constrained BY, which the next deploy DEPENDS ON. Adding foreign keys to
+ * verified orphan-free columns is the worked example — no live writer can breach them, and the
+ * code that relies on them (a purge that stops sweeping by hand because the cascade now does it)
+ * is unsafe until they exist.
+ *
+ * ON 2026-10-13 THAT CATEGORY HAD NO WAY TO BE SAID, and two correct guards deadlocked: the Vercel
+ * build runs `prisma migrate status` in an && chain and exits 1 while a migration is pending, so
+ * the code could not deploy; and this module refused to apply until production reported that very
+ * commit. The only way through was a human overriding a guard, which is what guards exist to stop
+ * being routine. So the category is now declarable, reviewable in the diff, and narrow.
+ *
+ * IT WAIVES EXACTLY TWO BLOCKERS — "app code is uncommitted" and "app files are not live" — and
+ * nothing else. Not knowing WHICH production is out there is a different failure, and still stops
+ * everything: an unreachable production, a commit this clone cannot see, a commit that is not an
+ * ancestor of HEAD, and a client-generated default production would not send all still refuse.
+ */
+export function readPrecedesDeploy(sql: string): { declared: boolean; why: string; malformed: string | null } {
+  const lines = [...sql.matchAll(/^[ \t]*--[ \t]*@precedes-deploy:[ \t]*(.*)$/gm)].map((m) => m[1].trim());
+  if (lines.length === 0) return { declared: false, why: '', malformed: null };
+  if (lines.length > 1) return { declared: false, why: '', malformed: `${lines.length} @precedes-deploy: lines — a file that declares itself twice was edited without being read` };
+  if (!lines[0]) return { declared: false, why: '', malformed: '@precedes-deploy without a why — name what depends on it, and why nothing deployed is constrained by it' };
+  return { declared: true, why: lines[0], malformed: null };
+}
+
 export type ClassifiedMigration = {
   name: string;
   klass: MigrationClass | null;     // null = refuse; the disagreement IS the answer
@@ -176,6 +207,8 @@ export type ClassifiedMigration = {
   detected: MigrationClass;
   reasons: string[];
   refusal: string | null;
+  /** Declared with `-- @precedes-deploy: <why>`: this one is applied BEFORE its code is live. */
+  precedesDeploy: { declared: boolean; why: string };
 };
 
 /**
@@ -189,7 +222,14 @@ export type ClassifiedMigration = {
 export function classifyMigration(name: string, sql: string): ClassifiedMigration {
   const { declared, malformed } = readDeclaredClass(sql);
   const { detected, reasons } = classifySql(sql);
-  const base = { name, declared, detected, reasons };
+  const pre = readPrecedesDeploy(sql);
+  const base = { name, declared, detected, reasons, precedesDeploy: { declared: pre.declared, why: pre.why } };
+  if (pre.malformed) return { ...base, klass: null, refusal: `${name}: ${pre.malformed}` };
+  // Meaningless on an additive migration, and a sign the author has the wrong model of the risk:
+  // an additive migration never had to wait for a deploy in the first place.
+  if (pre.declared && declared === 'additive') {
+    return { ...base, klass: null, refusal: `${name}: @precedes-deploy on an ADDITIVE migration. Additive migrations never wait for a deploy — if this one does constrain a write, declare it constraining; if it does not, remove the line.` };
+  }
   if (malformed) return { ...base, klass: null, refusal: `${name}: ${malformed}` };
   if (declared === null) {
     return { ...base, klass: null, refusal: `${name}: no "-- @migration:" header. The SQL reads ${detected}${reasons.length ? `:\n    • ${reasons.join('\n    • ')}` : ''}` };
@@ -320,10 +360,16 @@ export function deployDecision(f: DeployFacts): DeployDecision {
   } else if (f.liveIsAncestor === false) {
     blocking.push(`production is running ${f.version.commit.slice(0, 12)}, which is not an ancestor of HEAD (${f.head.slice(0, 12)}).\n    Refusing — production may be ahead of this tree, or on another branch entirely.`);
   } else {
-    if (f.uncommittedAppFiles.length) {
+    // THE DECLARED INVERSION. Every constraining migration pending here says it must precede its
+    // own deploy, so "the code is not live" is the intended state rather than the thing to wait
+    // for. Only those two blockers lift; everything below still applies.
+    const allPrecede = constraining.every((m) => m.precedesDeploy.declared);
+    if (allPrecede) {
+      // nothing — the two liveness blockers do not apply to a migration declared to precede its code
+    } else if (f.uncommittedAppFiles.length) {
       blocking.push(`app code is uncommitted, so it certainly is not live:\n      ${f.uncommittedAppFiles.slice(0, 20).join('\n      ')}`);
     }
-    if (f.appFilesNotLive.length) {
+    if (!allPrecede && f.appFilesNotLive.length) {
       blocking.push(`production is running ${f.version.commit.slice(0, 12)}; ${f.appFilesNotLive.length} app file(s) in this tree are not live yet:\n      ${f.appFilesNotLive.slice(0, 20).join('\n      ')}`
         + `\n    Push the code, wait for /api/version to report this commit, then apply.`);
     }
