@@ -1,4 +1,11 @@
 -- @migration: constraining  adds 37 foreign keys to columns that had none
+-- @applied-ahead-of-deploy: 2026-10-13T17:17:59.480Z
+--   production was running: 81d861ee9c0ba7e74ad10e3ba06d689c7d5abbea
+--   this tree: 1687a09b41f28908e572ce52eb907453c2cae363
+--   app files not live at the time: lib/audit.ts, lib/tenant-manifest.ts, lib/tenant-purge.ts, scripts/fk-constraints-plan.mjs, scripts/migration-class-gate.mjs, scripts/purge-completeness-gate.mjs, scripts/repair-fk-orphans-2026-10-13.mjs, scripts/schema-drift-gate.mjs
+--   reason given: DEADLOCK confirmed 2026-10-13: the Vercel production build runs prisma migrate status and exits 1 while this migration is pending, so 2ac39bd cannot deploy until it is applied; this script refuses until production reports 2ac39bd. Applying first is the order this migration's own note already states for the inverted case: no deployed writer is constrained by these 37 keys (every column verified orphan-free first), and the code that DEPENDS on them is not live precisely because the build is failing. Owner's instruction, after confirming the chain.
+--   Applied with --even-if-not-live. Until the push landed, production ran code that did not
+--   satisfy this migration. If something broke in that window, this is the window.
 --
 -- WHAT THIS IS FOR, because the next person to read it will ask.
 --
