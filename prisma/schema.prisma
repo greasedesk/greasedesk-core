@@ -3167,6 +3167,20 @@ model JobCard {
   schedule_readings  ServiceScheduleReading[]
   clockSessions   JobClockSession[]
   quote_option_drafts QuoteOptionDraft[]
+  quote_option_group_drafts QuoteOptionGroupDraft[]
+
+  /// ── THE CUSTOMER VIEW IS A STEP, NOT A PREVIEW BUTTON ───────────────────────────────────────
+  /// A hash of the serialised draft (the same shape EstimateBuilder already computes for autosave)
+  /// that was actually RENDERED as the customer's page. refuseQuoteSend requires it to equal the
+  /// current draft, so editing anything afterwards invalidates it BY DIVERGENCE — there is no
+  /// invalidation logic to forget. NULL = not viewed since the last change.
+  /// garage_notes reached customers once and was caught only because somebody looked; this is what
+  /// makes somebody look. NULL on all three = not viewed since the last change, which is the
+  /// state every new and every edited draft starts in.
+  // @nulls: quote_preview_hash, quote_preview_at, quote_preview_by
+  quote_preview_hash String?
+  quote_preview_at   DateTime?
+  quote_preview_by   String?
 }
 
 model JobCardPhoto {
@@ -4877,6 +4891,7 @@ model QuoteVersion {
   selection_json        Json?
 
   options  QuoteOption[]
+  option_groups QuoteOptionGroup[]
   lines    QuoteVersionLine[]
 
   magic_link CustomerMagicLink? @relation(fields: [magic_link_id], references: [id], onDelete: SetNull)
@@ -5843,6 +5858,51 @@ model ExportJob {
 /// AT MOST ONE PER GROUP, NEVER EXACTLY ONE. Declining every variation is a legitimate answer
 /// (owner's ruling 2026-10-12: forcing a choice turns a quote into an invoice), so there is no
 /// `is_default` column and nothing derives one.
+/**
+ * A GROUP OF OPTIONS, AND THE SHAPE THAT SAYS WHAT CHOOSING MEANS.
+ *
+ * `base_plus_extras` — one base job plus tickable extras that exist BECAUSE the base is happening.
+ *                      No base member means the base is the MAIN QUOTE (always happening), which is
+ *                      the unification of what used to be a standalone `addition`.
+ * `pick_one`        — alternatives: one, or none. Nothing underneath them.
+ *
+ * Groups are INDEPENDENT: all, some or none, and none is a valid answer to each. The shape lives
+ * here rather than on every member because it is one decision about the whole group, and repeating
+ * it per row is how two members of one group come to disagree about what they are.
+ *
+ * NO INCENTIVE COLUMNS HERE YET, deliberately — see lib/quote-options for why, and for what will
+ * reopen it ("10% off any service" authored four times across a ladder). The reader takes a SOURCE,
+ * so adding them later is a column and a second argument, not a second implementation.
+ */
+model QuoteOptionGroup {
+  id               String @id @default(uuid())
+  quote_version_id String
+  shape            String // lib/quote-options GROUP_SHAPES
+  position         Int
+  title            String
+  created_at       DateTime @default(now())
+
+  quote_version QuoteVersion  @relation(fields: [quote_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  options       QuoteOption[]
+
+  @@index([quote_version_id, position])
+}
+
+/** The draft half, on the card. Same shape; mirrors QuoteOptionDraft's relationship to QuoteOption. */
+model QuoteOptionGroupDraft {
+  id          String @id @default(uuid())
+  job_card_id String
+  shape       String
+  position    Int
+  title       String
+  created_at  DateTime @default(now())
+
+  job_card JobCard            @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  options  QuoteOptionDraft[]
+
+  @@index([job_card_id, position])
+}
+
 model QuoteOption {
   id               String @id @default(uuid())
   quote_version_id String
@@ -5871,11 +5931,25 @@ model QuoteOption {
   incentive_ex_pennies        Int?
   incentive_vatable           Boolean?
   incentive_gross_off_pennies Int?
+  /// percent_off ONLY: the authoring input and the wording, in basis points (1000 = 10%). A null
+  /// means the incentive is not a percentage — amount_off and included carry no rate — so it is a
+  /// deliberate value and never a zero. The PENNIES above are the promise; this never recomputes
+  /// them. See lib/quote-options.
+  incentive_percent_bp        Int?
+  /// The group this option belongs to. A null is TEMPORAL and nothing else: every option belongs to
+  /// exactly one group, and null means only "written before the groups existed", until the backfill
+  /// of sent versions is proved. `kind`/`group_key` above are the retiring flat shape.
+  group_id                    String?
+  /// base_plus_extras only: exactly one member may be the base. None = the base is the main quote.
+  is_base                     Boolean @default(false)
+
   created_at DateTime @default(now())
 
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   quote_version_lines QuoteVersionLine[]
+
+  group QuoteOptionGroup? @relation(fields: [group_id], references: [id], onDelete: Cascade)
 
 
   @@index([quote_version_id, position])
@@ -5908,11 +5982,24 @@ model QuoteOptionDraft {
   incentive_ex_pennies        Int?
   incentive_vatable           Boolean?
   incentive_gross_off_pennies Int?
+  /// percent_off ONLY: the authoring input and the wording, in basis points (1000 = 10%). A null
+  /// means the incentive is not a percentage — amount_off and included carry no rate — so it is a
+  /// deliberate value and never a zero. The PENNIES above are the promise; this never recomputes
+  /// them. See lib/quote-options.
+  incentive_percent_bp        Int?
+  /// NULL ONLY UNTIL THE BACKFILL IS PROVED: every option belongs to exactly one group. A draft
+  /// option with no group cannot be rendered or chosen, and lib/quote-options names it rather than
+  /// dropping it, so the absence is a visible fault instead of a silent omission.
+  group_id                    String?
+  is_base                     Boolean @default(false)
+
   created_at DateTime @default(now())
 
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   job_card_items JobCardItem[]
+
+  group QuoteOptionGroupDraft? @relation(fields: [group_id], references: [id], onDelete: Cascade)
 
 
   @@index([job_card_id, position])

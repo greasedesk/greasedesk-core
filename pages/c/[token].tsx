@@ -49,7 +49,7 @@ import DocumentLines from '@/components/DocumentLines';
 import CustomerInvoice, { type SerializedInvoiceDoc } from '@/components/customer/CustomerInvoice';
 import { useState } from 'react';
 import {
-  additions, printedQuote, resolveSelection, variationGroups, incentiveNote,
+  printedQuote, resolveSelection, incentiveNote,
 } from '@/lib/quote-options';   // PURE — no db reach, so it is safe in the client bundle
 
 type Denied =
@@ -333,8 +333,10 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
    * legitimate final answer: declining every variation is an answer, and a pre-selected option
    * would bill somebody for bronze who wanted no service.
    */
-  const [addOn, setAddOn] = useState<string[]>([]);
-  const [variation, setVariation] = useState<Record<string, string | null>>({});
+  // ONE SHAPE FOR BOTH GROUP SHAPES: groupId -> the ids chosen in it. An empty or absent list is a
+  // DECLINE, which is a valid answer to every group — so nothing is pre-selected and the page never
+  // implies that saying no to a group is an unanswered question.
+  const [byGroup, setByGroup] = useState<Record<string, string[]>>({});
   const [outcome, setOutcome] = useState<string | null>(
     doc.status === 'accepted' || doc.status === 'declined' ? doc.status : null,
   );
@@ -348,7 +350,7 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // The selection rides with the acceptance: lib/quote-acceptance REFUSES a yes to a quote
         // with options and no choice, rather than picking one.
-        body: JSON.stringify({ token, action, selection: hasOptions ? { additionIds: addOn, variationByGroup: variation } : undefined }),
+        body: JSON.stringify({ token, action, selection: hasOptions ? { byGroup } : undefined }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j?.message || 'Something went wrong — please call the garage.'); return; }
@@ -381,13 +383,12 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
   const opts = doc.options ?? [];
   const hasOptions = opts.length > 0;
   const main = { netPennies: doc.totals.netPennies, vatPennies: doc.totals.vatPennies, grossPennies: doc.totals.grossPennies };
-  const groups = hasOptions ? [...variationGroups(opts as any)] : [];
-  const adds = hasOptions ? additions(opts as any) : [];
+  const optionGroups = doc.optionGroups ?? [];
   const chosen = hasOptions
-    ? resolveSelection(main, opts as any, { additionIds: addOn, variationByGroup: variation })
+    ? resolveSelection(main, optionGroups as any, opts as any, { byGroup })
     : null;
   const liveTotal = chosen?.ok ? chosen.resolution.displayGrossPennies : main.grossPennies;
-  const printed = hasOptions ? printedQuote(main, opts as any) : null;
+  const printed = hasOptions ? printedQuote(main, optionGroups as any, opts as any) : null;
 
   if (outcome === 'accepted') {
     return (
@@ -421,44 +422,67 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
           legitimate answer and the page must not imply otherwise. */}
       {hasOptions && (
         <div className="mb-5 print:hidden" data-testid="quote-options">
-          {groups.map(([groupKey, members]) => (
-            <fieldset key={groupKey} className="mb-4" data-testid="variation-group" data-group={groupKey}>
-              <legend className="text-xs uppercase tracking-wide text-muted mb-2">Choose one</legend>
-              <label className="flex items-center gap-2 py-1.5 text-sm cursor-pointer" data-testid="variation-none">
-                <input type="radio" name={`v-${groupKey}`} checked={(variation[groupKey] ?? null) === null}
-                  onChange={() => setVariation((v) => ({ ...v, [groupKey]: null }))} />
-                <span className="text-ink">None of these</span>
-              </label>
-              {members.map((o) => (
-                <label key={o.id} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
-                  data-testid="variation-row" data-option={o.id}>
-                  <span className="flex items-center gap-2">
-                    <input type="radio" name={`v-${groupKey}`} checked={variation[groupKey] === o.id}
-                      onChange={() => setVariation((v) => ({ ...v, [groupKey]: o.id }))} />
-                    <span className="text-ink">{o.title}</span>
-                  </span>
-                  <span className="text-ink tabular-nums">{money(o.grossPennies)}</span>
-                </label>
-              ))}
-            </fieldset>
-          ))}
-
-          {adds.length > 0 && (
-            <fieldset data-testid="addition-group">
-              <legend className="text-xs uppercase tracking-wide text-muted mb-2">You can also add</legend>
-              {adds.map((o) => (
-                <label key={o.id} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
-                  data-testid="addition-row" data-option={o.id}>
-                  <span className="flex items-center gap-2">
-                    <input type="checkbox" checked={addOn.includes(o.id)}
-                      onChange={(e) => setAddOn((xs) => (e.target.checked ? [...xs, o.id] : xs.filter((x) => x !== o.id)))} />
-                    <span className="text-ink">{o.title}</span>
-                  </span>
-                  <span className="text-ink tabular-nums">{money(o.grossPennies)}</span>
-                </label>
-              ))}
-            </fieldset>
-          )}
+          {(printed?.groups ?? []).map((g) => {
+            const picked = byGroup[g.groupId] ?? [];
+            const base = g.rows.find((r) => r.isBase) ?? null;
+            const baseChosen = !base || picked.includes(base.optionId);
+            const setOne = (id: string | null) => setByGroup((st) => ({ ...st, [g.groupId]: id ? [id] : [] }));
+            const toggle = (id: string, on: boolean) => setByGroup((st) => {
+              const cur = st[g.groupId] ?? [];
+              let next = on ? [...cur, id] : cur.filter((x) => x !== id);
+              // DROPPING THE BASE DROPS THE EXTRAS WITH IT. They are only done while it is being
+              // done, so leaving them ticked would send an order for work with nothing holding it up.
+              if (base && id === base.optionId && !on) next = [];
+              return { ...st, [g.groupId]: next };
+            });
+            return (
+              <fieldset key={g.groupId} className="mb-4" data-testid="option-group"
+                data-group={g.groupId} data-shape={g.shape}>
+                <legend className="text-xs uppercase tracking-wide text-muted mb-2">
+                  {g.shape === 'pick_one' ? `${g.title} — choose one` : g.title}
+                </legend>
+                {g.shape === 'pick_one' ? (
+                  <>
+                    {/* "None of these" FIRST and selected: declining them all is a legitimate answer. */}
+                    <label className="flex items-center gap-2 py-1.5 text-sm cursor-pointer" data-testid="option-none">
+                      <input type="radio" name={`g-${g.groupId}`} checked={picked.length === 0}
+                        onChange={() => setOne(null)} />
+                      <span className="text-ink">None of these</span>
+                    </label>
+                    {g.rows.map((r) => (
+                      <label key={r.optionId} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
+                        data-testid="option-row" data-option={r.optionId}>
+                        <span className="flex items-center gap-2">
+                          <input type="radio" name={`g-${g.groupId}`} checked={picked.includes(r.optionId)}
+                            onChange={() => setOne(r.optionId)} />
+                          <span className="text-ink">{r.title}</span>
+                        </span>
+                        <span className="text-ink tabular-nums">{money(r.completeGrossPennies ?? r.ownGrossPennies)}</span>
+                      </label>
+                    ))}
+                  </>
+                ) : (
+                  g.rows.map((r) => (
+                    <label key={r.optionId} className="flex items-center justify-between gap-3 py-1.5 text-sm cursor-pointer"
+                      data-testid="option-row" data-option={r.optionId} data-base={r.isBase ? '1' : undefined}>
+                      <span className="flex items-center gap-2">
+                        <input type="checkbox" checked={picked.includes(r.optionId)}
+                          disabled={!r.isBase && !baseChosen}
+                          onChange={(e) => toggle(r.optionId, e.target.checked)} />
+                        <span className={!r.isBase && !baseChosen ? 'text-muted' : 'text-ink'}>{r.title}</span>
+                      </span>
+                      <span className="text-ink tabular-nums">{money(r.ownGrossPennies)}</span>
+                    </label>
+                  ))
+                )}
+                {base && !baseChosen && (
+                  <p className="text-xs text-muted mt-1" data-testid="needs-base">
+                    Add “{base.title}” to choose from these — they are only done while that is being done.
+                  </p>
+                )}
+              </fieldset>
+            );
+          })}
 
           {chosen?.ok && chosen.resolution.includedLabels.map((l) => (
             <p key={l} className="mt-2 text-sm text-ok" data-testid="included-note">Includes {l}</p>
@@ -468,6 +492,15 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
               {d.label} — {money(d.grossOffPennies)} off
             </p>
           ))}
+
+          {/* WHAT THEY SAVED — the money-moving incentives only. An `included` thing is stated as
+              its own line above and never folded in here, because a saving the invoice does not
+              show is a figure that will not match it. */}
+          {chosen?.ok && chosen.resolution.savingsGrossPennies > 0 && (
+            <p className="mt-3 text-sm font-semibold text-ok" data-testid="savings-total">
+              You have saved {money(chosen.resolution.savingsGrossPennies)}
+            </p>
+          )}
 
           <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
             <span className="text-sm font-semibold text-ink">Total with your choices</span>
@@ -484,33 +517,26 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
           this page could print. */}
       {printed && (
         <div className="mb-5 hidden print:block" data-testid="printed-options">
-          {printed.variationGroups.map((g) => (
-            <table key={g.groupKey} className="w-full mb-4 text-sm" data-testid="printed-variations">
-              <caption className="text-left text-xs uppercase tracking-wide text-muted mb-1">Choose one — price shown includes the work above</caption>
+          {printed.groups.map((g) => (
+            <table key={g.groupId} className="w-full mb-4 text-sm" data-testid="printed-group" data-shape={g.shape}>
+              <caption className="text-left text-xs uppercase tracking-wide text-muted mb-1">
+                {g.shape === 'pick_one'
+                  ? `${g.title} — choose one; the price shown includes the work above`
+                  : `${g.title} — added to the work above`}
+              </caption>
               <tbody>
                 {g.rows.map((r) => (
-                  <tr key={r.optionId} className="border-t border-line" data-testid="printed-variation-row">
+                  <tr key={r.optionId} className="border-t border-line" data-testid="printed-option-row">
                     <td className="py-1.5 text-ink">{r.title}{r.incentiveNote ? ` — ${r.incentiveNote}` : ''}</td>
-                    <td className="py-1.5 text-right text-ink tabular-nums">{money(r.completeGrossPennies)}</td>
+                    <td className="py-1.5 text-right text-ink tabular-nums">{money(r.ownGrossPennies)}</td>
+                    <td className="py-1.5 text-right text-muted tabular-nums whitespace-nowrap">
+                      {r.completeGrossPennies != null ? `with the work above: ${money(r.completeGrossPennies)}` : ''}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ))}
-          {printed.additions.length > 0 && (
-            <table className="w-full text-sm" data-testid="printed-additions">
-              <caption className="text-left text-xs uppercase tracking-wide text-muted mb-1">You can also add</caption>
-              <tbody>
-                {printed.additions.map((r) => (
-                  <tr key={r.optionId} className="border-t border-line" data-testid="printed-addition-row">
-                    <td className="py-1.5 text-ink">{r.title}{r.incentiveNote ? ` — ${r.incentiveNote}` : ''}</td>
-                    <td className="py-1.5 text-right text-ink tabular-nums">{money(r.ownGrossPennies)}</td>
-                    <td className="py-1.5 text-right text-muted tabular-nums whitespace-nowrap">with the work above: {money(r.withMainGrossPennies)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
           <p className="mt-3 text-sm text-ink" data-testid="printed-no-total">
             There is no single total until you choose: {printed.openChoices.join(' and ')}. Tell us which and we will confirm the price.
           </p>

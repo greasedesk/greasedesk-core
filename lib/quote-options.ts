@@ -1,76 +1,106 @@
 /**
  * File: lib/quote-options.ts
  *
- * OPTIONS ON A QUOTE, AND WHAT A CUSTOMER'S CHOICE RESOLVES TO. Pure: no database, no Prisma, so
- * every rule here is testable without arranging a quote.
+ * WHAT A QUOTE OFFERS, AND WHAT A CUSTOMER CAN SAY BACK TO IT.
  *
- * ── TWO KINDS, DELIBERATELY NOT COLLAPSED ───────────────────────────────────────────────────────
- *   ADDITIONS are CUMULATIVE — the main quote plus any of them. An engine rebuild, optionally with
- *   the water pump, optionally with the clutch. None, some or all.
- *   VARIATIONS are EXCLUSIVE — at most one from a group. Bronze, silver, gold.
+ * Pure. No database, no formatting, no money type — pennies in, pennies out — so every rule below
+ * can be planted and watched fail in quote-options-gate.
  *
- * They look similar on a screen and behave oppositely in arithmetic, so they are separate kinds
- * rather than one kind with a flag. A quote may hold both.
+ * ── GROUPS, AND WHY THE GROUP IS THE THING ──────────────────────────────────────────────────────
+ * This used to be a flat list of options with `kind: 'addition' | 'variation'` and a bare
+ * `group_key` string that only variations were allowed to use. That carried a set of alternatives
+ * and nothing else. It could not say "a base job plus any of these add-ons", because the add-ons
+ * only exist if the base is happening, and nothing in a flat list holds that dependency.
  *
- * ── AT MOST ONE, NEVER EXACTLY ONE ──────────────────────────────────────────────────────────────
- * A variation group has no default and declining every variation is a legitimate answer (owner's
- * ruling, 2026-10-12: "forcing a choice turns a quote into an invoice"). So `null` for a group is
- * valid everywhere below, and nothing here treats an unchosen group as an error.
+ * So the GROUP is a row, and it carries the SHAPE:
  *
- * ── THE PRINTED DOCUMENT MUST NEVER REQUIRE ARITHMETIC ──────────────────────────────────────────
- * That single rule drives the layout half of this file. A variation prints a COMPLETE price
- * including the main work, never a difference from the cheapest one: a reader comparing three
- * differences will add one of them to the wrong base. And there is NO grand total while a choice is
- * open, because one big number on a page showing three mutually exclusive prices is the one thing
- * guaranteed to be misread.
+ *   base_plus_extras — one base job, plus any number of tickable extras. The extras exist BECAUSE
+ *                      the base is happening: decline the base and the extras go with it. A group
+ *                      with NO base member is the unification of what used to be a standalone
+ *                      `addition`: the base is then the MAIN QUOTE, which is always happening, so
+ *                      the extras stand on their own. That is the only meaning of a missing base.
+ *
+ *   pick_one        — a set of alternatives. Choose one, or none. Nothing underneath them.
+ *
+ * GROUPS ARE INDEPENDENT. All, some or none, and NONE IS A VALID ANSWER TO EACH — so a selection
+ * that does not mention a group is not an incomplete selection, it is a decline. The old shape had
+ * `additionIds` and `variationByGroup` as two different mechanisms; one `byGroup` map says the same
+ * thing for both shapes and cannot drift between them.
+ *
+ * ── WHERE AN INCENTIVE LIVES, AND WHAT WILL REOPEN THAT ─────────────────────────────────────────
+ * On the OPTION, not the group. A group-level incentive needs a rule for how it combines with a
+ * member's own, and that rule has not been asked for.
+ *
+ * NOTED BECAUSE IT WILL COME BACK (owner, 2026-10-13): "10% off any service while the car is in"
+ * is the offer this was built for, and authoring it four times across a pick_one ladder is exactly
+ * what will drive this open again. So nothing here forecloses it: every incentive is read through
+ * `incentivesOn()` and every note through `incentiveNote()`, both of which take a SOURCE rather
+ * than an option. Adding `GroupLite.incentive` means teaching those two functions about a second
+ * source and nothing else — no call site changes, no second spelling of the arithmetic.
  */
 
-/** DiscountLine's shape is lib/promo's, deliberately: one answer to "how does a discount reach a
- *  document". exPennies is a POSITIVE magnitude and the caller stores it as a negative line. */
+/** A discount as lib/promo wants it: a positive magnitude the caller stores as a negative line. */
 export type DiscountLine = { label: string; exPennies: number; vatable: boolean };
 
-/**
- * lib/promo's DiscountLine plus the frozen gross effect. The extra field exists so a caller never
- * has to recover it by matching on the LABEL — a number reconstructed from a string that another
- * line of code happened to write is identical by construction until somebody edits the wording.
- */
+/** …plus what it takes off the TOTAL, frozen, because a vatable discount moves the VAT too. */
 export type ResolvedDiscount = DiscountLine & { grossOffPennies: number };
 
-export const OPTION_KINDS = ['addition', 'variation'] as const;
-export type OptionKind = (typeof OPTION_KINDS)[number];
-export const isOptionKind = (v: unknown): v is OptionKind =>
-  (OPTION_KINDS as readonly string[]).includes(String(v));
+export const GROUP_SHAPES = ['base_plus_extras', 'pick_one'] as const;
+export type GroupShape = (typeof GROUP_SHAPES)[number];
+export const isGroupShape = (v: unknown): v is GroupShape =>
+  (GROUP_SHAPES as readonly string[]).includes(String(v));
 
 /**
- * ── TWO INCENTIVE SHAPES, BECAUSE THEY DO DIFFERENT ARITHMETIC ──────────────────────────────────
- * `amount_off` REDUCES the bill: "£50 off if you take the water pump with the main quote". It
- * becomes a negative line and the total moves.
+ * ── THREE INCENTIVE SHAPES, BECAUSE THEY DO THREE DIFFERENT SUMS ────────────────────────────────
+ * `amount_off`  REDUCES the bill by a figure somebody typed: "£50 off the water pump with the main
+ *               quote". A negative line, and the total moves.
  *
- * `included` GIVES something: "free diagnostic with gold". It becomes a line at zero and the total
- * does NOT move. Expressing it as a discount would subtract the price of something that was never
- * charged for, so the customer would see the bill fall by £X for an item that is not on it.
+ * `percent_off` REDUCES the bill by a figure somebody COMPUTED: "10% off the service while it is in
+ *               for brakes". The percentage is the wording; the PENNIES are the promise. Resolved
+ *               once, at freeze, per LINE and rounded per line, then summed into one negative line
+ *               — so the arithmetic matches the lines the customer is looking at. Never recomputed
+ *               afterwards: a document that re-derives its own discount at invoice time can print
+ *               one number and bill another the moment a line, a rate or a rounding rule moves.
  *
- * One mechanism for both would have been tidier and wrong in one of the two cases.
+ * `included`    GIVES something: "free diagnostic with gold". A line at zero, and the total does
+ *               NOT move. Expressing it as a discount would drop the bill by the price of something
+ *               that was never charged for.
+ *
+ * One mechanism for the three would have been tidier and wrong in two of them.
  */
 export type Incentive =
-  /**
-   * `exPennies` + `vatable` are what the negative LINE needs (lib/promo's convention).
-   * `grossOffPennies` is what the DOCUMENT promises, frozen, because a vatable discount reduces
-   * the VAT as well and this module does not know the rate — lib/quote-totals owns that
-   * recompute. Carrying both means the printed price and the minted line cannot disagree.
-   */
   | { kind: 'amount_off'; label: string; exPennies: number; vatable: boolean; grossOffPennies: number }
+  | {
+      kind: 'percent_off'; label: string;
+      /** The AUTHORING INPUT and the wording, in basis points: 1000 = 10%. Never the promise. */
+      percentBp: number;
+      /** THE PROMISE, resolved at freeze: per-line percentages, each rounded, then summed. */
+      exPennies: number; vatable: boolean; grossOffPennies: number;
+    }
   | { kind: 'included'; label: string };
+
+export const INCENTIVE_KINDS = ['amount_off', 'percent_off', 'included'] as const;
+/** The two that MOVE MONEY. The savings figure is these and only these — see savingsGrossPennies. */
+export const MONEY_MOVING_INCENTIVES = ['amount_off', 'percent_off'] as const;
+const movesMoney = (i: Incentive | null): i is Extract<Incentive, { grossOffPennies: number }> =>
+  !!i && (MONEY_MOVING_INCENTIVES as readonly string[]).includes(i.kind);
+
+export type GroupLite = {
+  id: string;
+  shape: GroupShape;
+  title: string;
+  position: number;
+};
 
 export type OptionLite = {
   id: string;
-  kind: OptionKind;
-  /** Variations only: which exclusive set this belongs to. NULL on an addition, always. */
-  groupKey: string | null;
+  groupId: string;
+  /** base_plus_extras only. Exactly one member may carry it; none means the base is the main quote. */
+  isBase: boolean;
   title: string;
   position: number;
-  /** FROZEN on the option at send. Never recomputed here — this module does display arithmetic on
-   *  figures somebody else froze, and recomputing them would be a second spelling of the totals. */
+  /** FROZEN at send. This module does display arithmetic on figures somebody else froze; it never
+   *  recomputes them, because a second spelling of the totals is how two spellings disagree. */
   netPennies: number;
   vatPennies: number;
   grossPennies: number;
@@ -81,186 +111,237 @@ export type OptionLite = {
 export type MainLite = { netPennies: number; vatPennies: number; grossPennies: number };
 
 /**
- * ── THE STATED RULE FOR QuoteVersion.gross_pennies ──────────────────────────────────────────────
- * `gross_pennies` is THE MAIN QUOTE AS SENT, EXCLUDING OPTIONS. Eight readers across
- * lib/quotes-list and lib/quotes-metrics already treat it as "the value of this quote" — Awaiting,
- * declined totals, expired totals, the first-quote figure — and a quote with three variations has
- * no single value, so the alternative is eight separate inferences about which number it holds.
- *
- * It is stated here, once, and asserted against the arithmetic that depends on it rather than left
- * as a convention in a comment: a version's frozen gross must equal the main block's gross, never
- * the sum of everything on offer.
+ * QuoteVersion.gross_pennies IS THE MAIN QUOTE ONLY — never the main quote plus some or all of the
+ * options. A version with an open choice has no single total (see PrintedQuote.grandTotalPennies),
+ * so the stored figure has to mean the one thing that is always true of it.
  */
 export const GROSS_PENNIES_MEANS =
-  'QuoteVersion.gross_pennies is the MAIN quote as sent, excluding all options. '
-  + 'A quote with options has no single value until a customer chooses.';
+  'QuoteVersion.gross_pennies is the MAIN quote: the lines with no option, and nothing else.';
 
-/** TRUE when a frozen version total agrees with the stated rule. */
 export const grossAgreesWithRule = (versionGrossPennies: number, main: MainLite): boolean =>
   versionGrossPennies === main.grossPennies;
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
- * WHAT MAY BE SENT
+ * WHAT CANNOT BE SENT. Each refusal names the option or group, because this text reaches a garage
+ * owner mid-edit and "invalid options" would send them hunting.
  * ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
-/**
- * Refuses a set of options that cannot be presented honestly. Each rule exists because the document
- * would otherwise be ambiguous to somebody holding it, not because the data would be untidy.
- */
-export function optionsRefusal(options: readonly OptionLite[]): string | null {
+export function optionsRefusal(
+  groups: readonly GroupLite[], options: readonly OptionLite[],
+): string | null {
+  const byGroup = new Map<string, OptionLite[]>();
+  for (const g of groups) byGroup.set(g.id, []);
   for (const o of options) {
-    if (!isOptionKind(o.kind)) return `“${o.title}” has no kind, so nothing knows whether it adds to the quote or replaces part of it`;
-    if (o.kind === 'variation' && !o.groupKey?.trim()) return `“${o.title}” is a variation with no group, so nothing knows what it is an alternative TO`;
-    if (o.kind === 'addition' && o.groupKey) return `“${o.title}” is an addition in a group; additions are cumulative and belong to no exclusive set`;
     if (!o.title?.trim()) return 'an option with no title cannot be chosen on a printed page';
+    const bucket = byGroup.get(o.groupId);
+    // An option whose group is not on the document can never be rendered OR chosen, so it is a
+    // silent omission rather than a visible fault — which is the kind that ships.
+    if (!bucket) return `“${o.title}” belongs to a group that is not on this quote`;
+    bucket.push(o);
     if (o.grossPennies < 0) return `“${o.title}” has a negative price; a reduction is a discount, not an option`;
-    if (o.incentive?.kind === 'amount_off') {
-      if (!(o.incentive.exPennies > 0)) return `the incentive on “${o.title}” takes nothing off, so printing it would promise a saving of zero`;
-      // Gross cannot be below ex, and with no VAT on it the two must be the same number. Either way
-      // round, a mismatch means the printed saving and the line on the invoice would differ.
-      if (o.incentive.grossOffPennies < o.incentive.exPennies) return `the incentive on “${o.title}” takes more off the net than off the total, which cannot be true`;
-      if (!o.incentive.vatable && o.incentive.grossOffPennies !== o.incentive.exPennies) {
-        return `the incentive on “${o.title}” carries no VAT, so the saving off the total must equal the saving off the net`;
+    const inc = o.incentive;
+    if (inc) {
+      if (!inc.label?.trim()) return `the incentive on “${o.title}” has no wording, and an unexplained discount on a quote is a question, not an offer`;
+      if (inc.kind === 'percent_off') {
+        if (!(inc.percentBp > 0)) return `the incentive on “${o.title}” is a percentage of nothing`;
+        if (inc.percentBp >= 10000) return `the incentive on “${o.title}” takes 100% or more off, which is “included”, not a discount`;
+      }
+      if (movesMoney(inc)) {
+        // A percentage that ROUNDS AWAY is the percent-specific trap: 1% of £2 is nothing, and
+        // printing "1% off" beside a price that did not move is a promise the bill contradicts.
+        if (!(inc.exPennies > 0)) {
+          return inc.kind === 'percent_off'
+            ? `the incentive on “${o.title}” rounds away to nothing at these prices, so the page would promise a saving the bill does not show`
+            : `the incentive on “${o.title}” takes nothing off, so printing it would promise a saving of nothing`;
+        }
+        if (inc.grossOffPennies < inc.exPennies) return `the incentive on “${o.title}” takes more off the net than off the total, which no VAT treatment does`;
+        if (!inc.vatable && inc.grossOffPennies !== inc.exPennies) {
+          return `the incentive on “${o.title}” carries no VAT, so the saving off the total must equal the saving off the net`;
+        }
+        if (inc.grossOffPennies > o.grossPennies) return `the incentive on “${o.title}” takes more off than the option costs`;
       }
     }
-    if (o.incentive && !o.incentive.label?.trim()) return `the incentive on “${o.title}” has no wording, and an unexplained discount on a document is worse than none`;
   }
-  // A group of one is not a choice — it is an addition wearing the wrong kind, and it would print
-  // under "Choose one" with one row.
-  const groups = variationGroups(options);
-  for (const [key, members] of groups) {
-    if (members.length < 2) return `variation group “${key}” has only “${members[0]?.title ?? 'one option'}” in it; a single exclusive choice is an addition`;
+
+  for (const g of groups) {
+    const members = byGroup.get(g.id) ?? [];
+    if (!isGroupShape(g.shape)) return `“${g.title}” has no shape, so nothing knows whether its options are alternatives or add-ons`;
+    if (!g.title?.trim()) return 'a group with no title gives the customer nothing to decide about';
+    const bases = members.filter((m) => m.isBase);
+    if (g.shape === 'pick_one') {
+      // Two is the minimum that makes a CHOICE. One alternative is an add-on wearing the wrong shape.
+      if (members.length < 2) return `“${g.title}” offers ${members.length === 1 ? `only “${members[0].title}”` : 'nothing'}; a choice needs at least two alternatives`;
+      if (bases.length) return `“${bases[0].title}” is marked as a base inside “${g.title}”, which is a set of alternatives — nothing sits underneath them`;
+    } else {
+      if (bases.length > 1) return `“${g.title}” has ${bases.length} base jobs; the extras cannot hang off more than one`;
+      // With a base, the extras are what the base is FOR. Without extras it is just an option.
+      const extras = members.filter((m) => !m.isBase);
+      if (!extras.length) return `“${g.title}” has no extras to add, so it is an option rather than a group`;
+    }
   }
+
   const titles = options.map((o) => o.title.trim().toLowerCase());
   const dupe = titles.find((t, i) => titles.indexOf(t) !== i);
-  if (dupe) return `two options are both called “${dupe}”, so a customer cannot say which they meant`;
+  if (dupe) return `two options are both called “${options.find((o) => o.title.trim().toLowerCase() === dupe)!.title}”, so a customer cannot say which they meant`;
   return null;
 }
 
-/** Variation groups in document order, each in position order. Additions are not groups. */
-export function variationGroups(options: readonly OptionLite[]): Map<string, OptionLite[]> {
+/** The members of each group, in document order, keyed by group id. */
+export function groupMembers(
+  groups: readonly GroupLite[], options: readonly OptionLite[],
+): Map<string, OptionLite[]> {
   const m = new Map<string, OptionLite[]>();
-  for (const o of [...options].sort((a, b) => a.position - b.position)) {
-    if (o.kind !== 'variation' || !o.groupKey) continue;
-    const list = m.get(o.groupKey) ?? [];
-    list.push(o);
-    m.set(o.groupKey, list);
+  for (const g of [...groups].sort((a, b) => a.position - b.position)) {
+    m.set(g.id, options.filter((o) => o.groupId === g.id).sort((a, b) => a.position - b.position));
   }
   return m;
 }
 
-export const additions = (options: readonly OptionLite[]): OptionLite[] =>
-  options.filter((o) => o.kind === 'addition').sort((a, b) => a.position - b.position);
+export const baseOf = (members: readonly OptionLite[]): OptionLite | null =>
+  members.find((m) => m.isBase) ?? null;
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
- * WHAT A CUSTOMER CHOSE
+ * WHAT A CUSTOMER SAID, AND WHAT IT RESOLVES TO
  * ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
-export type Selection = {
-  additionIds: readonly string[];
-  /** groupKey → chosen option id, or NULL for "none of these", which is a legitimate answer. */
-  variationByGroup: Readonly<Record<string, string | null>>;
-};
+/**
+ * groupId → the option ids chosen in that group. ABSENT OR EMPTY IS A DECLINE, not an unanswered
+ * question: groups are independent and none is a valid answer to each.
+ */
+export type Selection = { byGroup: Readonly<Record<string, readonly string[]>> };
+
+export const emptySelection = (): Selection => ({ byGroup: {} });
 
 export type Resolution = {
-  chosenAdditions: OptionLite[];
-  chosenVariations: OptionLite[];
+  chosen: OptionLite[];
   /** Positive magnitudes, for the caller to store as negative lines (lib/promo's convention). */
   discounts: ResolvedDiscount[];
-  /** Things given rather than discounted: a zero-priced line, and the total does not move. */
+  /** Things GIVEN. Stated as their own visible line, never folded into the savings figure, because
+   *  a saving the invoice does not show is a figure that will not match it (owner, 2026-10-13). */
   includedLabels: string[];
+  /** WHAT THEY SAVED: the money-moving incentives on what they chose, and nothing else. */
+  savingsGrossPennies: number;
   /**
    * FROZEN FIGURES ADDED UP, FOR A SCREEN. Not the authority: the minted version's totals are
    * recomputed by lib/quote-totals over the resolved lines, because a vatable discount changes the
-   * VAT and that recompute has one home. Computing net and VAT here as well would be a second
-   * spelling of the totals, which is how the two drift.
+   * VAT and that recompute has one home.
    */
   displayGrossPennies: number;
 };
 
 /**
- * Resolves a selection into the chosen options and the extra lines it implies. REFUSES rather than guesses:
- * an acceptance is the act the job card, the parts and the invoice all follow from, so a selection
- * that does not make sense must not be silently narrowed to one that does.
+ * Resolves a selection. REFUSES rather than guesses: an acceptance is the act the job card, the
+ * parts and the invoice all follow from, so a selection that does not make sense must never be
+ * quietly narrowed into one that does.
  */
 export function resolveSelection(
-  main: MainLite, options: readonly OptionLite[], sel: Selection,
+  main: MainLite, groups: readonly GroupLite[], options: readonly OptionLite[], sel: Selection,
 ): { ok: true; resolution: Resolution } | { ok: false; refusal: string } {
+  const members = groupMembers(groups, options);
   const byId = new Map(options.map((o) => [o.id, o] as const));
-  const groups = variationGroups(options);
+  const STALE = 'That choice is no longer on this quote. Ask the garage to send it again.';
 
-  const seen = new Set<string>();
-  const chosenAdditions: OptionLite[] = [];
-  for (const id of sel.additionIds) {
-    const o = byId.get(id);
-    if (!o) return { ok: false, refusal: 'That choice is no longer on this quote. Ask the garage to send it again.' };
-    if (o.kind !== 'addition') return { ok: false, refusal: `“${o.title}” is one of a set of alternatives, not an extra` };
-    // Twice is ambiguous: it could be a double-click or a request for two. Neither is assumable.
-    if (seen.has(id)) return { ok: false, refusal: `“${o.title}” was chosen twice` };
-    seen.add(id);
-    chosenAdditions.push(o);
+  // A group the selection NAMES that the document does not have is a stale page in front of the
+  // customer, which is the same situation as a missing option and gets the same sentence.
+  for (const [gid, ids] of Object.entries(sel.byGroup)) {
+    if (!members.has(gid) && ids.length) return { ok: false, refusal: STALE };
   }
 
-  const chosenVariations: OptionLite[] = [];
-  for (const [key, members] of groups) {
-    const picked = sel.variationByGroup[key] ?? null;
-    if (picked === null) continue; // "none of these" — legitimate, never an error
-    const o = byId.get(picked);
-    if (!o) return { ok: false, refusal: 'That choice is no longer on this quote. Ask the garage to send it again.' };
-    if (!members.some((m) => m.id === o.id)) return { ok: false, refusal: `“${o.title}” is not one of the alternatives in “${key}”` };
-    chosenVariations.push(o);
-  }
-  // A group the selection never mentioned is "none", the same as an explicit null. A group mentioned
-  // that does not exist is a stale document, which is the same situation as a missing option.
-  for (const key of Object.keys(sel.variationByGroup)) {
-    if (!groups.has(key) && sel.variationByGroup[key] !== null) {
-      return { ok: false, refusal: 'That choice is no longer on this quote. Ask the garage to send it again.' };
+  const chosen: OptionLite[] = [];
+  for (const [gid, mem] of members) {
+    const g = groups.find((x) => x.id === gid)!;
+    const ids = sel.byGroup[gid] ?? [];
+    if (!ids.length) continue; // a decline, and a valid answer
+
+    const seen = new Set<string>();
+    const picked: OptionLite[] = [];
+    for (const id of ids) {
+      const o = byId.get(id);
+      if (!o) return { ok: false, refusal: STALE };
+      if (o.groupId !== gid) return { ok: false, refusal: `“${o.title}” is not one of the choices in “${g.title}”` };
+      // Twice is ambiguous: a double-click, or a request for two. Neither is assumable.
+      if (seen.has(id)) return { ok: false, refusal: `“${o.title}” was chosen twice` };
+      seen.add(id);
+      picked.push(o);
     }
-  }
 
-  const chosen = [...chosenAdditions, ...chosenVariations];
-  const discounts: ResolvedDiscount[] = [];
-  const includedLabels: string[] = [];
-  for (const o of chosen.sort((a, b) => a.position - b.position)) {
-    if (!o.incentive) continue;
-    if (o.incentive.kind === 'amount_off') {
-      discounts.push({ label: o.incentive.label, exPennies: o.incentive.exPennies,
-        vatable: o.incentive.vatable, grossOffPennies: o.incentive.grossOffPennies });
+    if (g.shape === 'pick_one') {
+      if (picked.length > 1) {
+        return { ok: false, refusal: `“${g.title}” is a choice of one, and ${picked.length} were chosen` };
+      }
     } else {
-      includedLabels.push(o.incentive.label);
+      const base = baseOf(mem);
+      // THE DEPENDENCY, AND THE WHOLE REASON THE GROUP HAS A SHAPE. An extra without its base is
+      // an order for work that nothing is holding up — fitting pads on a car that is not in for
+      // brakes. A group with NO base is the main quote's own extras, and the main quote is always
+      // happening, so there is nothing to depend on.
+      if (base && picked.some((p) => !p.isBase) && !picked.some((p) => p.isBase)) {
+        return { ok: false, refusal: `the extras in “${g.title}” need “${base.title}” as well — they are only done while that is being done` };
+      }
     }
+    chosen.push(...picked);
   }
 
+  chosen.sort((a, b) => a.position - b.position);
+  const { discounts, includedLabels, savingsGrossPennies } = incentivesOn(chosen);
   const displayGrossPennies = main.grossPennies
     + chosen.reduce((a, o) => a + o.grossPennies, 0)
-    - chosen.reduce((a, o) => a + amountOff(o), 0);
-  return { ok: true, resolution: { chosenAdditions, chosenVariations, discounts, includedLabels, displayGrossPennies } };
+    - savingsGrossPennies;
+  return { ok: true, resolution: { chosen, discounts, includedLabels, savingsGrossPennies, displayGrossPennies } };
 }
 
-/** Nothing chosen at all — the main quote on its own. Still an acceptance. */
-export const emptySelection = (): Selection => ({ additionIds: [], variationByGroup: {} });
+/**
+ * EVERY INCENTIVE IS READ HERE. Takes the SOURCES rather than options so a group-level incentive is
+ * a second argument one day, not a second implementation (see the note at the top of this file).
+ */
+export function incentivesOn(sources: readonly { title: string; incentive: Incentive | null }[]): {
+  discounts: ResolvedDiscount[]; includedLabels: string[]; savingsGrossPennies: number;
+} {
+  const discounts: ResolvedDiscount[] = [];
+  const includedLabels: string[] = [];
+  let savingsGrossPennies = 0;
+  for (const s of sources) {
+    const inc = s.incentive;
+    if (!inc) continue;
+    if (inc.kind === 'included') { includedLabels.push(inc.label); continue; }
+    if (movesMoney(inc)) {
+      discounts.push({ label: inc.label, exPennies: inc.exPennies, vatable: inc.vatable, grossOffPennies: inc.grossOffPennies });
+      savingsGrossPennies += inc.grossOffPennies;
+    }
+  }
+  return { discounts, includedLabels, savingsGrossPennies };
+}
+
+/**
+ * RESOLVING A PERCENTAGE, ONCE. Per line, rounded per line, then summed — because the lines are
+ * what the customer is looking at, and rounding the option total instead can differ by a penny or
+ * two from the lines that explain it. The result is frozen onto the option; nothing recomputes it.
+ */
+export function resolvePercentOff(percentBp: number, linePennies: readonly number[]): number {
+  return linePennies.reduce((a, p) => a + Math.round((p * percentBp) / 10000), 0);
+}
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────
  * WHAT THE PRINTED PAGE SHOWS
  * ──────────────────────────────────────────────────────────────────────────────────────────────── */
 
-export type PrintedVariationRow = {
-  optionId: string; title: string;
-  /** COMPLETE: the main quote plus this variation. Never a difference from the cheapest one. */
-  completeGrossPennies: number;
-  incentiveNote: string | null;
-};
-export type PrintedAdditionRow = {
-  optionId: string; title: string;
+export type PrintedRow = {
+  optionId: string; title: string; isBase: boolean;
+  /** This option's own price, as frozen. */
   ownGrossPennies: number;
-  /** The main quote plus this one addition, so the reader never adds anything up. */
-  withMainGrossPennies: number;
+  /** The COMPLETE figure where one exists: for a pick_one alternative, and for an extra that hangs
+   *  off the main quote, this is everything the customer would pay by choosing it and nothing else.
+   *  NULL inside a base_plus_extras group that HAS a base, where "complete" depends on the base and
+   *  on which other extras are ticked — a number there would be a different total for every reader. */
+  completeGrossPennies: number | null;
   incentiveNote: string | null;
 };
+
+export type PrintedGroup = { groupId: string; title: string; shape: GroupShape; rows: PrintedRow[] };
+
 export type PrintedQuote = {
   mainGrossPennies: number;
-  variationGroups: { groupKey: string; rows: PrintedVariationRow[] }[];
-  additions: PrintedAdditionRow[];
+  groups: PrintedGroup[];
   /**
    * NULL whenever a choice is open. A document showing three mutually exclusive prices and one
    * grand total is the single most misreadable thing we could print, so the total belongs to the
@@ -270,43 +351,120 @@ export type PrintedQuote = {
   openChoices: string[];
 };
 
-export function printedQuote(main: MainLite, options: readonly OptionLite[]): PrintedQuote {
-  const groups = [...variationGroups(options)].map(([groupKey, members]) => ({
-    groupKey,
-    rows: members.map((o) => ({
-      optionId: o.id, title: o.title,
-      completeGrossPennies: main.grossPennies + o.grossPennies - amountOff(o),
-      incentiveNote: incentiveNote(o),
-    })),
-  }));
-  const adds = additions(options).map((o) => ({
-    optionId: o.id, title: o.title,
-    ownGrossPennies: o.grossPennies,
-    withMainGrossPennies: main.grossPennies + o.grossPennies - amountOff(o),
-    incentiveNote: incentiveNote(o),
-  }));
+export function printedQuote(
+  main: MainLite, groups: readonly GroupLite[], options: readonly OptionLite[],
+): PrintedQuote {
+  const members = groupMembers(groups, options);
+  const printed: PrintedGroup[] = [];
   const open: string[] = [];
-  for (const g of groups) open.push(`which ${g.groupKey}`);
-  if (adds.length) open.push(adds.length === 1 ? 'whether to add the extra' : 'which extras to add');
+  for (const [gid, mem] of members) {
+    const g = groups.find((x) => x.id === gid)!;
+    const hasBase = !!baseOf(mem);
+    printed.push({
+      groupId: gid, title: g.title, shape: g.shape,
+      rows: mem.map((o) => ({
+        optionId: o.id, title: o.title, isBase: o.isBase,
+        ownGrossPennies: o.grossPennies,
+        completeGrossPennies: g.shape === 'pick_one' || !hasBase
+          ? main.grossPennies + o.grossPennies - grossOff(o)
+          : null,
+        incentiveNote: incentiveNote(o),
+      })),
+    });
+    open.push(g.shape === 'pick_one' ? `which ${g.title.toLowerCase()}` : `what to add from “${g.title}”`);
+  }
   return {
     mainGrossPennies: main.grossPennies,
-    variationGroups: groups,
-    additions: adds,
+    groups: printed,
     grandTotalPennies: open.length ? null : main.grossPennies,
     openChoices: open,
   };
 }
 
-/** What the incentive takes off the TOTAL, as frozen. Never the ex-VAT figure — that is the line. */
-const amountOff = (o: OptionLite): number => (o.incentive?.kind === 'amount_off' ? o.incentive.grossOffPennies : 0);
+/** What an incentive takes off the TOTAL, as frozen. Never the ex-VAT figure — that is the line. */
+const grossOff = (s: { incentive: Incentive | null }): number =>
+  movesMoney(s.incentive) ? s.incentive.grossOffPennies : 0;
 
 /**
- * An UNTRIGGERED incentive prints as an offer and never as a number in any total. If it could appear
- * in a total the document would contradict itself depending on who read it.
+ * An UNTRIGGERED incentive prints as an offer and never as a number in any total; if it could
+ * appear in a total the document would contradict itself depending on who read it. Takes a SOURCE,
+ * so a group-level incentive renders through this same sentence (see the note at the top).
  */
-export function incentiveNote(o: OptionLite): string | null {
-  if (!o.incentive) return null;
-  return o.incentive.kind === 'included'
-    ? `Includes ${o.incentive.label}`
-    : `${o.incentive.label} — already taken off the price shown`;
+export function incentiveNote(s: { incentive: Incentive | null }): string | null {
+  const inc = s.incentive;
+  if (!inc) return null;
+  if (inc.kind === 'included') return `Includes ${inc.label}`;
+  return `${inc.label} — already taken off the price shown`;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────────
+ * ONE TRANSLATION FROM A STORED ROW
+ *
+ * Four call sites rebuilt the incentive from its columns by hand. A third shape makes that four
+ * chances to forget one, and the site that forgot would print a quote missing a discount it had
+ * promised. So the reconstruction lives beside the type it reconstructs. Loose input types, so this
+ * module still has no database in it.
+ * ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+export type IncentiveRow = {
+  incentive_kind: string | null;
+  incentive_label: string | null;
+  incentive_ex_pennies: number | null;
+  incentive_vatable: boolean | null;
+  incentive_gross_off_pennies: number | null;
+  incentive_percent_bp: number | null;
+};
+
+/**
+ * REFUSES on a kind it does not know, rather than returning null. A null here would mean "no
+ * incentive", so a row written by a newer build would render as a quote with the discount silently
+ * missing — the customer reads a price that is not the offer. An unreadable stored shape is a
+ * deployment problem and must say so out loud (lib/quote-options is the only reader).
+ */
+export function incentiveFromRow(r: IncentiveRow): Incentive | null {
+  if (r.incentive_kind == null) return null;
+  const label = r.incentive_label ?? '';
+  switch (r.incentive_kind) {
+    case 'included':
+      return { kind: 'included', label };
+    case 'amount_off':
+      return { kind: 'amount_off', label, exPennies: r.incentive_ex_pennies ?? 0,
+        vatable: !!r.incentive_vatable, grossOffPennies: r.incentive_gross_off_pennies ?? 0 };
+    case 'percent_off':
+      return { kind: 'percent_off', label, percentBp: r.incentive_percent_bp ?? 0,
+        exPennies: r.incentive_ex_pennies ?? 0, vatable: !!r.incentive_vatable,
+        grossOffPennies: r.incentive_gross_off_pennies ?? 0 };
+    default:
+      throw new Error(`UNKNOWN_INCENTIVE_KIND:${r.incentive_kind}`);
+  }
+}
+
+export type OptionRow = IncentiveRow & {
+  id: string; group_id: string | null; is_base: boolean; title: string; position: number;
+  net_pennies: number; vat_pennies: number; gross_pennies: number;
+};
+
+/** A stored option as this module wants it. `group_id` is still nullable in the schema until the
+ *  backfill is proved, and an option with no group cannot be rendered or chosen — so it is given
+ *  its own id as a one-member group rather than being dropped, and optionsRefusal then names it. */
+export function optionFromRow(r: OptionRow): OptionLite {
+  return {
+    id: r.id, groupId: r.group_id ?? `ungrouped:${r.id}`, isBase: !!r.is_base,
+    title: r.title, position: r.position,
+    netPennies: r.net_pennies, vatPennies: r.vat_pennies, grossPennies: r.gross_pennies,
+    incentive: incentiveFromRow(r),
+  };
+}
+
+export type GroupRow = { id: string; shape: string; title: string; position: number };
+
+/** A stored group. The shape is validated by optionsRefusal, not here: this is a translation. */
+export function groupFromRow(r: GroupRow): GroupLite {
+  return { id: r.id, shape: r.shape as GroupShape, title: r.title, position: r.position };
+}
+
+/** A draft option as the authoring surface holds it — no frozen figures yet, so prices are the
+ *  caller's to sum from the lines assigned to the option. */
+export type DraftOptionRow = IncentiveRow & {
+  id: string; group_id: string | null; is_base: boolean; title: string; position: number;
+};

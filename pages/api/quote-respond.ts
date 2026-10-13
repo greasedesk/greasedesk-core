@@ -26,15 +26,18 @@ import type { Selection } from '@/lib/quote-options';
  *  lib/quote-acceptance's question, and it refuses rather than narrowing. */
 function normaliseSelection(v: unknown): Selection | null {
   if (!v || typeof v !== 'object') return null;
-  const o = v as { additionIds?: unknown; variationByGroup?: unknown };
-  const ids = Array.isArray(o.additionIds) ? o.additionIds.filter((x): x is string => typeof x === 'string') : [];
-  const byGroup: Record<string, string | null> = {};
-  if (o.variationByGroup && typeof o.variationByGroup === 'object') {
-    for (const [k, val] of Object.entries(o.variationByGroup as Record<string, unknown>)) {
-      byGroup[k] = typeof val === 'string' ? val : null;
+  // ONE SHAPE FOR BOTH GROUP SHAPES: groupId -> the ids chosen in it. An absent or empty list is a
+  // DECLINE, which is a valid answer to every group, so nothing here invents a default. Anything
+  // that is not a string is dropped rather than coerced — a selection is the agreement, and a
+  // coerced id would be an agreement to something nobody picked.
+  const o = v as { byGroup?: unknown };
+  const byGroup: Record<string, string[]> = {};
+  if (o.byGroup && typeof o.byGroup === 'object') {
+    for (const [k, val] of Object.entries(o.byGroup as Record<string, unknown>)) {
+      byGroup[k] = Array.isArray(val) ? val.filter((x): x is string => typeof x === 'string') : [];
     }
   }
-  return { additionIds: ids, variationByGroup: byGroup };
+  return { byGroup };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

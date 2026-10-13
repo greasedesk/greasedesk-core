@@ -2,19 +2,24 @@
  * File: scripts/quote-options-gate.mjs
  * @gate-requires: none
  *
- * OPTIONS ON A QUOTE: cumulative versus exclusive, and a printed page that asks no arithmetic of
- * the customer.
+ * WHAT A QUOTE OFFERS: two group shapes, three incentive shapes, and a page that asks no
+ * arithmetic of the customer.
  *
  * ── WHAT THIS IS FOR ────────────────────────────────────────────────────────────────────────────
- * The two kinds look identical on a screen and behave oppositely in arithmetic, so the clause this
- * gate exists for is the one a reader cannot check: that an ADDITION adds and a VARIATION replaces,
- * and that declining every variation is a valid answer rather than an error. The owner's ruling is
- * explicit — "forcing a choice turns a quote into an invoice" — and a default would be invisible
- * until a customer who wanted no service was billed for bronze.
+ * The shapes look identical on a screen and behave oppositely. `pick_one` replaces; the extras in a
+ * `base_plus_extras` group ADD, and only while the base is being done — fitting pads on a car that
+ * is not in for brakes is an order nothing is holding up. None of that is checkable by reading the
+ * page, and a wrong default would be invisible until a customer who wanted no service was billed
+ * for bronze. The owner's ruling stands: "forcing a choice turns a quote into an invoice", so a
+ * decline is a valid answer to EVERY group and nothing here invents one.
  *
- * Every refusal is planted and watched to fail. A quote is the document a job card, the parts and
- * the invoice all follow from, so a selection this module narrows silently is a selection nobody
- * agreed to.
+ * `percent_off` adds a trap the other two do not have: a percentage ROUNDS. 1% of £2 is nothing, so
+ * the page would promise a saving the bill does not show. The percentage is resolved once, per
+ * line, and never recomputed — this gate holds that the pennies are the promise.
+ *
+ * Every refusal is PLANTED and watched to fail, which is the red-proof: a refusal nobody has seen
+ * fire is a refusal that may not fire. A quote is the document the job card, the parts and the
+ * invoice all follow from, so a selection this module narrows silently is one nobody agreed to.
  */
 import './_gate-preflight.mjs';
 const { describeError } = await import('./_gate-preflight.mjs');
@@ -26,203 +31,198 @@ const R = '/Users/hugh/Developer/greasedesk-core';
 
 try {
   const Q = await import(`${R}/lib/quote-options.ts`);
-
+  const MAIN = { netPennies: 100000, vatPennies: 20000, grossPennies: 120000 };
+  const grp = (over = {}) => ({ id: 'g1', shape: 'pick_one', title: 'Service level', position: 1, ...over });
   const opt = (over = {}) => ({
-    id: 'o1', kind: 'addition', groupKey: null, title: 'Water pump', position: 1,
+    id: 'o1', groupId: 'g1', isBase: false, title: 'Bronze', position: 1,
     netPennies: 10000, vatPennies: 2000, grossPennies: 12000, incentive: null, ...over,
   });
-  const MAIN = { netPennies: 100000, vatPennies: 20000, grossPennies: 120000 };
+  const amountOff = (over = {}) => ({ kind: 'amount_off', label: '£50 off', exPennies: 5000, vatable: true, grossOffPennies: 6000, ...over });
+  const percentOff = (over = {}) => ({ kind: 'percent_off', label: '10% off', percentBp: 1000, exPennies: 1000, vatable: true, grossOffPennies: 1200, ...over });
+  /** A faithful two-alternative pick_one, and a base-with-extras group, as the happy paths. */
+  const PICK = { groups: [grp()], options: [opt({ id: 'a', title: 'Bronze' }), opt({ id: 'b', title: 'Silver', position: 2 })] };
+  const BASE = {
+    groups: [grp({ id: 'g2', shape: 'base_plus_extras', title: 'Brakes' })],
+    options: [
+      opt({ id: 'base', groupId: 'g2', isBase: true, title: 'Front discs and pads' }),
+      opt({ id: 'x1', groupId: 'g2', title: 'Brake fluid change', position: 2, grossPennies: 6000 }),
+    ],
+  };
 
-  console.log('— TWO KINDS, AND NOTHING ELSE —');
-  check('both kinds are accepted', Q.OPTION_KINDS.length === 2 && Q.isOptionKind('addition') && Q.isOptionKind('variation'), Q.OPTION_KINDS.join(', '));
-  check('  …and anything else is refused rather than defaulted to one of them',
-    !Q.isOptionKind('extra') && !Q.isOptionKind('') && !Q.isOptionKind(null) && !Q.isOptionKind('Addition'));
+  // ── 1 · THE SHAPES, AND WHAT EACH REFUSES ────────────────────────────────────────────────────
+  console.log('\n— two group shapes, and the faults each one has —');
+  check('a two-alternative pick_one is sendable', Q.optionsRefusal(PICK.groups, PICK.options) === null,
+    Q.optionsRefusal(PICK.groups, PICK.options) ?? 'the positive case, in the same run as the refusals');
+  check('a base with extras is sendable', Q.optionsRefusal(BASE.groups, BASE.options) === null,
+    Q.optionsRefusal(BASE.groups, BASE.options) ?? 'base + one extra');
+  check('  …and a base_plus_extras group with NO base is sendable too', (() => {
+    const g = [grp({ id: 'g3', shape: 'base_plus_extras', title: 'You can also add' })];
+    return Q.optionsRefusal(g, [opt({ id: 'e1', groupId: 'g3', title: 'Wiper blades' })]) === null;
+  })(), 'the base is then the MAIN QUOTE, which is always happening — the unification of the old standalone addition');
 
-  console.log('\n— WHAT MAY BE SENT —');
-  const clean = [
-    opt({ id: 'a1', title: 'Water pump', position: 1 }),
-    opt({ id: 'a2', title: 'Clutch and flywheel', position: 2 }),
-    opt({ id: 'v1', kind: 'variation', groupKey: 'service', title: 'Bronze', position: 3, grossPennies: 18000 }),
-    opt({ id: 'v2', kind: 'variation', groupKey: 'service', title: 'Silver', position: 4, grossPennies: 24000 }),
-    opt({ id: 'v3', kind: 'variation', groupKey: 'service', title: 'Gold', position: 5, grossPennies: 36000 }),
-  ];
-  check('a quote with two additions and three variations is accepted', Q.optionsRefusal(clean) === null, Q.optionsRefusal(clean) ?? 'accepted');
-  const bad = [
-    ['a variation with no group', [opt({ kind: 'variation', groupKey: null })]],
-    ['an addition inside a group', [opt({ groupKey: 'service' })]],
-    ['a kind nobody defined', [opt({ kind: 'extra' })]],
-    ['no title to choose by', [opt({ title: '  ' })]],
-    ['a negative price masquerading as an option', [opt({ grossPennies: -100 })]],
-    ['an exclusive group of one', [opt({ id: 'x', kind: 'variation', groupKey: 'service', title: 'Only one' })]],
-    ['two options with the same title', [opt({ id: 'a' }), opt({ id: 'b' })]],
-    ['an incentive that takes nothing off', [opt({ incentive: { kind: 'amount_off', label: '£0 off', exPennies: 0, vatable: true, grossOffPennies: 0 } })]],
-    ['an incentive with no wording', [opt({ incentive: { kind: 'amount_off', label: '', exPennies: 5000, vatable: true, grossOffPennies: 6000 } })]],
-    ['a saving off the net bigger than off the total', [opt({ incentive: { kind: 'amount_off', label: '£50 off', exPennies: 6000, vatable: true, grossOffPennies: 5000 } })]],
-    ['a VAT-free saving whose two figures disagree', [opt({ incentive: { kind: 'amount_off', label: '£50 off', exPennies: 5000, vatable: false, grossOffPennies: 6000 } })]],
-  ];
-  const missed = bad.filter(([, set]) => Q.optionsRefusal(set) === null).map(([l]) => l);
-  check(`every rule refuses its own case (${bad.length} planted)`, missed.length === 0, missed.join(' | ') || `${bad.length} of ${bad.length} refused`);
+  const refuses = (name, groups, options, want) => {
+    const r = Q.optionsRefusal(groups, options);
+    check(name, typeof r === 'string' && (!want || want.test(r)), r ?? 'ALLOWED — the refusal did not fire');
+  };
+  refuses('a pick_one with ONE alternative refuses', [grp()], [opt()], /at least two alternatives/);
+  refuses('  …and an empty one refuses', [grp()], [], /at least two alternatives/);
+  refuses('a base marked inside a pick_one refuses', [grp()],
+    [opt({ id: 'a', isBase: true }), opt({ id: 'b', title: 'Silver', position: 2 })], /nothing sits underneath/);
+  refuses('two bases in one group refuse', [grp({ shape: 'base_plus_extras' })],
+    [opt({ id: 'a', isBase: true }), opt({ id: 'b', title: 'Silver', isBase: true, position: 2 })], /cannot hang off more than one/);
+  refuses('a base with no extras refuses', [grp({ shape: 'base_plus_extras' })],
+    [opt({ id: 'a', isBase: true })], /option rather than a group/);
+  refuses('an option whose group is not on the quote refuses', [grp()],
+    [opt({ id: 'a' }), opt({ id: 'b', title: 'Silver', position: 2 }), opt({ id: 'c', title: 'Stray', groupId: 'nope', position: 3 })],
+    /group that is not on this quote/);
+  refuses('a group with no shape refuses', [grp({ shape: 'sideways' })], PICK.options, /no shape/);
+  refuses('a group with no title refuses', [grp({ title: '  ' })], PICK.options, /no title/);
+  refuses('an option with no title refuses', [grp()], [opt({ title: ' ' }), opt({ id: 'b', title: 'Silver', position: 2 })], /no title/);
+  refuses('a negative price refuses', [grp()],
+    [opt({ grossPennies: -1 }), opt({ id: 'b', title: 'Silver', position: 2 })], /a reduction is a discount/);
+  refuses('two options with the same title refuse', [grp()],
+    [opt({ id: 'a', title: 'Silver' }), opt({ id: 'b', title: 'silver ', position: 2 })], /cannot say which they meant/);
 
-  console.log('\n— CUMULATIVE VERSUS EXCLUSIVE —');
-  const groups = Q.variationGroups(clean);
-  check('variations group by their key, in document order',
-    groups.size === 1 && groups.get('service').map((o) => o.title).join('→') === 'Bronze→Silver→Gold',
-    [...groups.keys()].join(', '));
-  check('  …and an addition is in no group', Q.additions(clean).map((o) => o.title).join(', ') === 'Water pump, Clutch and flywheel');
+  // ── 2 · THE THIRD INCENTIVE SHAPE ────────────────────────────────────────────────────────────
+  console.log('\n— percent_off, which is the one that can round away —');
+  const withInc = (inc) => [opt({ id: 'a', incentive: inc }), opt({ id: 'b', title: 'Silver', position: 2 })];
+  check('a sound percent_off is sendable', Q.optionsRefusal([grp()], withInc(percentOff())) === null,
+    Q.optionsRefusal([grp()], withInc(percentOff())) ?? '10% off, resolved to 1000/1200');
+  refuses('a percentage of nothing refuses', [grp()], withInc(percentOff({ percentBp: 0 })), /percentage of nothing/);
+  refuses('100% or more refuses as “included”, not a discount', [grp()], withInc(percentOff({ percentBp: 10000 })), /which is “included”/);
+  refuses('A PERCENTAGE THAT ROUNDS AWAY refuses, and says so', [grp()],
+    withInc(percentOff({ exPennies: 0, grossOffPennies: 0 })), /rounds away to nothing/);
+  refuses('amount_off taking nothing refuses', [grp()], withInc(amountOff({ exPennies: 0 })), /takes nothing off/);
+  refuses('gross off below net off refuses', [grp()], withInc(amountOff({ grossOffPennies: 4000 })), /more off the net than off the total/);
+  refuses('non-vatable with a different gross refuses', [grp()], withInc(amountOff({ vatable: false, grossOffPennies: 6000 })), /must equal the saving off the net/);
+  refuses('taking more off than the option costs refuses', [grp()],
+    withInc(amountOff({ exPennies: 20000, grossOffPennies: 24000 })), /more off than the option costs/);
+  refuses('an incentive with no wording refuses', [grp()], withInc(percentOff({ label: ' ' })), /no wording/);
 
-  const r = (sel) => Q.resolveSelection(MAIN, clean, sel);
-  const none = r(Q.emptySelection());
-  check('choosing NOTHING is a valid acceptance of the main quote alone',
-    none.ok && none.resolution.displayGrossPennies === 120000 && none.resolution.chosenAdditions.length === 0,
-    none.ok ? `£${(none.resolution.displayGrossPennies / 100).toFixed(2)}` : none.refusal);
-  const both = r({ additionIds: ['a1', 'a2'], variationByGroup: {} });
-  check('two additions are CUMULATIVE — the main quote plus both',
-    both.ok && both.resolution.displayGrossPennies === 120000 + 12000 + 12000,
-    both.ok ? `£${(both.resolution.displayGrossPennies / 100).toFixed(2)}` : both.refusal);
-  const gold = r({ additionIds: [], variationByGroup: { service: 'v3' } });
-  check('one variation REPLACES rather than adds to the others',
-    gold.ok && gold.resolution.displayGrossPennies === 120000 + 36000 && gold.resolution.chosenVariations.length === 1,
-    gold.ok ? `£${(gold.resolution.displayGrossPennies / 100).toFixed(2)}` : gold.refusal);
-  const mixed = r({ additionIds: ['a1'], variationByGroup: { service: 'v1' } });
-  check('  …and a quote may carry both kinds at once',
-    mixed.ok && mixed.resolution.displayGrossPennies === 120000 + 12000 + 18000,
-    mixed.ok ? `£${(mixed.resolution.displayGrossPennies / 100).toFixed(2)}` : mixed.refusal);
+  console.log('\n— and the percentage is resolved ONCE, per line —');
+  check('per-line rounding, then summed', Q.resolvePercentOff(1000, [333, 333, 333]) === 99,
+    `${Q.resolvePercentOff(1000, [333, 333, 333])}p — 10% of 333p is 33.3p, which rounds to 33p, three times`);
+  check('  …AND IT DIFFERS from rounding the option total', (() => {
+    const perLine = Q.resolvePercentOff(1000, [333, 333, 333]);   // 99
+    const wholeTotal = Math.round((999 * 1000) / 10000);          // 100
+    return perLine === 99 && wholeTotal === 100 && perLine !== wholeTotal;
+  })(), 'per line 99p, the total 100p — a penny apart, and the lines are what the customer is reading');
+  check('  …and a percentage can round away entirely', Q.resolvePercentOff(100, [200]) === 2 && Q.resolvePercentOff(1, [200]) === 0,
+    'which is why optionsRefusal has a clause for it rather than printing it');
 
-  /** THE OWNER'S RULING. A default would be invisible until somebody was billed for bronze. */
-  console.log('\n— DECLINING EVERY VARIATION IS AN ANSWER —');
-  const declinedAll = r({ additionIds: [], variationByGroup: { service: null } });
-  check('an explicit "none of these" is accepted, not refused',
-    declinedAll.ok && declinedAll.resolution.chosenVariations.length === 0
-    && declinedAll.resolution.displayGrossPennies === 120000,
-    declinedAll.ok ? 'main quote only' : declinedAll.refusal);
-  const silent = r({ additionIds: [], variationByGroup: {} });
-  check('  …and a group the customer never mentioned means the same thing',
-    silent.ok && silent.resolution.chosenVariations.length === 0, silent.ok ? 'treated as none' : silent.refusal);
+  // ── 3 · WHAT A CUSTOMER CAN SAY ──────────────────────────────────────────────────────────────
+  console.log('\n— a decline is a valid answer to every group —');
+  const res = (fix, sel) => Q.resolveSelection(MAIN, fix.groups, fix.options, { byGroup: sel });
+  const empty = res(PICK, {});
+  check('choosing nothing resolves, and the total is the main quote',
+    empty.ok && empty.resolution.chosen.length === 0 && empty.resolution.displayGrossPennies === MAIN.grossPennies,
+    empty.ok ? String(empty.resolution.displayGrossPennies) : empty.refusal);
+  const none = res(PICK, { g1: [] });
+  check('  …and an explicit empty list is the same answer', none.ok && none.resolution.chosen.length === 0);
+  const one = res(PICK, { g1: ['b'] });
+  check('one alternative adds its own price', one.ok && one.resolution.displayGrossPennies === 132000,
+    one.ok ? String(one.resolution.displayGrossPennies) : one.refusal);
 
-  console.log('\n— A SELECTION THAT MAKES NO SENSE IS REFUSED, NEVER NARROWED —');
-  const unknown = r({ additionIds: ['nope'], variationByGroup: {} });
-  check('an option that is no longer on the quote refuses', !unknown.ok, unknown.ok ? 'ACCEPTED' : unknown.refusal);
-  check('  …and the refusal tells the customer what to do about it', !unknown.ok && /Ask the garage to send it again/.test(unknown.refusal));
-  const twice = r({ additionIds: ['a1', 'a1'], variationByGroup: {} });
-  check('the same addition chosen twice refuses, because two is as plausible as a double-click', !twice.ok, twice.ok ? 'ACCEPTED' : twice.refusal);
-  const wrongKind = r({ additionIds: ['v1'], variationByGroup: {} });
-  check('a variation chosen as an addition refuses', !wrongKind.ok, wrongKind.ok ? 'ACCEPTED' : wrongKind.refusal);
-  const stale = r({ additionIds: [], variationByGroup: { tyres: 'v1' } });
-  check('a group that is not on this quote refuses', !stale.ok, stale.ok ? 'ACCEPTED' : stale.refusal);
+  const refusesSel = (name, fix, sel, want) => {
+    const r = res(fix, sel);
+    check(name, !r.ok && (!want || want.test(r.refusal)), r.ok ? 'RESOLVED — the refusal did not fire' : r.refusal);
+  };
+  refusesSel('two from a pick_one refuses', PICK, { g1: ['a', 'b'] }, /choice of one/);
+  refusesSel('the same option twice refuses', PICK, { g1: ['a', 'a'] }, /chosen twice/);
+  refusesSel('an option from another group refuses', PICK, { g1: ['base'] }, /no longer on this quote/);
+  refusesSel('an unknown option refuses', PICK, { g1: ['ghost'] }, /no longer on this quote/);
+  refusesSel('a group the quote does not have refuses', PICK, { gone: ['a'] }, /no longer on this quote/);
 
-  console.log('\n— THE TWO INCENTIVES DO DIFFERENT ARITHMETIC —');
-  const withOff = [
-    opt({ id: 'a1', title: 'Water pump', position: 1, incentive: { kind: 'amount_off', label: '£50 off with the main work', exPennies: 5000, vatable: true, grossOffPennies: 6000 } }),
-    opt({ id: 'v1', kind: 'variation', groupKey: 'service', title: 'Gold', position: 2, grossPennies: 36000, incentive: { kind: 'included', label: 'a free diagnostic' } }),
-    opt({ id: 'v2', kind: 'variation', groupKey: 'service', title: 'Silver', position: 3, grossPennies: 24000 }),
-  ];
-  const offRes = Q.resolveSelection(MAIN, withOff, { additionIds: ['a1'], variationByGroup: {} });
-  check('an amount-off becomes a DISCOUNT LINE with a positive magnitude, as lib/promo expects',
-    offRes.ok && offRes.resolution.discounts.length === 1 && offRes.resolution.discounts[0].exPennies === 5000
-    && offRes.resolution.discounts[0].vatable === true,
-    offRes.ok ? JSON.stringify(offRes.resolution.discounts[0]) : offRes.refusal);
-  check('  …and the total falls by the GROSS saving, not the ex-VAT one',
-    offRes.ok && offRes.resolution.displayGrossPennies === 120000 + 12000 - 6000,
-    offRes.ok ? `£${(offRes.resolution.displayGrossPennies / 100).toFixed(2)} (ex-VAT 5000 would have given £1,270.00)` : offRes.refusal);
-  const incRes = Q.resolveSelection(MAIN, withOff, { additionIds: [], variationByGroup: { service: 'v1' } });
-  /** THE DISTINCTION. A free diagnostic is GIVEN, not discounted: subtracting its price would make
-   *  the bill fall for an item that was never charged for. */
-  check('an "included" incentive moves NO money and is named instead',
-    incRes.ok && incRes.resolution.discounts.length === 0
-    && incRes.resolution.includedLabels.join() === 'a free diagnostic'
-    && incRes.resolution.displayGrossPennies === 120000 + 36000,
-    incRes.ok ? `£${(incRes.resolution.displayGrossPennies / 100).toFixed(2)}, included: ${incRes.resolution.includedLabels.join()}` : incRes.refusal);
-  const untriggered = Q.resolveSelection(MAIN, withOff, { additionIds: [], variationByGroup: { service: 'v2' } });
-  check('an incentive on something NOT chosen reaches no total at all',
-    untriggered.ok && untriggered.resolution.discounts.length === 0 && untriggered.resolution.includedLabels.length === 0
-    && untriggered.resolution.displayGrossPennies === 120000 + 24000,
-    untriggered.ok ? `£${(untriggered.resolution.displayGrossPennies / 100).toFixed(2)}` : untriggered.refusal);
+  console.log('\n— and an extra needs the base it hangs off —');
+  refusesSel('AN EXTRA WITHOUT ITS BASE REFUSES', BASE, { g2: ['x1'] }, /need “Front discs and pads” as well/);
+  const both = res(BASE, { g2: ['base', 'x1'] });
+  check('  …and with the base it resolves', both.ok && both.resolution.chosen.length === 2,
+    both.ok ? `${both.resolution.displayGrossPennies}` : both.refusal);
+  const baseOnly = res(BASE, { g2: ['base'] });
+  check('  …the base alone is fine', baseOnly.ok && baseOnly.resolution.chosen.length === 1);
+  check('  …and in a group with NO base, an extra stands alone', (() => {
+    const fix = { groups: [grp({ id: 'g3', shape: 'base_plus_extras', title: 'Also' })],
+      options: [opt({ id: 'e1', groupId: 'g3', title: 'Wipers' })] };
+    const r = res(fix, { g3: ['e1'] });
+    return r.ok && r.resolution.chosen.length === 1;
+  })(), 'the main quote is the base, and it is always happening');
 
-  console.log('\n— THE PRINTED PAGE ASKS NO ARITHMETIC —');
-  const doc = Q.printedQuote(MAIN, clean);
-  const rows = doc.variationGroups[0].rows;
-  check('a variation prints a COMPLETE price including the main work',
-    rows.map((x) => x.completeGrossPennies).join(',') === '138000,144000,156000',
-    rows.map((x) => `${x.title} £${(x.completeGrossPennies / 100).toFixed(2)}`).join(' · '));
-  check('  …and not a difference from the cheapest, which a reader adds to the wrong base',
-    rows[0].completeGrossPennies !== 18000 && rows[2].completeGrossPennies !== 36000);
-  check('an addition prints its own price AND the total with the main work',
-    doc.additions[0].ownGrossPennies === 12000 && doc.additions[0].withMainGrossPennies === 132000,
-    `own £${(doc.additions[0].ownGrossPennies / 100).toFixed(2)}, with main £${(doc.additions[0].withMainGrossPennies / 100).toFixed(2)}`);
-  /** NO GRAND TOTAL WHILE A CHOICE IS OPEN — one big number beside three exclusive prices is the
-   *  single most misreadable thing we could print. */
-  check('there is NO grand total while a choice is open', doc.grandTotalPennies === null, String(doc.grandTotalPennies));
-  check('  …and the page says what is still to decide', doc.openChoices.length === 2 && /which service/.test(doc.openChoices.join('|')), doc.openChoices.join(' · '));
-  const plain = Q.printedQuote(MAIN, []);
-  check('a quote with no options DOES carry its total, as it always did', plain.grandTotalPennies === 120000, String(plain.grandTotalPennies));
-  const offDoc = Q.printedQuote(MAIN, withOff);
-  check('a discounted addition prints the price with the saving already in it',
-    offDoc.additions[0].withMainGrossPennies === 126000, `£${(offDoc.additions[0].withMainGrossPennies / 100).toFixed(2)}`);
-  check('  …and says so, so nobody expects the saving twice',
-    /already taken off the price shown/.test(offDoc.additions[0].incentiveNote ?? ''), offDoc.additions[0].incentiveNote);
-  check('  …while an included extra is named as included, not as a saving',
-    /^Includes a free diagnostic$/.test(offDoc.variationGroups[0].rows[0].incentiveNote ?? ''), offDoc.variationGroups[0].rows[0].incentiveNote);
+  // ── 4 · THE SAVINGS FIGURE ───────────────────────────────────────────────────────────────────
+  console.log('\n— what they saved, and what is only stated —');
+  const savings = (inc) => {
+    const fix = { groups: [grp({ id: 'g4', shape: 'base_plus_extras', title: 'Also' })],
+      options: [opt({ id: 'e1', groupId: 'g4', title: 'Service', incentive: inc })] };
+    return res(fix, { g4: ['e1'] });
+  };
+  const sAmount = savings(amountOff());
+  check('amount_off counts toward the savings', sAmount.ok && sAmount.resolution.savingsGrossPennies === 6000,
+    sAmount.ok ? String(sAmount.resolution.savingsGrossPennies) : sAmount.refusal);
+  const sPercent = savings(percentOff());
+  check('percent_off counts toward it too', sPercent.ok && sPercent.resolution.savingsGrossPennies === 1200);
+  const sIncluded = savings({ kind: 'included', label: 'a free diagnostic' });
+  check('INCLUDED COUNTS NOTHING toward the figure', sIncluded.ok && sIncluded.resolution.savingsGrossPennies === 0,
+    'a saving the invoice does not show is a figure that will not match it');
+  check('  …but it IS stated, as its own line', sIncluded.ok && sIncluded.resolution.includedLabels.length === 1
+    && /free diagnostic/.test(sIncluded.resolution.includedLabels[0]),
+    sIncluded.ok ? sIncluded.resolution.includedLabels.join(', ') : '');
+  check('  …and it does not move the total', sIncluded.ok && sIncluded.resolution.displayGrossPennies === MAIN.grossPennies + 12000);
+  check('the discount reaches the caller as a POSITIVE magnitude', sAmount.ok
+    && sAmount.resolution.discounts.length === 1 && sAmount.resolution.discounts[0].exPennies === 5000,
+    'lib/promo stores it as the negative line; a negative here would be double-negated');
+  check('the savings figure is the sum, not the last one', (() => {
+    const fix = { groups: [grp({ id: 'g5', shape: 'base_plus_extras', title: 'Also' })],
+      options: [opt({ id: 'e1', groupId: 'g5', title: 'A', incentive: amountOff() }),
+        opt({ id: 'e2', groupId: 'g5', title: 'B', position: 2, incentive: percentOff() })] };
+    const r = res(fix, { g5: ['e1', 'e2'] });
+    return r.ok && r.resolution.savingsGrossPennies === 7200;
+  })(), '6000 + 1200');
 
-  console.log('\n— ONE STATED RULE FOR gross_pennies —');
-  check('the rule is written down where a reader of the column will find it',
-    /MAIN quote as sent, excluding all options/.test(Q.GROSS_PENNIES_MEANS));
-  check('  …and it is asserted against the arithmetic, not left as a convention',
-    Q.grossAgreesWithRule(120000, MAIN) === true && Q.grossAgreesWithRule(120000 + 36000, MAIN) === false,
-    'the main gross agrees; main-plus-options does not');
+  // ── 5 · THE PRINTED PAGE ─────────────────────────────────────────────────────────────────────
+  console.log('\n— and the printed page asks no arithmetic —');
+  const pPick = Q.printedQuote(MAIN, PICK.groups, PICK.options);
+  check('a pick_one row carries the COMPLETE price', pPick.groups[0].rows.every((r) => r.completeGrossPennies === 132000),
+    'never a difference from the cheapest, which a reader adds to the wrong base');
+  const pBase = Q.printedQuote(MAIN, BASE.groups, BASE.options);
+  check('inside a group WITH a base there is no complete price', pBase.groups[0].rows.every((r) => r.completeGrossPennies === null),
+    '"complete" would depend on the base and on which other extras are ticked — a different total for every reader');
+  check('  …and every row still carries its OWN price', pBase.groups[0].rows.every((r) => r.ownGrossPennies > 0));
+  check('no grand total while a choice is open', pPick.grandTotalPennies === null && pPick.openChoices.length === 1,
+    pPick.openChoices.join(' and '));
+  check('with no groups at all the total is the main quote', (() => {
+    const p = Q.printedQuote(MAIN, [], []);
+    return p.grandTotalPennies === MAIN.grossPennies && p.openChoices.length === 0;
+  })());
+  check('an incentive prints as an offer, never as a number in a total', (() => {
+    const note = Q.incentiveNote({ incentive: percentOff() });
+    const inc = Q.incentiveNote({ incentive: { kind: 'included', label: 'a free diagnostic' } });
+    return /already taken off/.test(note) && /^Includes /.test(inc) && Q.incentiveNote({ incentive: null }) === null;
+  })());
 
-  /**
-   * ── THE MATERIAL KEY, WHICH NOTHING COVERED ───────────────────────────────────────────────────
-   * `materialBag` decides whether editing an estimate supersedes a quote that is out with a
-   * customer, and no gate asserted any of its rules. Found while fixing three source files that
-   * held RAW NUL BYTES — the separator in this very key was one of them — which made `grep` print
-   * nothing for the whole file and left this ungated surface invisible to a survey as well.
-   */
-  console.log('\n— WHAT COUNTS AS A MATERIAL EDIT —');
-  const V = await import(`${R}/lib/quote-version.ts`);
-  const ml = (d, q, u, vr) => ({ description: d, qty: q, unit_price: u, vat_rate: vr });
-  const bag = (ls, reg) => [...V.materialBag(ls, reg).entries()].sort().map(([k, n]) => `${k}×${n}`).join(' ');
-  check('the same lines in a different order are the same bag',
-    bag([ml('Pads', 1, 50, 20), ml('Discs', 2, 80, 20)], true) === bag([ml('Discs', 2, 80, 20), ml('Pads', 1, 50, 20)], true));
-  check('  …and a repeated line is counted, not collapsed',
-    bag([ml('Pads', 1, 50, 20), ml('Pads', 1, 50, 20)], true).includes('×2'));
-  check('surrounding whitespace in a description is not a material change',
-    bag([ml('  Pads  ', 1, 50, 20)], true) === bag([ml('Pads', 1, 50, 20)], true));
-  /** THE SUBTLE ONE, and the only rule with a reason attached: an unregistered quote prints no VAT
-   *  column, so a rate change there is invisible to the customer and must not supersede. */
-  check('a VAT rate change is material when registered',
-    bag([ml('Pads', 1, 50, 20)], true) !== bag([ml('Pads', 1, 50, 5)], true));
-  check('  …and NOT material when the garage is unregistered, because the page shows no VAT',
-    bag([ml('Pads', 1, 50, 20)], false) === bag([ml('Pads', 1, 50, 5)], false));
-  check('a price or quantity change is material either way',
-    bag([ml('Pads', 1, 50, 20)], false) !== bag([ml('Pads', 2, 50, 20)], false)
-    && bag([ml('Pads', 1, 50, 20)], false) !== bag([ml('Pads', 1, 51, 20)], false));
-  /** The separator must be something a customer cannot type, or a description could forge a field
-   *  boundary. Asserted as the property, not the character: the key for a description full of every
-   *  plausible separator still reads as ONE field. */
-  const trick = V.materialBag([ml('Pads 1 50 20, 1|50\t20', 1, 50, 20)], true);
-  check('a description full of plausible separators still forges no field boundary',
-    [...trick.keys()][0].split('\0').length === 4, `${[...trick.keys()][0].split('\0').length} fields`);
+  // ── 6 · ONE TRANSLATION FROM A STORED ROW ────────────────────────────────────────────────────
+  console.log('\n— and a stored row becomes an incentive in exactly one place —');
+  const row = (over = {}) => ({
+    incentive_kind: null, incentive_label: null, incentive_ex_pennies: null,
+    incentive_vatable: null, incentive_gross_off_pennies: null, incentive_percent_bp: null, ...over,
+  });
+  check('no incentive reads as none', Q.incentiveFromRow(row()) === null);
+  check('a percent_off row keeps its basis points', (() => {
+    const i = Q.incentiveFromRow(row({ incentive_kind: 'percent_off', incentive_label: '10% off',
+      incentive_percent_bp: 1000, incentive_ex_pennies: 1000, incentive_vatable: true, incentive_gross_off_pennies: 1200 }));
+    return i.kind === 'percent_off' && i.percentBp === 1000 && i.grossOffPennies === 1200;
+  })(), 'the percentage is the wording and the re-editable input; the pennies are the promise');
+  check('AN UNKNOWN KIND THROWS rather than reading as “no incentive”', (() => {
+    try { Q.incentiveFromRow(row({ incentive_kind: 'buy_one_get_one' })); return false; }
+    catch (e) { return /UNKNOWN_INCENTIVE_KIND/.test(String(e.message)); }
+  })(), 'a null would print a quote with a discount it promised silently missing');
+  check('an option row with no group gets a group of its own, and is then NAMED', (() => {
+    const o = Q.optionFromRow({ ...row(), id: 'o9', group_id: null, is_base: false, title: 'Orphan',
+      position: 1, net_pennies: 100, vat_pennies: 20, gross_pennies: 120 });
+    return o.groupId === 'ungrouped:o9' && /group that is not on this quote/.test(Q.optionsRefusal([], [o]) ?? '');
+  })(), 'dropping it would be a silent omission; this makes it a visible fault');
 
-  /**
-   * ── THE LIMITER MATCHER, AGAINST THE REAL SENTENCE ────────────────────────────────────────────
-   * A gate that opens a customer link spends one of 60 per IP per hour, and a spent limiter renders
-   * a page that looks exactly like a missing feature. The matcher is asserted against the words the
-   * page actually prints, and against an ordinary page, because a matcher that fires on everything
-   * would turn every genuine red into "not a failure".
-   */
-  console.log('\n— AN EXHAUSTED LIMITER NAMES ITSELF —');
-  const { LIMITER_EXHAUSTED } = await import('./_gate-preflight.mjs');
-  const realPage = 'Too many attemptsToo many links have been opened from this connection in the last hour. '
-    + 'Please wait a little while and try again.We use strictly-necessary cookies to keep the site working.';
-  check('it recognises the page the limiter actually serves', LIMITER_EXHAUSTED.test(realPage));
-  check('  …and does NOT fire on an ordinary quote page',
-    !LIMITER_EXHAUSTED.test('Your quote from ZZ Gate Garage. Accept quote. Decline quote. Choose one.'));
-  check('  …nor on a page that merely mentions a link', !LIMITER_EXHAUSTED.test('Open the link we sent you.'));
-
+  console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 } catch (e) {
-  check('run completed', false, describeError(e).slice(0, 300));
-} finally {
-  const f = out.filter((x) => x === 'F').length;
-  console.log(`\n${f} failures of ${out.length}`);
-  process.exit(f ? 1 : 0);
+  check('run completed', false, describeError(e));
+  console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 }
+process.exit(out.includes('F') ? 1 : 0);

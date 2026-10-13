@@ -1,3 +1,4 @@
+import { optionFromRow, groupFromRow, type GroupLite } from '@/lib/quote-options';
 /**
  * File: lib/quote-doc.ts
  * THE resolver of a QUOTE's renderable document — the sibling of lib/invoice-doc, deliberately
@@ -66,6 +67,9 @@ export type QuoteDoc = {
   lines: DocLine[];
   /** Options on THIS version, for the selector and the printed layout (lib/quote-options). */
   options: OptionLite[];
+  /** The GROUPS those options sit in. Shipped together because the shape decides what choosing
+   *  means, and a document that rendered options without them would be guessing (lib/quote-options). */
+  optionGroups: GroupLite[];
   totals: InvoiceTotals;
   currency: string;
   locale: string;
@@ -78,6 +82,7 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
       id: true, job_card_id: true, version: true, status: true, sent_at: true,
       vat_registered: true, tax_label: true, note: true, narrative: true,
       options: { orderBy: { position: 'asc' } },
+      option_groups: { orderBy: { position: 'asc' } },
       /**
        * THE MAIN QUOTE ONLY. `option_id: null` is what makes a line part of the quote itself rather
        * than one of its alternatives — and without this filter the printed table and the totals
@@ -107,7 +112,7 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
   // SAME mapping as invoice-doc: pounds→pennies at the edge, then ONE totals aggregation.
   // ONE widened read for the three columns the generated client does not narrow here, instead of
   // three separate casts: each `as any` is a place the type-checker stops seeing a missing select.
-  const vv = v as { narrative?: string | null; note?: string | null; options?: any[] };
+  const vv = v as { narrative?: string | null; note?: string | null; options?: any[]; option_groups?: any[] };
   const lines: DocLine[] = v.lines.map((l: any) => ({
     description: l.description,
     qty: Number(l.qty),
@@ -153,14 +158,9 @@ export async function buildQuoteDoc(quoteVersionId: string, expiresAt: Date): Pr
     narrative: vv.narrative || null,
     revisionNote: vv.note || null,
     lines,
-    options: (vv.options ?? []).map((o: any) => ({
-      id: o.id, kind: o.kind, groupKey: o.group_key, title: o.title, position: o.position,
-      netPennies: o.net_pennies, vatPennies: o.vat_pennies, grossPennies: o.gross_pennies,
-      incentive: o.incentive_kind === 'amount_off'
-        ? { kind: 'amount_off', label: o.incentive_label ?? '', exPennies: o.incentive_ex_pennies ?? 0,
-            vatable: !!o.incentive_vatable, grossOffPennies: o.incentive_gross_off_pennies ?? 0 }
-        : o.incentive_kind === 'included' ? { kind: 'included', label: o.incentive_label ?? '' } : null,
-    })),
+    // ONE TRANSLATION, shared with the acceptance path — see lib/quote-options::optionFromRow.
+    options: (vv.options ?? []).map((o: any) => optionFromRow(o)),
+    optionGroups: (vv.option_groups ?? []).map((g: any) => groupFromRow(g)),
     totals,
     currency: v.job_card?.site?.currency_code ?? 'GBP',
     locale: v.job_card?.site?.locale ?? 'en-GB',

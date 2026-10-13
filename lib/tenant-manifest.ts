@@ -136,8 +136,10 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   QuoteVersionLine: VIA('QuoteVersion'),
   // Reachable through its version, which is how it avoids a second copy of the tenant id.
   QuoteOption: VIA('QuoteVersion'),
+  QuoteOptionGroup: VIA('QuoteVersion'),
   // The draft half, reachable through the card it is being written on.
   QuoteOptionDraft: VIA('JobCard'),
+  QuoteOptionGroupDraft: VIA('JobCard'),
 
   // ── THE MONEY: documents frozen at issue, and what settled them ───────────────────────────────
   Invoice: TENANT(),

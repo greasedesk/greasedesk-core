@@ -36,7 +36,8 @@
 import { Prisma } from '@prisma/client';
 import { writeAudit } from '@/lib/audit';
 import { findTransition, type JobStatus } from '@/lib/jobcard-status';
-import { resolveSelection, optionsRefusal, type Selection, type OptionLite } from '@/lib/quote-options';
+import { resolveSelection, optionsRefusal, optionFromRow, groupFromRow,
+  type Selection, type OptionLite, type GroupLite, type OptionRow, type GroupRow } from '@/lib/quote-options';
 
 /** Which door the acceptance came through. Recorded in the audit diff, never in a status. */
 export type AcceptVia = 'link' | 'counter' | 'booked';
@@ -121,16 +122,16 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
   })) as LiveVersion | null;
 
   // ── OPTIONS: THE SELECTION IS THE AGREEMENT ───────────────────────────────────────────────────
+  // The GROUPS come with them: the shape is what decides whether choosing two of something is an
+  // order for both or a contradiction, so loading options without their groups would resolve a
+  // selection against rules nobody fetched (see lib/quote-options).
   const options: OptionLite[] = live
     ? (await tx.quoteOption.findMany({ where: { quote_version_id: live.id }, orderBy: { position: 'asc' } }))
-      .map((o: any) => ({
-        id: o.id, kind: o.kind, groupKey: o.group_key, title: o.title, position: o.position,
-        netPennies: o.net_pennies, vatPennies: o.vat_pennies, grossPennies: o.gross_pennies,
-        incentive: o.incentive_kind === 'amount_off'
-          ? { kind: 'amount_off' as const, label: o.incentive_label ?? '', exPennies: o.incentive_ex_pennies ?? 0,
-              vatable: !!o.incentive_vatable, grossOffPennies: o.incentive_gross_off_pennies ?? 0 }
-          : o.incentive_kind === 'included' ? { kind: 'included' as const, label: o.incentive_label ?? '' } : null,
-      }))
+      .map((o) => optionFromRow(o as unknown as OptionRow))
+    : [];
+  const groups: GroupLite[] = live
+    ? (await tx.quoteOptionGroup.findMany({ where: { quote_version_id: live.id }, orderBy: { position: 'asc' } }))
+      .map((g) => groupFromRow(g as unknown as GroupRow))
     : [];
 
   let resolved: { version: number; id: string } | null = null;
@@ -138,19 +139,19 @@ export async function acceptQuote(tx: Prisma.TransactionClient, args: AcceptQuot
   // exists, and the cast that used to be here hid the fact that nothing said so.
   if (live && options.length) {
     if (!args.selection) throw new Error('SELECTION_REQUIRED');
-    const bad = optionsRefusal(options);
+    const bad = optionsRefusal(groups, options);
     if (bad) throw new Error(`OPTIONS_UNSENDABLE:${bad}`);
     const r = resolveSelection(
       { netPennies: live.net_pennies, vatPennies: live.vat_pennies, grossPennies: live.gross_pennies },
-      options, args.selection,
+      groups, options, args.selection,
     );
     if (!r.ok) throw new Error(`SELECTION_REFUSED:${r.refusal}`);
     resolved = await mintResolvedVersion(tx, {
       card: card.id, groupId: args.groupId, live, options, selection: args.selection,
-      chosen: [...r.resolution.chosenAdditions, ...r.resolution.chosenVariations],
+      chosen: r.resolution.chosen,
       discounts: r.resolution.discounts, at: args.at, args,
     });
-  } else if (args.selection && (args.selection.additionIds.length || Object.keys(args.selection.variationByGroup).length)) {
+  } else if (args.selection && Object.values(args.selection.byGroup).some((ids) => ids.length)) {
     // A selection against a quote with no options is a stale document in the customer's browser.
     throw new Error('SELECTION_WITHOUT_OPTIONS');
   }

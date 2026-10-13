@@ -93,14 +93,33 @@ try {
     select: { id: true },
   });
 
+  // ── THE OFFER, AS THREE INDEPENDENT GROUPS ────────────────────────────────────────────────────
+  // One of each shape the model has, plus the case the shape exists FOR: extras that hang off a
+  // base. `kind` and `group_key` are still written because the columns are still NOT NULL / still
+  // there — they are the retiring flat shape and nothing reads them any more.
+  const mkGroup = async (g) => prisma.quoteOptionGroup.create({ data: { quote_version_id: v1.id, ...g }, select: { id: true } });
+  const gExtras = await mkGroup({ shape: 'base_plus_extras', position: 1, title: 'You can also add' });
+  const gService = await mkGroup({ shape: 'pick_one', position: 2, title: 'Service level' });
+  const gBrakes = await mkGroup({ shape: 'base_plus_extras', position: 3, title: 'Brakes' });
+
   const mkOpt = async (o) => prisma.quoteOption.create({ data: { quote_version_id: v1.id, ...o }, select: { id: true } });
-  const pump = await mkOpt({ kind: 'addition', position: 1, title: 'Water pump', net_pennies: 10000, vat_pennies: 2000, gross_pennies: 12000,
+  // gExtras has NO base: the base is the MAIN QUOTE, which is always happening. This is the old
+  // standalone `addition`, and it must keep behaving exactly as it did.
+  const pump = await mkOpt({ kind: 'addition', group_id: gExtras.id, position: 1, title: 'Water pump', net_pennies: 10000, vat_pennies: 2000, gross_pennies: 12000,
     incentive_kind: 'amount_off', incentive_label: '£50 off with the rebuild', incentive_ex_pennies: 5000, incentive_vatable: true, incentive_gross_off_pennies: 6000 });
-  const clutch = await mkOpt({ kind: 'addition', position: 2, title: 'Clutch and flywheel', net_pennies: 30000, vat_pennies: 6000, gross_pennies: 36000 });
-  const bronze = await mkOpt({ kind: 'variation', position: 3, group_key: 'service', title: 'Bronze service', net_pennies: 7500, vat_pennies: 1500, gross_pennies: 9000 });
-  const silver = await mkOpt({ kind: 'variation', position: 4, group_key: 'service', title: 'Silver service', net_pennies: 12500, vat_pennies: 2500, gross_pennies: 15000 });
-  const gold = await mkOpt({ kind: 'variation', position: 5, group_key: 'service', title: 'Gold service', net_pennies: 20000, vat_pennies: 4000, gross_pennies: 24000,
+  const clutch = await mkOpt({ kind: 'addition', group_id: gExtras.id, position: 2, title: 'Clutch and flywheel', net_pennies: 30000, vat_pennies: 6000, gross_pennies: 36000 });
+  const bronze = await mkOpt({ kind: 'variation', group_id: gService.id, position: 3, group_key: 'service', title: 'Bronze service', net_pennies: 7500, vat_pennies: 1500, gross_pennies: 9000 });
+  const silver = await mkOpt({ kind: 'variation', group_id: gService.id, position: 4, group_key: 'service', title: 'Silver service', net_pennies: 12500, vat_pennies: 2500, gross_pennies: 15000 });
+  const gold = await mkOpt({ kind: 'variation', group_id: gService.id, position: 5, group_key: 'service', title: 'Gold service', net_pennies: 20000, vat_pennies: 4000, gross_pennies: 24000,
     incentive_kind: 'included', incentive_label: 'a free diagnostic' });
+  // gBrakes HAS a base, so its extra is only orderable while the base is being done.
+  const discs = await mkOpt({ kind: 'addition', group_id: gBrakes.id, is_base: true, position: 6, title: 'Front discs and pads', net_pennies: 15000, vat_pennies: 3000, gross_pennies: 18000 });
+  // percent_off, with the pennies FROZEN as lib/quote-version resolves them: 10% of a 5000 net
+  // line is 500, and of the 6000 gross line is 600. The rate is the wording; the pennies are the
+  // promise, and nothing recomputes them after this.
+  const fluid = await mkOpt({ kind: 'addition', group_id: gBrakes.id, position: 7, title: 'Brake fluid change', net_pennies: 5000, vat_pennies: 1000, gross_pennies: 6000,
+    incentive_kind: 'percent_off', incentive_label: '10% off while it is in', incentive_percent_bp: 1000,
+    incentive_ex_pennies: 500, incentive_vatable: true, incentive_gross_off_pennies: 600 });
   // Each option's own lines — the ones a selection pulls in.
   await prisma.quoteVersionLine.createMany({ data: [
     L({ quote_version_id: v1.id, option_id: pump.id, position: 10, description: 'Water pump', unit_price: 100, line_vat: 20, line_total: 100 }),
@@ -108,6 +127,8 @@ try {
     L({ quote_version_id: v1.id, option_id: bronze.id, position: 12, description: 'Bronze service', unit_price: 75, line_vat: 15, line_total: 75 }),
     L({ quote_version_id: v1.id, option_id: silver.id, position: 13, description: 'Silver service', unit_price: 125, line_vat: 25, line_total: 125 }),
     L({ quote_version_id: v1.id, option_id: gold.id, position: 14, description: 'Gold service', unit_price: 200, line_vat: 40, line_total: 200 }),
+    L({ quote_version_id: v1.id, option_id: discs.id, position: 15, description: 'Front discs and pads', unit_price: 150, line_vat: 30, line_total: 150 }),
+    L({ quote_version_id: v1.id, option_id: fluid.id, position: 16, description: 'Brake fluid change', unit_price: 50, line_vat: 10, line_total: 50 }),
   ] });
 
   const link = await createMagicLink({ groupId: ZZ_GROUP, jobCardId: card.id, purpose: 'quote_view', recipient: 'zzqo@example.invalid', baseUrl: origin });
@@ -152,15 +173,18 @@ try {
   check('and the card’s INTERNAL staff notes are nowhere on the customer’s page',
     !body.includes('do not quote cheap'), body.includes('do not quote cheap') ? 'INTERNAL NOTE VISIBLE' : 'absent');
 
-  check('three variations are offered as one exclusive choice',
-    (await page.locator('[data-testid="variation-group"]').count()) === 1
-    && (await page.locator('[data-testid="variation-row"]').count()) === 3);
+  const grp = (id) => page.locator(`[data-testid="option-group"][data-group="${id}"]`);
+  check('the three groups are offered independently, each with its own shape',
+    (await page.locator('[data-testid="option-group"]').count()) === 3
+    && (await grp(gService.id).getAttribute('data-shape')) === 'pick_one'
+    && (await grp(gBrakes.id).getAttribute('data-shape')) === 'base_plus_extras');
+  check('  …the pick_one offers three alternatives as radios',
+    (await grp(gService.id).locator('[data-testid="option-row"] input[type="radio"]').count()) === 3);
   /** THE OWNER'S RULING, ON THE SCREEN: no default, and declining all of them is offered first. */
-  const noneChecked = await page.locator('[data-testid="variation-none"] input').isChecked();
-  check('  …with “None of these” offered and SELECTED by default', noneChecked, noneChecked ? 'no variation pre-selected' : 'SOMETHING WAS PRE-SELECTED');
-  check('two additions are offered as independent tick boxes',
-    (await page.locator('[data-testid="addition-row"]').count()) === 2
-    && (await page.locator('[data-testid="addition-row"] input[type="checkbox"]').count()) === 2);
+  const noneChecked = await grp(gService.id).locator('[data-testid="option-none"] input').isChecked();
+  check('  …with “None of these” offered and SELECTED by default', noneChecked, noneChecked ? 'nothing pre-selected' : 'SOMETHING WAS PRE-SELECTED');
+  check('  …and the base-less group offers independent tick boxes',
+    (await grp(gExtras.id).locator('[data-testid="option-row"] input[type="checkbox"]').count()) === 2);
   check('the total starts at the main quote alone',
     (await page.textContent('[data-testid="live-total"]')) === '£1200.00', await page.textContent('[data-testid="live-total"]'));
 
@@ -183,6 +207,38 @@ try {
     !!inc && /Includes a free diagnostic/.test(inc) && (await page.textContent('[data-testid="live-total"]')) === '£1500.00',
     `${inc?.trim()} · ${await page.textContent('[data-testid="live-total"]')} = 1200 + 240 + 120 − 60`);
 
+  console.log('\n— AN EXTRA IS ONLY ORDERABLE WHILE ITS BASE IS —');
+  const fluidBox = grp(gBrakes.id).locator(`[data-option="${fluid.id}"] input`);
+  check('the extra is NOT tickable before its base', await fluidBox.isDisabled(),
+    'fitting pads on a car that is not in for brakes is an order nothing is holding up');
+  const why = await grp(gBrakes.id).locator('[data-testid="needs-base"]').textContent().catch(() => null);
+  check('  …and the page SAYS WHY rather than just refusing', !!why && /Front discs and pads/.test(why),
+    (why ?? 'ABSENT').replace(/\s+/g, ' ').trim().slice(0, 100));
+  await grp(gBrakes.id).locator(`[data-option="${discs.id}"] input`).check();
+  check('  …ticking the base adds it and frees the extra',
+    (await page.textContent('[data-testid="live-total"]')) === '£1680.00' && !(await fluidBox.isDisabled()),
+    `${await page.textContent('[data-testid="live-total"]')} = 1500 + 180`);
+  await fluidBox.check();
+  check('the percentage comes off as the PENNIES that were frozen, not a fresh sum',
+    (await page.textContent('[data-testid="live-total"]')) === '£1734.00',
+    `${await page.textContent('[data-testid="live-total"]')} = 1680 + 60 − 6`);
+
+  console.log('\n— WHAT THEY SAVED —');
+  const saved = await page.textContent('[data-testid="savings-total"]').catch(() => null);
+  check('the savings figure is the money-moving incentives, added up',
+    !!saved && /£66\.00/.test(saved), `${(saved ?? 'ABSENT').trim()} — £60 off the pump + £6 off the fluid`);
+  check('  …and the free diagnostic is NOT in it, though it is on the page',
+    !!saved && !/£306|£66\.00 \(incl/.test(saved)
+    && /Includes a free diagnostic/.test(await page.textContent('[data-testid="included-note"]') ?? ''),
+    'a saving the invoice does not show is a figure that will not match it');
+
+  /** UNTICKING THE BASE TAKES ITS EXTRAS WITH IT. Left ticked, the customer would be sending an
+   *  order for work with nothing holding it up — and the total would carry it. */
+  await grp(gBrakes.id).locator(`[data-option="${discs.id}"] input`).uncheck();
+  check('dropping the base drops its extras with it',
+    (await page.textContent('[data-testid="live-total"]')) === '£1500.00' && !(await fluidBox.isChecked()),
+    `${await page.textContent('[data-testid="live-total"]')} — back to the main quote plus gold and the pump`);
+
   /** PRINTED, UNDER REAL PRINT EMULATION. `hidden print:block` is a CSS claim and the HTML cannot
    *  settle it — a markup-only assertion would pass on a page that prints nothing. */
   console.log('\n— THE PRINTED PAGE —');
@@ -191,15 +247,20 @@ try {
   const controlsVisible = await page.locator('[data-testid="quote-options"]').isVisible();
   check('printing shows the static option tables', printedVisible);
   check('  …and hides every control, because a printed radio button records no answer', !controlsVisible);
-  const prow = await page.locator('[data-testid="printed-variation-row"]').allTextContents();
-  check('each variation prints a COMPLETE price including the work above',
+  const pgrp = (id) => page.locator(`[data-testid="printed-group"]`).filter({ hasText: id });
+  const prow = await page.locator('[data-testid="printed-group"][data-shape="pick_one"] [data-testid="printed-option-row"]').allTextContents();
+  check('each alternative prints a COMPLETE price including the work above',
     prow.some((t) => t.includes('£1290.00')) && prow.some((t) => t.includes('£1350.00')) && prow.some((t) => t.includes('£1440.00')),
     prow.map((t) => t.replace(/\s+/g, ' ').trim()).join(' | ').slice(0, 120));
-  check('  …and not its own price alone, which a reader adds to the wrong base',
-    !prow.some((t) => /£90\.00|£150\.00|£240\.00/.test(t)));
-  const arow = await page.locator('[data-testid="printed-addition-row"]').allTextContents();
-  check('each addition prints its own price AND the total with the work above',
-    arow[0].includes('£120.00') && arow[0].includes('£1260.00'), arow[0].replace(/\s+/g, ' ').trim().slice(0, 110));
+  const arow = await page.locator('[data-testid="printed-group"][data-shape="base_plus_extras"] [data-testid="printed-option-row"]').allTextContents();
+  check('an extra off the MAIN quote prints its own price and the total with the work above',
+    arow.some((t) => t.includes('£120.00') && t.includes('£1260.00')),
+    arow.map((t) => t.replace(/\s+/g, ' ').trim()).join(' | ').slice(0, 130));
+  /** INSIDE A GROUP WITH A BASE there is no complete price to print: it depends on the base AND on
+   *  which other extras are ticked, so a figure there would be a different total for every reader. */
+  check('  …but inside a group WITH a base, no complete price is printed at all',
+    arow.some((t) => t.includes('£60.00') && !t.includes('with the work above')),
+    arow.filter((t) => t.includes('£60.00')).join(' | ').replace(/\s+/g, ' ').trim().slice(0, 120));
   const noTotal = await page.textContent('[data-testid="printed-no-total"]');
   check('there is NO grand total while a choice is open, and the page says why',
     /no single total until you choose/.test(noTotal ?? '') && /which service/.test(noTotal ?? ''), (noTotal ?? '').trim().slice(0, 110));
@@ -215,7 +276,7 @@ try {
 
   console.log('\n— THE SELECTION BECOMES THE AGREEMENT —');
   const ok = await ctx.request.post(`${origin}/api/quote-respond`, {
-    data: { token: link.rawToken, action: 'accept', selection: { additionIds: [pump.id], variationByGroup: { service: gold.id } } },
+    data: { token: link.rawToken, action: 'accept', selection: { byGroup: { [gExtras.id]: [pump.id], [gService.id]: [gold.id] } } },
   });
   check('accepting with a choice succeeds', ok.status() === 200, `HTTP ${ok.status()} ${JSON.stringify(await ok.json().catch(() => ({}))).slice(0, 80)}`);
 
@@ -233,8 +294,8 @@ try {
     versions.map((v) => `v${v.version}=${v.status}`).join(', '));
   check('  …which records what it resolved from, and what was chosen',
     versions[1].resolved_from_version === 1
-    && versions[1].selection_json?.variationByGroup?.service === gold.id
-    && versions[1].selection_json?.additionIds?.[0] === pump.id,
+    && versions[1].selection_json?.byGroup?.[gService.id]?.[0] === gold.id
+    && versions[1].selection_json?.byGroup?.[gExtras.id]?.[0] === pump.id,
     JSON.stringify(versions[1].selection_json));
   check('  …and carries the same narrative the customer read', /needs a rebuild/.test(versions[1].narrative ?? ''));
 

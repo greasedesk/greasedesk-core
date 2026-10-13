@@ -12,6 +12,7 @@
  * issue is a straight column copy: no arithmetic in between, nothing that can round differently.
  * That, not two renderers agreeing, is what makes "what they accept is what they're billed" true.
  */
+import { resolvePercentOff } from '@/lib/quote-options';
 import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
@@ -122,6 +123,20 @@ export async function freezeQuoteVersion(args: {
      * once, from its own frozen lines — a draft option deliberately stores none, because a price
      * held in two places is a price that drifts.
      */
+    // THE GROUPS COME FIRST, and the frozen options point at the frozen copies — never at the
+    // draft ids, which belong to a card that keeps being edited after this version is sent.
+    const draftGroups = await tx.quoteOptionGroupDraft.findMany({
+      where: { job_card_id: args.jobCardId }, orderBy: { position: 'asc' },
+    });
+    const groupIdFor = new Map<string, string>();
+    for (const g of draftGroups) {
+      const made = await tx.quoteOptionGroup.create({
+        data: { quote_version_id: created.id, shape: g.shape, position: g.position, title: g.title },
+        select: { id: true },
+      });
+      groupIdFor.set(g.id, made.id);
+    }
+
     const drafts = await tx.quoteOptionDraft.findMany({
       where: { job_card_id: args.jobCardId }, orderBy: { position: 'asc' },
     });
@@ -131,14 +146,39 @@ export async function freezeQuoteVersion(args: {
       if (!mine.length) continue;
       const oNet = mine.reduce((t: number, r: any) => t + toPennies(r.line_total), 0);
       const oVat = mine.reduce((t: number, r: any) => t + toPennies(r.line_vat), 0);
+      /**
+       * ── A PERCENTAGE IS RESOLVED HERE, ONCE, AND NEVER AGAIN ───────────────────────────────
+       * The draft carries the RATE; the frozen option carries the PENNIES. This is the only place
+       * the two meet, because a document that re-derives its own discount later can print one
+       * number and bill another the moment a line, a rate or a rounding rule moves.
+       *
+       * Per LINE and rounded per line, then summed — the lines are what the customer reads, and
+       * rounding the option total instead can differ by a penny or two from the lines explaining
+       * it. The ex figure comes off the net lines and the gross figure off the gross lines, so a
+       * vatable discount takes its share of the VAT with it and the two cannot disagree.
+       */
+      let incEx = d.incentive_ex_pennies;
+      let incVatable = d.incentive_vatable;
+      let incGross = d.incentive_gross_off_pennies;
+      if (d.incentive_kind === 'percent_off') {
+        const bp = d.incentive_percent_bp ?? 0;
+        incEx = resolvePercentOff(bp, mine.map((r: any) => toPennies(r.line_total)));
+        incVatable = oVat > 0;
+        incGross = incVatable
+          ? resolvePercentOff(bp, mine.map((r: any) => toPennies(r.line_total) + toPennies(r.line_vat)))
+          : incEx;
+      }
       const opt = await tx.quoteOption.create({
         data: {
           quote_version_id: created.id, kind: d.kind, position: d.position, title: d.title,
           group_key: d.group_key,
+          group_id: d.group_id ? groupIdFor.get(d.group_id) ?? null : null,
+          is_base: d.is_base,
           net_pennies: oNet, vat_pennies: oVat, gross_pennies: oNet + oVat,
           incentive_kind: d.incentive_kind, incentive_label: d.incentive_label,
-          incentive_ex_pennies: d.incentive_ex_pennies, incentive_vatable: d.incentive_vatable,
-          incentive_gross_off_pennies: d.incentive_gross_off_pennies,
+          incentive_ex_pennies: incEx, incentive_vatable: incVatable,
+          incentive_gross_off_pennies: incGross,
+          incentive_percent_bp: d.incentive_percent_bp,
         },
         select: { id: true },
       });
