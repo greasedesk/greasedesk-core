@@ -154,7 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           vehicle: { connect: { id: vehicle.id } },
           status: 'accepted',
           is_imported: true,
-          import_batch_id: staged.batch.id,
+          import_batch: { connect: { id: staged.batch.id } },
         },
         select: { id: true },
       });
