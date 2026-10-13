@@ -20,29 +20,25 @@ const q = (s) => prisma.$queryRawUnsafe(s);
  *  tenant purge that removes parent and child in one statement still succeeds). */
 const CONSTRAIN = {
   'Booking.resource_id':['Resource','SetNull'],
-  'ContactPreferenceEvent.actor_user_id':['User','SetNull'], 'CreditNote.site_id':['Site','NoAction'],
-  'ExportJob.requested_by_user_id':['User','NoAction'], 'Invoice.stock_disposal_id':['StockDisposal','SetNull'],
+  'ContactPreferenceEvent.actor_user_id':['User','SetNull'], 'CreditNote.site_id':['Site','NoAction'], 'Invoice.stock_disposal_id':['StockDisposal','SetNull'],
   'InvoiceLine.catalogue_item_id':['CatalogueItem','SetNull'], 'JobCard.import_batch_id':['ImportBatch','SetNull'],
   'JobCard.stock_item_id':['StockItem','SetNull'], 'JobCardItem.option_draft_id':['QuoteOptionDraft','SetNull'],
   'JobCardPhoto.group_id':['Group','Cascade'], 'JobClockSession.corrected_by_user_id':['User','SetNull'],
   'JobClockSession.user_id':['User','NoAction'], 'Payment.fee_rate_id':['ApplicationFeeRate','SetNull'],
-  'Payment.site_id':['Site','NoAction'], 'PlatformOperator.user_id':['User','NoAction'],
+  'Payment.site_id':['Site','NoAction'],
   'Prospect.consent_by_rep_id':['Rep','SetNull'], 'Prospect.created_by_rep_id':['Rep','NoAction'],
-  'Prospect.signed_up_group_id':['Group','SetNull'], 'ProspectVisit.rep_id':['Rep','NoAction'],
-  'PurchaseModel.created_by_user_id':['User','NoAction'], 'PurchaseModel.vehicle_id':['Vehicle','SetNull'],
-  'PurchaseModelDefaults.updated_by_user_id':['User','NoAction'],
-  'QuoteVersion.magic_link_id':['CustomerMagicLink','SetNull'], 'QuoteVersionLine.option_id':['QuoteOption','SetNull'], 'RepVisit.site_id':['Site','NoAction'],
+  'Prospect.signed_up_group_id':['Group','SetNull'], 'ProspectVisit.rep_id':['Rep','NoAction'], 'PurchaseModel.vehicle_id':['Vehicle','SetNull'],
+  'QuoteVersion.magic_link_id':['CustomerMagicLink','SetNull'], 'QuoteVersionLine.option_id':['QuoteOption','SetNull'],
   'StagedInvoice.group_id':['Group','Cascade'], 'StagedInvoice.invoice_id':['Invoice','SetNull'],
   'StagedInvoice.job_card_id':['JobCard','SetNull'], 'StagedInvoice.planned_resource_id':['Resource','SetNull'],
-  'StagedLine.catalogue_item_id':['CatalogueItem','SetNull'], 'StockCost.created_by_user_id':['User','NoAction'],
+  'StagedLine.catalogue_item_id':['CatalogueItem','SetNull'],
   'StockCost.reverses_id':['StockCost','SetNull'], 'StockCostSnapshot.job_card_id':['JobCard','SetNull'],
-  'StockDisposal.buyer_customer_id':['Customer','SetNull'], 'StockDisposal.created_by_user_id':['User','NoAction'],
-  'StockItem.created_by_user_id':['User','NoAction'], 'StockItem.reacquired_from_disposal_id':['StockDisposal','SetNull'],
+  'StockDisposal.buyer_customer_id':['Customer','SetNull'], 'StockItem.reacquired_from_disposal_id':['StockDisposal','SetNull'],
   'StockNumberSequence.group_id':['Group','Cascade'],
-  'UploadTelemetry.group_id':['Group','Cascade'], 'UploadTelemetry.job_card_id':['JobCard','NoAction'],
+  'UploadTelemetry.group_id':['Group','Cascade'], 'UploadTelemetry.job_card_id':['JobCard','Cascade'],
   'User.primary_site_id':['Site','SetNull'], 'VehicleDueItem.service_catalogue_id':['ServiceCatalogue','SetNull'],
-  'VinReadShadow.group_id':['Group','Cascade'], 'VinReadShadow.job_card_id':['JobCard','NoAction'],
-  'VinReadShadow.photo_id':['JobCardPhoto','NoAction'],
+  'VinReadShadow.group_id':['Group','Cascade'], 'VinReadShadow.job_card_id':['JobCard','Cascade'],
+  'VinReadShadow.photo_id':['JobCardPhoto','Cascade'],
 };
 /** Columns that must NEVER take one, each with the reason. */
 const NEVER = {
@@ -68,6 +64,14 @@ const NEVER = {
   'SuperAdminAudit.target_rep_id':'audit trail — must outlive the rep it names',
   'CommissionEntry.group_id':'OURS_PER_TENANT — "our accounts payable to a reseller; deliberately survives a purge". CASCADE would delete a reseller payable when the tenant is purged.',
   'TenantAttribution.group_id':'OURS_PER_TENANT — "our commission spine, written once and never theirs"; it outlives the tenant by design.',
+  'ExportJob.requested_by_user_id':'purge order — tx.user.deleteMany runs at step 4 while this row still exists (it dies with the Group at the end). NO ACTION would fail the purge.'.replace(/\s+/g,' '),
+  'PurchaseModel.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
+  'PurchaseModelDefaults.updated_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
+  'StockCost.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
+  'StockDisposal.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
+  'StockItem.created_by_user_id':'purge order — see ExportJob.requested_by_user_id.'.replace(/\s+/g,' '),
+  'PlatformOperator.user_id':'purge order — the operator account is itself a tenant User (verified 2026-10-13), so tx.user.deleteMany would be refused by this row.'.replace(/\s+/g,' '),
+  'RepVisit.site_id':'OURS_PER_TENANT and NOT NULL — the visit outlives the tenant but the Site dies with it, and SET NULL is unavailable.'.replace(/\s+/g,' '),
   'RepVisit.group_id':'OURS_PER_TENANT — our rep\u2019s record of visiting them, written by our staff about our sales process.',
 };
 /** Deliberately undecided — the owner rules on these, they are not defaulted. */
@@ -119,6 +123,12 @@ for (const [key,[parent,onDelete]] of Object.entries(CONSTRAIN)) {
 if (blocked.length) { console.log('\nEXCLUDED — orphans appeared since the audit:');
   for (const b of blocked) console.log(`  ${b.key} -> ${b.parent}: ${b.n}`); }
 
+if (process.argv.includes('--json')) {
+  const fs = await import('node:fs');
+  fs.writeFileSync('.fk-plan.json', JSON.stringify(emit, null, 2));
+  console.log(`wrote .fk-plan.json (${emit.length} constraints)`);
+  await prisma.$disconnect(); process.exit(0);
+}
 const vacuous = emit.filter(e => e.rows === 0);
 if (vacuous.length) {
   console.log(`\nVACUOUS CLEAN VERDICTS — ${vacuous.length} of ${emit.length} have NO non-null rows, so the`);

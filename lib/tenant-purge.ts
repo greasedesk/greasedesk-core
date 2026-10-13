@@ -337,9 +337,15 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     await tx.booking.deleteMany({ where: { group_id: groupId } });
     await tx.jobCard.deleteMany({ where: { group_id: groupId } });      // → JobCardPhoto/Item cascade
     await tx.user.deleteMany({ where: { group_id: groupId } });         // EXPLICIT (SetNull would orphan PII) → Account/Session/UserSite cascade
-    await tx.uploadTelemetry.deleteMany({ where: { group_id: groupId } }); // no FK — cascade misses
-    await tx.vinReadShadow.deleteMany({ where: { group_id: groupId } });   // no FK — cascade misses
-    await tx.stockNumberSequence.deleteMany({ where: { group_id: groupId } }); // no FK (a new table's FK is a second push) — cascade misses
+    // uploadTelemetry, vinReadShadow and stockNumberSequence USED TO BE DELETED HERE, each with the
+    // comment "no FK — cascade misses". They now carry group_id foreign keys with ON DELETE CASCADE
+    // (migration 20261013120000), so the Group delete below removes them and these three statements
+    // would delete rows that are already going. Removed WITH the migration rather than after it: a
+    // deploy carrying this change without those keys applied would silently leave tenant rows
+    // behind, which is the one failure a purge must never have.
+    //
+    // THE AFTER-COUNT STILL COUNTS ALL THREE (see above). Counting is how we know they went; the
+    // cascade is only how. A table that stops being counted is a table nobody is checking.
 
     // ── SUBJECT-KEYED SWEEP. No FK to Group, so the cascade below never sees these. ────────────
     // In the SAME transaction as the rest: a purge that half-erased somebody would be worse than

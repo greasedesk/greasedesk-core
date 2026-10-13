@@ -586,6 +586,14 @@ model Group {
   stockCostSnapshots    StockCostSnapshot[]
   stockCosts            StockCost[]
   export_jobs ExportJob[]
+
+  job_card_photos JobCardPhoto[]
+  prospects Prospect[]
+  staged_invoices StagedInvoice[]
+  stock_number_sequences StockNumberSequence[]
+  upload_telemetries UploadTelemetry[]
+  vin_read_shadows VinReadShadow[]
+
 }
 
 /**
@@ -706,6 +714,9 @@ model ApplicationFeeRate {
 
   // Serves the resolver's lookup. The UNIQUENESS is enforced by the two partial indexes above,
   // created in raw SQL — this plain index is for reads only and guarantees nothing.
+
+  payments Payment[]
+
   @@index([country_code, currency, effective_from])
   @@index([group_id])
 }
@@ -839,6 +850,10 @@ model UploadTelemetry {
   attempts    Int      @default(0)
   created_at  DateTime @default(now())
 
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+
+
   @@index([job_card_id, created_at])
   @@index([group_id, created_at])
 }
@@ -966,6 +981,11 @@ model Rep {
 
   magic_links RepMagicLink[]
   invoices    RepInvoice[]
+
+  prospects_consent_by_rep Prospect[] @relation("Prospect_consent_by_rep_id")
+  prospects_created_by_rep Prospect[] @relation("Prospect_created_by_rep_id")
+  prospect_visits ProspectVisit[]
+
 }
 
 /**
@@ -1953,6 +1973,11 @@ model Site {
   config_events    SiteConfigEvent[]
   import_batches   ImportBatch[]
 
+  credit_notes CreditNote[]
+  payments Payment[]
+  users_primary_site User[] @relation("User_primary_site_id")
+
+
   @@index([group_id])
 
   // ── INTAKE PROMPTS (per SITE, default OFF) ────────────────────────────────────────────────────
@@ -2020,6 +2045,10 @@ model Resource {
   site        Site        @relation(fields: [site_id], references: [id], onDelete: Cascade)
   job_cards   JobCard[]
   diary_notes DiaryNote[]
+
+  bookings Booking[]
+  staged_invoices StagedInvoice[]
+
 
   @@index([site_id])
 }
@@ -2149,6 +2178,12 @@ model User {
   accounts Account[]
   sessions Session[]
 
+  primary_site Site? @relation("User_primary_site_id", fields: [primary_site_id], references: [id], onDelete: SetNull)
+  contact_preference_events ContactPreferenceEvent[]
+  job_clock_sessions_corrected_by_user JobClockSession[] @relation("JobClockSession_corrected_by_user_id")
+  job_clock_sessions_user JobClockSession[] @relation("JobClockSession_user_id")
+
+
   @@index([group_id])
   @@index([site_id])
   @@index([role_id])
@@ -2229,6 +2264,9 @@ model Customer {
   job_cards  JobCard[]
   threads    MessageThread[]
   contactPreferenceEvents ContactPreferenceEvent[]
+
+  stock_disposals StockDisposal[]
+
 
   @@index([group_id, site_id])
   @@index([group_id, phone_e164])
@@ -2357,6 +2395,9 @@ model VehicleDueItem {
   closed_job_card   JobCard? @relation("DueItemClosedBy", fields: [closed_job_card_id], references: [id], onDelete: SetNull)
 
   /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
+
+  service_catalogue ServiceCatalogue? @relation(fields: [service_catalogue_id], references: [id], onDelete: SetNull)
+
   @@index([group_id, vehicle_id, closed_at])
   /// The work-done block on an invoice reads exactly this pair.
   @@index([closed_job_card_id, closed_kind])
@@ -2813,6 +2854,9 @@ model Vehicle {
   due_items  VehicleDueItem[]
   odometer_readings VehicleOdometerReading[]
 
+  purchase_models PurchaseModel[]
+
+
   @@index([group_id, customer_id])
   @@index([registration])
   @@index([identity_id])
@@ -2882,6 +2926,9 @@ model ServiceCatalogue {
   site     Site?     @relation(fields: [site_id], references: [id], onDelete: Cascade)
   bookings Booking[]
 
+  vehicle_due_items VehicleDueItem[]
+
+
   @@index([group_id, site_id])
 }
 
@@ -2937,6 +2984,9 @@ model Booking {
   customer      Customer?         @relation(fields: [customer_id], references: [id], onDelete: SetNull)
   vehicle       Vehicle           @relation(fields: [vehicle_id], references: [id], onDelete: NoAction)
   service       ServiceCatalogue? @relation(fields: [service_id], references: [id], onDelete: SetNull)
+
+  resource Resource? @relation(fields: [resource_id], references: [id], onDelete: SetNull)
+
 
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
 }
@@ -3085,6 +3135,14 @@ model JobCard {
   duplicated_from   JobCard?            @relation("CardDuplicate", fields: [duplicated_from_id], references: [id], onDelete: SetNull)
   duplicates        JobCard[]           @relation("CardDuplicate")
 
+  import_batch ImportBatch? @relation(fields: [import_batch_id], references: [id], onDelete: SetNull)
+  stock_item StockItem? @relation(fields: [stock_item_id], references: [id], onDelete: SetNull)
+  staged_invoices StagedInvoice[]
+  stock_cost_snapshots StockCostSnapshot[]
+  upload_telemetries UploadTelemetry[]
+  vin_read_shadows VinReadShadow[]
+
+
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
   @@index([status])
   @@index([resource_id, scheduled_date])
@@ -3143,6 +3201,10 @@ model JobCardPhoto {
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   user     User?   @relation("JobCardPhotoUploader", fields: [uploaded_by], references: [id], onDelete: SetNull)
 
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vin_read_shadows VinReadShadow[]
+
+
   @@index([job_card_id])
   @@index([job_card_id, stage])
 }
@@ -3188,6 +3250,9 @@ model JobCardItem {
 
   job_card  JobCard        @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   catalogue CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
+
+  option_draft QuoteOptionDraft? @relation(fields: [option_draft_id], references: [id], onDelete: SetNull)
+
 
   @@index([job_card_id])
   @@index([catalogue_item_id])
@@ -3420,6 +3485,10 @@ model Invoice {
   payments       Payment[]
   magic_links    CustomerMagicLink[]
 
+  stock_disposal StockDisposal? @relation(fields: [stock_disposal_id], references: [id], onDelete: SetNull)
+  staged_invoices StagedInvoice[]
+
+
   @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
   // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
   // checks at runtime, but two concurrent commits could both pass that check and both write;
@@ -3478,6 +3547,9 @@ model InvoiceLine {
 
   invoice Invoice @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
+  catalogue_item CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
+
+
   @@index([invoice_id])
 }
 
@@ -3496,6 +3568,11 @@ model VinReadShadow {
   latency_ms        Int      @default(0)
   cost_microdollars Int? // engine cost estimate in µ$ (Vision flat ~1500; Haiku from usage)
   created_at        DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  photo JobCardPhoto @relation(fields: [photo_id], references: [id], onDelete: Cascade)
+
 
   @@index([photo_id])
   @@index([group_id, created_at])
@@ -3590,6 +3667,10 @@ model Payment {
   invoice        Invoice        @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
   refunds        Refund[]
+
+  fee_rate ApplicationFeeRate? @relation(fields: [fee_rate_id], references: [id], onDelete: SetNull)
+  site Site @relation(fields: [site_id], references: [id], onDelete: NoAction)
+
 
   @@index([group_id, collected_at])
   @@index([invoice_id])
@@ -3735,6 +3816,10 @@ model CatalogueItem {
   tier_prices   CatalogueItemTierPrice[]
   promo_targets PromoTarget[]
   aliases       CatalogueAlias[]
+
+  invoice_lines InvoiceLine[]
+  staged_lines StagedLine[]
+
 
   @@unique([group_id, code])
   @@index([group_id])
@@ -4064,6 +4149,9 @@ model ContactPreferenceEvent {
   customer         Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   notification_log NotificationLog? @relation(fields: [notification_log_id], references: [id], onDelete: NoAction)
 
+  actor_user User? @relation(fields: [actor_user_id], references: [id], onDelete: SetNull)
+
+
   @@index([customer_id, channel, scope, created_at])
   @@index([group_id, created_at])
 }
@@ -4143,6 +4231,9 @@ model ImportBatch {
   site     Site            @relation(fields: [site_id], references: [id], onDelete: Cascade)
   invoices StagedInvoice[]
 
+  job_cards JobCard[]
+
+
   @@index([group_id, status])
 }
 
@@ -4196,6 +4287,12 @@ model StagedInvoice {
   batch ImportBatch  @relation(fields: [batch_id], references: [id], onDelete: Cascade)
   lines StagedLine[]
 
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoice_id], references: [id], onDelete: SetNull)
+  job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+  planned_resource Resource? @relation(fields: [planned_resource_id], references: [id], onDelete: SetNull)
+
+
   @@unique([group_id, external_number])
   @@index([batch_id, status])
 }
@@ -4233,6 +4330,9 @@ model StagedLine {
   children       StagedLine[] @relation("LineSplit")
 
   staged_invoice StagedInvoice @relation(fields: [staged_invoice_id], references: [id], onDelete: Cascade)
+
+  catalogue_item CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
+
 
   @@index([staged_invoice_id, position])
   @@index([parent_line_id])
@@ -4698,6 +4798,9 @@ model CustomerMagicLink {
   job_card JobCard  @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   invoice  Invoice? @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
 
+  quote_versions QuoteVersion[]
+
+
   @@index([group_id, job_card_id])
   @@index([invoice_id])
   @@index([expires_at])
@@ -4776,6 +4879,9 @@ model QuoteVersion {
   options  QuoteOption[]
   lines    QuoteVersionLine[]
 
+  magic_link CustomerMagicLink? @relation(fields: [magic_link_id], references: [id], onDelete: SetNull)
+
+
   @@unique([job_card_id, version])
   @@index([group_id, job_card_id])
   @@index([status])
@@ -4810,6 +4916,9 @@ model QuoteVersionLine {
   option_id String?
 
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade)
+
+  option QuoteOption? @relation(fields: [option_id], references: [id], onDelete: SetNull)
+
 
   @@index([quote_version_id, position])
   @@index([option_id])
@@ -4917,6 +5026,9 @@ model CreditNote {
   refund  Refund?          @relation(fields: [refund_id], references: [id], onDelete: SetNull)
   lines   CreditNoteLine[]
 
+  site Site @relation(fields: [site_id], references: [id], onDelete: NoAction)
+
+
   @@unique([group_id, sequence_value])
   @@index([group_id, date_issued])
   @@index([invoice_id])
@@ -5003,6 +5115,11 @@ model Prospect {
   sequence ProspectSequence?
   sendingLease ProspectSendingLease?
 
+  consent_by_rep Rep? @relation("Prospect_consent_by_rep_id", fields: [consent_by_rep_id], references: [id], onDelete: SetNull)
+  created_by_rep Rep @relation("Prospect_created_by_rep_id", fields: [created_by_rep_id], references: [id], onDelete: NoAction)
+  signed_up_group Group? @relation(fields: [signed_up_group_id], references: [id], onDelete: SetNull)
+
+
   @@index([name_key, postcode_key], map: "Prospect_match_idx")
   @@index([email], map: "Prospect_email_idx")
 }
@@ -5022,6 +5139,9 @@ model ProspectVisit {
   created_at      DateTime @default(now())
 
   prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+
+  rep Rep @relation(fields: [rep_id], references: [id], onDelete: NoAction)
+
 
   @@index([prospect_id, visited_on], map: "ProspectVisit_prospect_visited_idx")
   @@index([rep_id], map: "ProspectVisit_rep_idx")
@@ -5237,6 +5357,10 @@ model JobClockSession {
   corrects    JobClockSession?  @relation("JobClockCorrection", fields: [corrects_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   corrections JobClockSession[] @relation("JobClockCorrection")
 
+  corrected_by_user User? @relation("JobClockSession_corrected_by_user_id", fields: [corrected_by_user_id], references: [id], onDelete: SetNull)
+  user User @relation("JobClockSession_user_id", fields: [user_id], references: [id], onDelete: NoAction)
+
+
   @@index([job_card_id])
   @@index([group_id, user_id])
   @@index([corrects_id])
@@ -5300,6 +5424,9 @@ model PurchaseModel {
   updated_at          DateTime @updatedAt
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  vehicle Vehicle? @relation(fields: [vehicle_id], references: [id], onDelete: SetNull)
+
 
   @@index([group_id, updated_at])
 }
@@ -5416,9 +5543,13 @@ model StockItem {
 
   group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   vehicle  Vehicle   @relation(fields: [vehicle_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  disposal StockDisposal?
+  disposal StockDisposal? @relation("StockDisposal_stock_item_id")
   costs    StockCostSnapshot[]
   liveCosts StockCost[]
+
+  reacquired_from_disposal StockDisposal? @relation("StockItem_reacquired_from_disposal_id", fields: [reacquired_from_disposal_id], references: [id], onDelete: SetNull)
+  job_cards JobCard[]
+
 
   @@index([group_id, acquired_at])
 }
@@ -5469,7 +5600,12 @@ model StockDisposal {
   created_at DateTime @default(now())
 
   group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stock_item StockItem @relation("StockDisposal_stock_item_id", fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  buyer_customer Customer? @relation(fields: [buyer_customer_id], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+  stock_items StockItem[] @relation("StockItem_reacquired_from_disposal_id")
+
 
   @@index([group_id, disposed_at])
 }
@@ -5498,6 +5634,9 @@ model StockNumberSequence {
   group_id   String   @id
   last_value Int      @default(0)
   updated_at DateTime @default(now())
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
 }
 
 model StockCost {
@@ -5538,6 +5677,10 @@ model StockCost {
   group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  reverses StockCost? @relation("StockCost_reverses_id", fields: [reverses_id], references: [id], onDelete: SetNull)
+  stock_costs_reverses StockCost[] @relation("StockCost_reverses_id")
+
+
   @@index([group_id, stock_item_id])
 }
 
@@ -5563,6 +5706,9 @@ model StockCostSnapshot {
 
   group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+
 
   @@index([group_id, stock_item_id])
 }
@@ -5729,6 +5875,9 @@ model QuoteOption {
 
   quote_version QuoteVersion @relation(fields: [quote_version_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  quote_version_lines QuoteVersionLine[]
+
+
   @@index([quote_version_id, position])
 }
 
@@ -5762,6 +5911,9 @@ model QuoteOptionDraft {
   created_at DateTime @default(now())
 
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  job_card_items JobCardItem[]
+
 
   @@index([job_card_id, position])
 }
