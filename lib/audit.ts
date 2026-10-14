@@ -168,6 +168,9 @@ export type AuditAction =
                            // CARD — deliberately outside ACCEPTANCE_ACTIONS so quotes-metrics never
                            // dates a second acceptance from it. Always garage-recorded.
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
+  | 'quote.link_revoked' // the customer's live link was killed outside the send path — { reason, links }.
+                         // Written where the revocation is the POINT rather than a side effect of a
+                         // supersede: a garage decline, or a one-off repair of one that was missed.
   | 'quote.accepted_verbal' // RETIRED 2026-08-05, RETAINED FOR HISTORY — see accept.booked above.
                             // Superseded by quote.accepted with via:'counter', attested:false.
   // THE FIRST ENTRY WRITTEN BY SOMEBODY OUTSIDE THE BUSINESS. An operator extended this tenant's

@@ -1236,8 +1236,16 @@ function QuoteActions(props: {
         <h3 className="text-sm font-semibold text-ink">{t('quoteActions.title')}</h3>
         {/* Booked-at-a-glance lives HERE, beside the booking fields — not as a phantom tab
             (the standalone strip chip was removed; booking is part of the Quote). */}
-        <span className={`text-xs font-medium rounded-full px-2.5 py-1 ${booking ? 'bg-ok-soft text-ok' : 'bg-surface-muted text-muted'}`}>
-          {booking ? `✓ ${t('booking.booked')}` : t('booking.notBookedShort')}
+        {/* THE CARD'S STATE COMES FIRST, THEN THE BOOKING. This used to consult the booking alone,
+            so a DECLINED card read "Not booked" — true, and it reads as work still to arrange
+            rather than work that was refused (MJ71ZNU, 2026-10-14). Declined OUTRANKS the booking
+            because a declined card can still hold the slot data of the booking it once had. */}
+        <span className={`text-xs font-medium rounded-full px-2.5 py-1 ${
+          status === 'declined' ? 'bg-danger-soft text-danger'
+            : booking ? 'bg-ok-soft text-ok' : 'bg-surface-muted text-muted'}`}>
+          {status === 'declined'
+            ? t('status.declined')
+            : booking ? `✓ ${t('booking.booked')}` : t('booking.notBookedShort')}
         </span>
       </div>
 
@@ -1285,7 +1293,10 @@ function QuoteActions(props: {
         )}
         {isBookingStage && (
           <>
-            <button disabled={busy !== null} onClick={() => saveAll('accept')} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t('quoteActions.acceptBook')}</button>
+            {/* THE REOPEN READS AS A REOPEN. declined -> accepted is the designed path and the
+                button stays, but on a declined card "Accept & book" reads as though the quote were
+                still live. Same action, honest label. */}
+            <button disabled={busy !== null} onClick={() => saveAll('accept')} className={`${btn} bg-accent hover:bg-accent-hover text-white`}>{t(status === 'declined' ? 'quoteActions.reopenBook' : 'quoteActions.acceptBook')}</button>
             <button disabled={busy !== null} onClick={() => saveAll('estimate')} className={`${btn} bg-accent-soft text-accent`}>{t('quoteActions.save')}</button>
             {status === 'quoted' && <button disabled={busy !== null} onClick={() => props.setStatus('declined')} className={`${btn} bg-surface-muted text-ink`}>{t('action.declined')}</button>}
           </>

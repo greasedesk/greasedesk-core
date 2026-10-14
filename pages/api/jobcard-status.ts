@@ -197,6 +197,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // A NO-SHOW KILLS THE LINK TOO — same defect class as cancellation: a customer who didn't
       // turn up must not still be holding a live quote link for work nobody is going to do.
       if (to === 'no_show') await revokeMagicLinksForCard(jobCardId, 'no_show', tx);
+      // ── AND A DECLINE IS THE SAME DEFECT AGAIN (MJ71ZNU, 2026-10-14) ────────────────────────
+      // The garage marked the card declined; the customer's link stayed live until the following
+      // lunchtime, good for £2,074.06 of work that had just been refused. 'declined' has been a
+      // declared RevokeReason since the enum was written and no caller ever passed it — the THIRD
+      // time this exact shape has shipped in this one function. The customer-facing copy for it
+      // (REVOKED_COPY.declined) was already written too, and had never once been reachable.
+      //
+      // THE VERSION MOVES WITH THE CARD. Two states held the answer and only one was moving: the
+      // card said `declined` while its live QuoteVersion stayed `sent`. That is what left the two
+      // metrics readers disagreeing and the link alive. One decline, both rows, one transaction.
+      //
+      // responded_by_user is SET and ip/user-agent are left NULL, which is the honest signal the
+      // schema asks for: a staff-recorded answer is genuine but not customer-attested, and faking
+      // an ip for it would make a garage-recorded decline indistinguishable from the customer's.
+      if (to === 'declined') {
+        await tx.quoteVersion.updateMany({
+          where: { job_card_id: jobCardId, status: 'sent' },
+          data: { status: 'declined', responded_at: new Date(), responded_by_user: scope.userId },
+        });
+        const killed = await revokeMagicLinksForCard(jobCardId, 'declined', tx);
+        if (killed) {
+          await writeAudit(tx, { groupId: scope.groupId, userId: scope.userId, jobCardId,
+            action: 'quote.link_revoked', diff: { reason: 'declined', links: killed } });
+        }
+      }
       if (to === 'invoiced') {
         // COMEBACK NUMBERING GUARD (locked): a comeback mints a £0 invoice from the SEPARATE
         // warranty series — never the chargeable customer-facing sequence. Both counters stay

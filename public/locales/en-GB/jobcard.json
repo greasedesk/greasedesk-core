@@ -294,6 +294,7 @@
   "quoteActions": {
     "title": "Quote actions",
     "acceptBook": "Accept & book",
+    "reopenBook": "Reopen & book",
     "reschedule": "Reschedule",
     "save": "Save",
     "saveReturn": "Save and return to Diary",

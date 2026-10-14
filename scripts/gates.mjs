@@ -192,7 +192,7 @@ const TIERS = {
     'tenant-manifest-gate',
     'backup-run-gate',
     'tenant-export-gate',
-    'quote-options-gate',
+    'quote-options-gate', 'quote-closure-gate',
     'quote-options-flow-gate',
     'quote-supersede-gate',
     'historical-sale-gate',

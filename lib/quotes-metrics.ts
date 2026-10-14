@@ -115,7 +115,14 @@ export async function computeQuotesMetrics(args: {
     }),
     // Every card that reached acceptance, plus the estimate value for the ones with no version.
     prisma.jobCard.findMany({
-      where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: { in: [...ACCEPTED_ONWARD, 'declined'] as any } },
+      // ACCEPTED_ONWARD ONLY. 'declined' used to be in here and fed nothing: every consumer of
+      // this list — the loop below and the acceptedCards set — gates on ACCEPTED_ONWARD, so a
+      // declined card was fetched and read by nobody. It was the last trace of counting declines
+      // from the CARD, which the Declined section below replaced and explains. Two readers of one
+      // fact is how they come to disagree, and on 2026-10-14 they did: a garage-declined card sat
+      // in this query while its version stayed `sent`, so it was in one reader and absent from the
+      // other. One rule, one place: a decline is a fact about the VERSION.
+      where: { group_id: args.groupId, site_id: { in: args.siteIds }, status: { in: [...ACCEPTED_ONWARD] as any } },
       select: {
         id: true, status: true, accepted_at: true, resource_id: true, start_at: true, end_at: true,
         items: { select: { qty: true, unit_price: true, vat_amount: true } },
@@ -144,7 +151,7 @@ export async function computeQuotesMetrics(args: {
 
   const m: QuotesMetrics = { ...empty };
 
-  // ── ACCEPTED / DECLINED — outcome-dated, verbal included ──────────────────────────────────────
+  // ── ACCEPTED — outcome-dated, verbal included (DECLINED is below, from the version) ─────────────
   for (const c of cards) {
     const vs = byCard.get(c.id) ?? [];
     const acceptedV = [...vs].reverse().find((v) => v.status === 'accepted') ?? null;
