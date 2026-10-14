@@ -80,6 +80,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       // every line on a card is written in one statement and shares the transaction's timestamp.
       items: { orderBy: [{ position: { sort: 'asc', nulls: 'last' } }, { created_at: 'asc' }] },
       quote_option_drafts: { orderBy: { position: 'asc' } },
+      quote_option_group_drafts: { orderBy: { position: 'asc' } },
       // Duplicate provenance — enough to say "copied from X" and to spot an ownership change
       // (source customer vs this card's customer, compared by ID at render).
       duplicated_from: { select: { id: true, customer_id: true, customer: { select: { name: true } }, vehicle: { select: { registration: true } } } },
@@ -471,16 +472,25 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
    * THE CARD'S DRAFT OPTIONS. Shaped here rather than queried in the component, like every other
    * prop on this page — the builder is given what to show and resolves nothing itself.
    */
-  const options = ((row as any).quote_option_drafts ?? []).map((o: any) => ({
+  // THE BUILDER'S OWN SHAPE. `kind`/`group_key` are the retiring flat pair and are deliberately
+  // NOT sent: the builder works in groups now, and handing it a field nothing reads is how the two
+  // shapes drift back together. This map is `any`-typed, so tsc cannot tell us when it falls behind
+  // DraftOption — the estimate-options gate asserts the pair instead.
+  const options = ((row as any).quote_option_drafts ?? []).map((o: any, i: number) => ({
     id: o.id,
-    kind: o.kind === 'variation' ? 'variation' : 'addition',
+    group_id: o.group_id ?? '',
+    is_base: !!o.is_base,
     title: o.title,
-    group_key: o.group_key ?? null,
+    position: o.position ?? i,
     incentive_kind: o.incentive_kind ?? null,
+    incentive_percent_bp: o.incentive_percent_bp ?? null,
     incentive_label: o.incentive_label ?? null,
     incentive_ex_pennies: o.incentive_ex_pennies ?? null,
     incentive_vatable: o.incentive_vatable ?? null,
     incentive_gross_off_pennies: o.incentive_gross_off_pennies ?? null,
+  }));
+  const optionGroups = ((row as any).quote_option_group_drafts ?? []).map((g: any) => ({
+    id: g.id, shape: g.shape === 'pick_one' ? 'pick_one' : 'base_plus_extras', title: g.title,
   }));
 
   const flags = [
@@ -731,7 +741,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
     clock,
     garageNotes: row.garage_notes ?? '',
-    lines, options, catalogue, fixedServices, tiers, promos,
+    lines, options, optionGroups, catalogue, fixedServices, tiers, promos,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them
     labourRate: priceVisible && labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
     hasEstimate: (row.items as any[]).length > 0,

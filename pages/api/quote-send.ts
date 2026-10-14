@@ -115,6 +115,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sendRefusal = refuseQuoteSend(card.status, isRevision);
   if (sendRefusal) return res.status(409).json({ code: sendRefusal.code, message: sendRefusal.message });
 
+  // ── THE UNREAD-QUOTE REFUSAL GOES HERE, AND IS DELIBERATELY NOT WIRED YET ──────────────────
+  //
+  //   const preview = await previewState(jobCardId);
+  //   if (!preview.seen) return res.status(409).json({ code: 'preview_required', message: preview.staleReason });
+  //
+  // lib/quote-preview is built and proved; this call is not made because NOTHING CAN SET THE
+  // FINGERPRINT yet. The customer document is only reachable through /c/[token], and that token
+  // is minted AT SEND — so switching this on before a staff-side preview exists would refuse
+  // every quote in the system, for a step the screen does not offer.
+  //
+  // It goes live with the preview surface, in the same change, so there is never a window where
+  // the guard demands something nobody can do.
+
   // ── CAN WE AFFORD THE TEXT? ASKED BEFORE ANYTHING IS DESTROYED ─────────────────────────────
   // See the header. Refusing at the chokepoint would mean the live link was already revoked and a
   // new version already frozen for a message that never left — the customer would be holding a dead

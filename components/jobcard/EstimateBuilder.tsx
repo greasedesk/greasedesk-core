@@ -60,12 +60,28 @@ type Row = EstimateLine & { _uid: string };
  * endpoint maps a provisional id to the stored one for the lines pointing at it, so a line can be
  * assigned to an option that does not exist on the server yet.
  */
+/**
+ * A GROUP THE BUILDER MADE BECAUSE OF SOMETHING YOU DID. There is no "create a group" button: you
+ * drop an icon on a line you have already quoted, and the group exists with that line in it. Which
+ * icon decides the SHAPE, and the shape decides what choosing means (lib/quote-options).
+ */
+export type DraftGroup = {
+  id: string;
+  shape: 'pick_one' | 'base_plus_extras';
+  title: string;
+};
+
 export type DraftOption = {
   id: string;
-  kind: 'addition' | 'variation';
+  /** The group it belongs to — every option has one. `kind` is the retiring flat shape. */
+  group_id: string;
+  /** base_plus_extras only: the job the extras hang off, and the line you dropped the icon on. */
+  is_base: boolean;
   title: string;
-  group_key: string | null;
-  incentive_kind: 'amount_off' | 'included' | null;
+  position: number;
+  incentive_kind: 'amount_off' | 'included' | 'percent_off' | null;
+  /** percent_off only: the rate, in basis points. The PENNIES are resolved at freeze. */
+  incentive_percent_bp: number | null;
   incentive_label: string | null;
   incentive_ex_pennies: number | null;
   incentive_vatable: boolean | null;
@@ -84,6 +100,7 @@ type Props = {
   labourRate?: number | null; // per-site default labour rate (Financial settings) — pre-fills new labour lines
   initialLines: EstimateLine[];
   initialOptions?: DraftOption[];   // the card's draft options; absent = none authored yet
+  initialGroups?: DraftGroup[];     // …and the groups they sit in
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
   catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
   fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
@@ -243,13 +260,14 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
 export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
 export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () => EstimateLine[] };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, initialOptions = [], vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, initialOptions, initialGroups = [] = [], vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
   const { t } = useTranslation('jobcard');
   // SEEDED FROM THE SERVER ID where the line already exists. _uid is still just React's key — its
   // job is focus retention across a keystroke — but keying it to the real row means a re-render
   // cannot silently detach a line from the row it represents. A NEW row has no id and mints one.
   const [lines, setLines] = useState<Row[]>(() => initialLines.map((l) => ({ ...l, _uid: l.id ?? uid() })));
-  const [options, setOptions] = useState<DraftOption[]>(initialOptions);
+  const [options, setOptions] = useState<DraftOption[]>(initialOptions ?? []);
+  const [groups, setGroups] = useState<DraftGroup[]>(initialGroups);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
@@ -374,8 +392,8 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   // The estimate lives on the DRAFT JobCard's JobCardItem rows (Option B) — this writes to them.
   // Options are part of what a save persists, so they are part of what "dirty" means. Leaving them
   // out would make renaming an option or changing an incentive a change the autosave cannot see.
-  const serialize = (ls: Row[], vr: string, os: DraftOption[] = options) =>
-    JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest), options: os });
+  const serialize = (ls: Row[], vr: string, os: DraftOption[] = options, gs: DraftGroup[] = groups) =>
+    JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest), options: os, groups: gs });
   const lastSavedRef = useRef<string>(serialize(initialLines.map((l) => ({ ...l, _uid: '' } as Row)), String(initialVatRate)));
 
   // Persist the estimate lines. Also updates lastSavedRef, so autosave never re-posts an unchanged
@@ -386,7 +404,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       const items = lines.map(({ _uid, code, ...rest }) => rest); // strip client-only id + transient code
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items, options }),
+        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items, options, groups }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -439,9 +457,57 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     // autosave could not see — the edit sat in local state and was lost on navigate. Found by a
     // gate that typed an incentive on the real screen and found nulls in the database.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, vatRate, canEdit, options]);
+  }, [lines, vatRate, canEdit, options, groups]);   // `groups` BELONGS HERE: renaming a group is a
+  // change `serialize` can see, so leaving it out would make the autosave blind to it.
 
   // Each row carries its original index so per-line totals map back to totals.lines[idx].
+  /**
+   * ── THE GROUP EXISTS BECAUSE OF WHAT YOU DID ────────────────────────────────────────────────
+   * There is no "create a group" button. You drop an icon on a line you have ALREADY quoted, and
+   * the group arrives with that line in it, plus one empty sibling to type. Which icon decides the
+   * SHAPE, and the shape decides what choosing means (lib/quote-options):
+   *
+   *   alternatives → pick_one: the line becomes one of the choices, and declining them all is a
+   *                  legitimate answer, so the work leaves the main quote.
+   *   extras       → base_plus_extras: the line stays as the job being done and becomes the BASE,
+   *                  and the extras hang off it — orderable only while it is.
+   *
+   * Either way the line moves OUT of the main quote and into the group, because a line that is
+   * both the main quote and a choice would be billed twice if the choice were taken.
+   */
+  const makeGroup = (shape: DraftGroup['shape'], lineUid: string) => {
+    const line = lines.find((l) => l._uid === lineUid);
+    const name = (line?.description || '').trim();
+    const gid = `g-${Date.now()}`;
+    const oid = `new-${Date.now()}`;
+    setGroups((gs) => [...gs, {
+      id: gid, shape,
+      title: name || (shape === 'pick_one' ? 'Choose one' : 'Extras'),
+    }]);
+    const blank = {
+      incentive_kind: null, incentive_percent_bp: null, incentive_label: null,
+      incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null,
+    } as const;
+    setOptions((os) => [...os,
+      { id: oid, group_id: gid, is_base: shape === 'base_plus_extras', title: name || 'This job', position: os.length, ...blank },
+      { id: `${oid}-b`, group_id: gid, is_base: false, position: os.length + 1, ...blank,
+        title: shape === 'pick_one' ? 'Another choice' : 'An extra' },
+    ]);
+    setLines((ls) => ls.map((x) => (x._uid === lineUid ? { ...x, option_draft_id: oid } : x)));
+  };
+
+  /** The two icons, on any line not already in a group. */
+  const GroupIcons = ({ l }: { l: Row }) => (!canEdit || l.option_draft_id ? null : (
+    <div className="flex gap-2 mb-2 -mt-1" data-testid="group-icons" data-line={l._uid}>
+      <button type="button" data-testid="offer-alternatives"
+        className="text-xs rounded-lg px-2 py-1 bg-surface-muted border border-line text-muted hover:text-ink"
+        onClick={() => makeGroup('pick_one', l._uid)}>⇅ Offer alternatives</button>
+      <button type="button" data-testid="add-extras"
+        className="text-xs rounded-lg px-2 py-1 bg-surface-muted border border-line text-muted hover:text-ink"
+        onClick={() => makeGroup('base_plus_extras', l._uid)}>＋ Add extras</button>
+    </div>
+  ));
+
   const withIdx = lines.map((l, idx) => ({ l, idx }));
   const labour = withIdx.filter((x) => x.l.item_type === 'labour');
   const parts = withIdx.filter((x) => x.l.item_type !== 'labour' && x.l.item_type !== 'fixed');
@@ -469,6 +535,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
             <LineRow row={l} idx={idx} kind="labour" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={hasCatalogue} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
               lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove}
               onFieldBlur={() => markBlurred(l._uid)} />
+            <GroupIcons l={l} />
             {/* Labour rules L1/L2 (2026-07-29) — this note did not exist on labour rows before, because
                 every rule was parts-only. Warn-only: no fix button is offered for labour. */}
             <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={false} canEdit={canEdit} costVisible={costVisible} labourRate={labourRate} t={t} onFix={() => {}} />
@@ -486,6 +553,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
               lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t}
               onChange={(i, patch) => { update(i, patch); if (('qty' in patch || 'unit_price' in patch) && fixedUids.has(l._uid)) setFixedUids((s) => { const n = new Set(s); n.delete(l._uid); return n; }); }}
               onCode={onCode} onRemove={remove} onFieldBlur={() => markBlurred(l._uid)} />
+            <GroupIcons l={l} />
             <LinePlausibilityNote row={l} idx={idx} show={blurredUids.has(l._uid)} justFixed={fixedUids.has(l._uid)} canEdit={canEdit} costVisible={costVisible} labourRate={labourRate} t={t} onFix={(i, fp) => applyLineFix(i, l._uid, fp)} />
           </React.Fragment>
         ))}
@@ -501,6 +569,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
             <div key={l._uid}>
               <LineRow row={l} idx={idx} kind="part" canEdit={canEdit} showVat={vatRegistered} hasCatalogue={false} priceVisible={priceVisible} costVisible={costVisible} canCatalogue={canCatalogue}
                 lineTotal={fmt(totals.lines[idx]?.line_total_pennies ?? 0)} t={t} onChange={update} onCode={onCode} onRemove={remove} />
+              <GroupIcons l={l} />
               {l.labour_hours != null && (
                 <p className="text-xs text-muted -mt-1 mb-2">{t('estimate.fixedHours', { hours: l.labour_hours })}</p>
               )}
@@ -555,92 +624,132 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         <div className="border-t border-line mt-4 pt-4" data-testid="estimate-options">
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-sm font-semibold text-ink">Options</span>
-            <span className="flex gap-2">
-              <button type="button" data-testid="add-addition"
-                onClick={() => setOptions((os) => [...os, { id: `new-${Date.now()}-${os.length}`, kind: 'addition', title: 'Optional extra', group_key: null, incentive_kind: null, incentive_label: null, incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null }])}
-                className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink">Add an extra</button>
-              <button type="button" data-testid="add-variation"
-                onClick={() => setOptions((os) => [...os, { id: `new-${Date.now()}-${os.length}`, kind: 'variation', title: 'Alternative', group_key: 'service', incentive_kind: null, incentive_label: null, incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null }])}
-                className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink">Add an alternative</button>
-            </span>
           </div>
-          {options.length === 0 && (
+          {groups.length === 0 && (
             <p className="text-xs text-muted" data-testid="no-options">
-              No options. An <strong>extra</strong> is added to the quote if the customer wants it; an{' '}
-              <strong>alternative</strong> is one of a set they choose between — and they can decline them all.
+              No options yet. On any line above, <strong>Offer alternatives</strong> turns it into a
+              choice the customer picks one of, and <strong>Add extras</strong> keeps it and offers
+              more alongside it. They can decline either.
             </p>
           )}
-          {options.map((o, oi) => (
-            <div key={o.id} className="rounded-lg border border-line p-3 mb-2" data-testid="option-editor" data-kind={o.kind}>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs uppercase tracking-wide text-muted">{o.kind === 'variation' ? 'One of' : 'Extra'}</span>
-                <input className={inputCls} style={{ maxWidth: 220 }} value={o.title} data-testid="option-title"
-                  onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, title: e.target.value } : x)))} />
-                {o.kind === 'variation' && (
-                  <label className="text-xs text-muted flex items-center gap-1">
-                    group
-                    <input className={inputCls} style={{ maxWidth: 110 }} value={o.group_key ?? ''} data-testid="option-group"
-                      onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, group_key: e.target.value } : x)))} />
-                  </label>
-                )}
-                <select className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink" data-testid="option-incentive"
-                  value={o.incentive_kind ?? ''}
-                  onChange={(e) => {
-                    const k = (e.target.value || null) as DraftOption['incentive_kind'];
-                    setOptions((os) => os.map((x, i) => (i === oi ? {
-                      ...x, incentive_kind: k,
-                      incentive_label: k ? (x.incentive_label ?? '') : null,
-                      incentive_ex_pennies: k === 'amount_off' ? (x.incentive_ex_pennies ?? 0) : null,
-                      incentive_vatable: k === 'amount_off' ? (x.incentive_vatable ?? true) : null,
-                      incentive_gross_off_pennies: k === 'amount_off' ? (x.incentive_gross_off_pennies ?? 0) : null,
-                    } : x)));
-                  }}>
-                  <option value="">no incentive</option>
-                  <option value="amount_off">money off</option>
-                  <option value="included">something included</option>
-                </select>
-                {o.incentive_kind && (
-                  <input className={inputCls} style={{ maxWidth: 220 }} placeholder="wording the customer reads"
-                    data-testid="incentive-label" value={o.incentive_label ?? ''}
-                    onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, incentive_label: e.target.value } : x)))} />
-                )}
-                {o.incentive_kind === 'amount_off' && (
-                  <label className="text-xs text-muted flex items-center gap-1">
-                    off the total
-                    <input className={inputCls} style={{ maxWidth: 100 }} type="number" step="0.01" min="0"
-                      data-testid="incentive-amount"
-                      value={((o.incentive_gross_off_pennies ?? 0) / 100).toFixed(2)}
-                      onChange={(e) => {
-                        // The ex-VAT figure the LINE needs and the gross figure the DOCUMENT promises
-                        // are both frozen, so both are derived here from the one number typed, using
-                        // this quote's own rate. lib/quote-options refuses a pair that disagrees.
-                        const gross = Math.max(0, Math.round(Number(e.target.value || 0) * 100));
-                        const rate = vatRegistered ? Number(vatRate || 0) : 0;
-                        const ex = Math.round(gross / (1 + rate / 100));
-                        setOptions((os) => os.map((x, i) => (i === oi
-                          ? { ...x, incentive_gross_off_pennies: gross, incentive_ex_pennies: ex, incentive_vatable: rate > 0 }
-                          : x)));
-                      }} />
-                  </label>
-                )}
-                <button type="button" data-testid="remove-option" className="text-sm text-danger ml-auto"
-                  onClick={() => setOptions((os) => os.filter((_, i) => i !== oi))}>Remove</button>
-              </div>
-              {/* WHICH WORK BELONGS TO IT. Unticked everywhere = the main quote. */}
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                {lines.length === 0 && <span className="text-xs text-muted">Add some work first, then tick what belongs to this option.</span>}
-                {lines.map((l) => (
-                  <label key={l._uid} className="text-xs text-ink flex items-center gap-1" data-testid="option-line-tick">
-                    <input type="checkbox" checked={l.option_draft_id === o.id}
-                      onChange={(e) => setLines((ls) => ls.map((x) => (x._uid === l._uid
-                        ? { ...x, option_draft_id: e.target.checked ? o.id : null }
-                        : x)))} />
-                    {l.description || '(untitled line)'}
-                  </label>
+          {groups.map((g, gi) => {
+            const mine = options.map((o, oi) => ({ o, oi })).filter((x) => x.o.group_id === g.id);
+            return (
+              <div key={g.id} className="rounded-lg border border-line p-3 mb-2"
+                data-testid="group-editor" data-group={g.id} data-shape={g.shape}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs uppercase tracking-wide text-muted">
+                    {g.shape === 'pick_one' ? 'Choose one of' : 'Plus any of'}
+                  </span>
+                  <input className={inputCls} style={{ maxWidth: 220 }} value={g.title} data-testid="group-title"
+                    onChange={(e) => setGroups((gs) => gs.map((x, i) => (i === gi ? { ...x, title: e.target.value } : x)))} />
+                  <button type="button" data-testid="add-option" className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink"
+                    onClick={() => setOptions((os) => [...os, {
+                      id: `new-${Date.now()}-${os.length}`, group_id: g.id, is_base: false,
+                      title: g.shape === 'pick_one' ? 'Another choice' : 'Another extra', position: os.length,
+                      incentive_kind: null, incentive_label: null, incentive_percent_bp: null,
+                      incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null,
+                    }])}>
+                    {g.shape === 'pick_one' ? 'Add a choice' : 'Add an extra'}
+                  </button>
+                  {/* REMOVING THE GROUP RETURNS ITS WORK TO THE MAIN QUOTE — the server does the same
+                      for the rows, and doing it here too keeps the screen honest before the save. */}
+                  <button type="button" data-testid="remove-group" className="text-sm text-danger ml-auto"
+                    onClick={() => {
+                      const ids = new Set(mine.map((x) => x.o.id));
+                      setLines((ls) => ls.map((x) => (x.option_draft_id && ids.has(x.option_draft_id) ? { ...x, option_draft_id: null } : x)));
+                      setOptions((os) => os.filter((o) => o.group_id !== g.id));
+                      setGroups((gs) => gs.filter((_, i) => i !== gi));
+                    }}>Remove group</button>
+                </div>
+
+                {mine.map(({ o, oi }) => (
+                  <div key={o.id} className="mt-2 rounded-lg border border-line p-2" data-testid="option-editor"
+                    data-option={o.id} data-base={o.is_base ? '1' : undefined}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {o.is_base && <span className="text-xs uppercase tracking-wide text-muted">the job</span>}
+                      <input className={inputCls} style={{ maxWidth: 220 }} value={o.title} data-testid="option-title"
+                        onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, title: e.target.value } : x)))} />
+                      <select className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink" data-testid="option-incentive"
+                        value={o.incentive_kind ?? ''}
+                        onChange={(e) => {
+                          const k = (e.target.value || null) as DraftOption['incentive_kind'];
+                          setOptions((os) => os.map((x, i) => (i === oi ? {
+                            ...x, incentive_kind: k,
+                            incentive_label: k ? (x.incentive_label ?? '') : null,
+                            incentive_percent_bp: k === 'percent_off' ? (x.incentive_percent_bp ?? 1000) : null,
+                            incentive_ex_pennies: k === 'amount_off' ? (x.incentive_ex_pennies ?? 0) : null,
+                            incentive_vatable: k === 'amount_off' ? (x.incentive_vatable ?? true) : null,
+                            incentive_gross_off_pennies: k === 'amount_off' ? (x.incentive_gross_off_pennies ?? 0) : null,
+                          } : x)));
+                        }}>
+                        <option value="">no incentive</option>
+                        <option value="amount_off">money off</option>
+                        <option value="percent_off">a percentage off</option>
+                        <option value="included">something included</option>
+                      </select>
+                      {o.incentive_kind && (
+                        <input className={inputCls} style={{ maxWidth: 200 }} data-testid="incentive-label"
+                          placeholder="how it reads to the customer" value={o.incentive_label ?? ''}
+                          onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi ? { ...x, incentive_label: e.target.value } : x)))} />
+                      )}
+                      {/* MONEY OFF. The ex-VAT figure the LINE needs and the gross figure the
+                          DOCUMENT promises are both frozen, so both are derived here from the one
+                          number typed, using this quote's own rate — lib/quote-options refuses a
+                          pair that disagrees. */}
+                      {o.incentive_kind === 'amount_off' && (
+                        <label className="text-xs text-muted flex items-center gap-1">
+                          off the total
+                          <input className={inputCls} style={{ maxWidth: 100 }} type="number" step="0.01" min="0"
+                            data-testid="incentive-amount"
+                            value={((o.incentive_gross_off_pennies ?? 0) / 100).toFixed(2)}
+                            onChange={(e) => {
+                              const gross = Math.max(0, Math.round(Number(e.target.value || 0) * 100));
+                              const rate = vatRegistered ? Number(vatRate || 0) : 0;
+                              const ex = Math.round(gross / (1 + rate / 100));
+                              setOptions((os) => os.map((x, i) => (i === oi
+                                ? { ...x, incentive_gross_off_pennies: gross, incentive_ex_pennies: ex, incentive_vatable: rate > 0 }
+                                : x)));
+                            }} />
+                        </label>
+                      )}
+                      {/* THE RATE, NOT THE MONEY. A draft has no frozen figures to take a percentage
+                          of, so the pennies are resolved once at freeze from this option's own lines
+                          (lib/quote-version) and never recomputed after. */}
+                      {o.incentive_kind === 'percent_off' && (
+                        <label className="text-xs text-muted flex items-center gap-1">
+                          <input className={inputCls} style={{ maxWidth: 80 }} type="number" min="0.1" max="99" step="0.1"
+                            data-testid="incentive-percent"
+                            value={((o.incentive_percent_bp ?? 0) / 100).toString()}
+                            onChange={(e) => setOptions((os) => os.map((x, i) => (i === oi
+                              ? { ...x, incentive_percent_bp: Math.round(Number(e.target.value || 0) * 100) } : x)))} />
+                          % off
+                        </label>
+                      )}
+                      <button type="button" data-testid="remove-option" className="text-sm text-danger ml-auto"
+                        onClick={() => {
+                          setLines((ls) => ls.map((x) => (x.option_draft_id === o.id ? { ...x, option_draft_id: null } : x)));
+                          setOptions((os) => os.filter((_, i) => i !== oi));
+                        }}>Remove</button>
+                    </div>
+                    {/* WHICH WORK BELONGS TO IT. Unticked everywhere = the main quote. */}
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                      {lines.length === 0 && <span className="text-xs text-muted">Add some work first, then tick what belongs here.</span>}
+                      {lines.map((l) => (
+                        <label key={l._uid} className="text-xs text-ink flex items-center gap-1" data-testid="option-line-tick">
+                          <input type="checkbox" checked={l.option_draft_id === o.id}
+                            onChange={(e) => setLines((ls) => ls.map((x) => (x._uid === l._uid
+                              ? { ...x, option_draft_id: e.target.checked ? o.id : null }
+                              : x)))} />
+                          {l.description || '(untitled line)'}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

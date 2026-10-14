@@ -439,19 +439,35 @@ try {
     check('the estimate screen offers an options section at all', !!panel,
       panel ? 'it is reachable' : `NOT RENDERED at ${pg.url().replace(origin, '')} — main says: ${((await pg.locator('main').first().textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)}`);
     if (!panel) throw new Error('no options panel; the clauses below describe a screen that is not there');
-    check('  …and explains the two kinds before any exist',
-      /added to the quote if the customer wants it/.test((await pg.textContent('[data-testid="no-options"]')) ?? ''),
-      ((await pg.textContent('[data-testid="no-options"]')) ?? 'ABSENT').trim().slice(0, 80));
+    check('  …and explains the two shapes before any exist',
+      /turns it into a choice|offers more alongside it/.test((await pg.textContent('[data-testid="no-options"]')) ?? ''),
+      ((await pg.textContent('[data-testid="no-options"]')) ?? 'ABSENT').trim().slice(0, 90));
 
-    await pg.click('[data-testid="add-addition"]');
-    await pg.waitForSelector('[data-testid="option-editor"]', { timeout: 10000 });
-    await pg.fill('[data-testid="option-title"]', 'Water pump');
+    /**
+     * THE GROUP EXISTS BECAUSE OF WHAT THE ESTIMATOR DID. There is no "create a group" button to
+     * click: the icon sits on a line already quoted, and pressing it makes the group WITH that
+     * line in it. This drives the real screen rather than inserting rows, which is the gap that
+     * let the builder keep writing the retired flat shape for a day after the model moved.
+     */
+    const icons = pg.locator('[data-testid="add-extras"]');
+    check('every un-grouped line offers the two icons', (await icons.count()) > 0,
+      `${await icons.count()} line(s) offer them`);
+    await icons.first().click();
+    await pg.waitForSelector('[data-testid="group-editor"]', { timeout: 10000 });
+    check('  …and pressing one makes a base_plus_extras group with that line as the base',
+      (await pg.locator('[data-testid="group-editor"][data-shape="base_plus_extras"]').count()) === 1
+      && (await pg.locator('[data-testid="option-editor"][data-base="1"]').count()) === 1,
+      'the line stays as the job being done, and the extras hang off it');
+    // The second option in the group is the empty sibling the icon seeded, ready to type.
+    // The extra is a DIFFERENT job from the base. Naming it 'Water pump' too — as this fixture
+    // first did — gave the card two rows with one name and no way for a query to say which.
+    await pg.locator('[data-testid="option-title"]').nth(1).fill('Coolant flush');
     /** TICK THE LINE THAT BELONGS TO IT. Unticked everywhere stays the main quote. */
     const ticks = pg.locator('[data-testid="option-line-tick"] input');
     await ticks.nth(1).check();
-    await pg.selectOption('[data-testid="option-incentive"]', 'amount_off');
-    await pg.fill('[data-testid="incentive-label"]', '50 off with the rebuild');
-    await pg.fill('[data-testid="incentive-amount"]', '60.00');
+    await pg.locator('[data-testid="option-incentive"]').nth(1).selectOption('amount_off');
+    await pg.locator('[data-testid="incentive-label"]').first().fill('50 off with the rebuild');
+    await pg.locator('[data-testid="incentive-amount"]').first().fill('60.00');
     // Saved by the card's own save, the way an estimator leaves the screen.
     await pg.keyboard.press('Tab');
     await pg.waitForFunction(async () => {
@@ -469,23 +485,39 @@ try {
       const deadline = Date.now() + 25000;
       let last = null;
       while (Date.now() < deadline) {
-        last = await prisma.quoteOptionDraft.findFirst({ where: { job_card_id: card3.id } });
+        // BY THE THING THAT DISTINGUISHES IT, which is neither position nor title. Dropping the
+        // icon creates TWO options, and the BASE takes its name from the line it was dropped on —
+        // the water-pump line — so both rows are called "Water pump". findFirst picked the base
+        // (no incentive, by design) and the clause read its nulls as a defect; narrowing to the
+        // title picked the base again. The subject of this clause is the option CARRYING the
+        // incentive, so that is what it asks for.
+        last = await prisma.quoteOptionDraft.findFirst({
+          where: { job_card_id: card3.id, is_base: false, title: 'Coolant flush' },
+        });
         if (last?.incentive_gross_off_pennies === 6000) return last;
         await new Promise((r) => setTimeout(r, 400));
       }
       return last;
     })();
-    check('an option typed on the screen reaches the database', !!landed && landed.title === 'Water pump',
-      landed ? `${landed.kind} "${landed.title}"` : 'NOTHING SAVED');
+    check('an option typed on the screen reaches the database', !!landed && landed.title === 'Coolant flush',
+      landed ? `"${landed.title}" in group ${landed.group_id ? 'yes' : 'NONE — it could not be rendered'}` : 'NOTHING SAVED');
+    check('  …IN A GROUP, so the customer\'s page can render it at all', !!landed?.group_id,
+      'an option with no group is invisible to the customer view and refused at acceptance — the shape the builder wrote for a day after the model moved');
     check('  …with the incentive, and BOTH figures derived from the one number typed',
       !!landed && landed.incentive_kind === 'amount_off' && landed.incentive_gross_off_pennies === 6000
       && landed.incentive_ex_pennies === 5000 && landed.incentive_vatable === true,
       landed ? `gross off ${landed.incentive_gross_off_pennies}p, ex ${landed.incentive_ex_pennies}p` : '—');
     const tagged = await prisma.jobCardItem.findMany({ where: { job_card_id: card3.id }, select: { description: true, option_draft_id: true } });
-    check('  …and the ticked line belongs to it while the other stays the main quote',
-      tagged.find((x) => x.description === 'Water pump')?.option_draft_id === landed?.id
+    // THE LINE WENT TO THE BASE, which is the whole point of the icon: the job you dropped it on
+    // is the job being done, and the extra hangs off it. The engine rebuild never moved.
+    const base = await prisma.quoteOptionDraft.findFirst({ where: { job_card_id: card3.id, is_base: true } });
+    check('  …the line the icon was dropped on belongs to the BASE, and the rest stays the main quote',
+      !!base && tagged.find((x) => x.description === 'Water pump')?.option_draft_id === base.id
       && tagged.find((x) => x.description === 'Engine rebuild')?.option_draft_id === null,
       tagged.map((x) => `${x.description}=${x.option_draft_id ? 'option' : 'main'}`).join(', '));
+    check('  …and the extra carries the incentive, not the base',
+      landed?.incentive_kind === 'amount_off' && base?.incentive_kind === null,
+      `extra=${landed?.incentive_kind}, base=${base?.incentive_kind}`);
     /**
      * ── REMOVING AN OPTION IS REGROUPING, NOT DELETING ────────────────────────────────────────
      * Its lines go back to the MAIN quote. Deleting work somebody typed because they changed their

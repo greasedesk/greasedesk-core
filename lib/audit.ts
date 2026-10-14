@@ -168,6 +168,8 @@ export type AuditAction =
                            // CARD — deliberately outside ACCEPTANCE_ACTIONS so quotes-metrics never
                            // dates a second acceptance from it. Always garage-recorded.
   | 'quote.declined'     // CUSTOMER declined, via magic link: { version, grossPennies, at, ip, userAgent }
+  | 'quote.preview_seen'  // the customer view was RENDERED for this exact draft — { fingerprint }.
+                         // Its absence, or a draft that has moved since, is what refuses a send.
   | 'quote.link_revoked' // the customer's live link was killed outside the send path — { reason, links }.
                          // Written where the revocation is the POINT rather than a side effect of a
                          // supersede: a garage decline, or a one-off repair of one that was missed.

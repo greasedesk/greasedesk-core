@@ -40,10 +40,17 @@ type IncomingLine = {
 type IncomingOption = {
   id?: string;
   kind?: string; title?: string; group_key?: string | null; position?: number;
+  /** The group this option belongs to — a stored id, or the builder's provisional one. */
+  group_id?: string | null;
+  /** base_plus_extras only: the job the extras hang off. */
+  is_base?: boolean;
   incentive_kind?: string | null; incentive_label?: string | null;
   incentive_ex_pennies?: number | null; incentive_vatable?: boolean | null;
-  incentive_gross_off_pennies?: number | null;
+  incentive_gross_off_pennies?: number | null; incentive_percent_bp?: number | null;
 };
+
+/** A group the builder created by dropping an icon on a line. See lib/quote-options GROUP_SHAPES. */
+type IncomingGroup = { id?: string; shape?: string; title?: string; position?: number };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -54,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const user = session?.user as any;
   if (!user?.id || !user?.group_id) return res.status(401).json({ message: 'Not authenticated.' });
 
-  const { jobCardId, vatRate, items, options } = (req.body || {}) as { jobCardId?: string; vatRate?: number | string; items?: IncomingLine[]; options?: IncomingOption[] };
+  const { jobCardId, vatRate, items, options, groups } = (req.body || {}) as { jobCardId?: string; vatRate?: number | string; groups?: IncomingGroup[]; items?: IncomingLine[]; options?: IncomingOption[] };
   if (!jobCardId) return res.status(400).json({ message: 'Missing jobCardId.' });
   if (!Array.isArray(items)) return res.status(400).json({ message: 'items must be an array.' });
 
@@ -95,6 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       grossEntry: card.site?.pricing_display_mode === 'inc_vat',
       costWritable: finWrite.seeMargin, actorUserId: user.id as string,
       options,
+      groups,
     });
   } catch (e: any) {
     if (e?.message?.startsWith('VALIDATION:')) return res.status(400).json({ message: e.message.slice('VALIDATION:'.length) });
@@ -169,8 +177,11 @@ export async function performEstimateSave(args: {
    *  UNDEFINED means "this caller does not manage options" and leaves them untouched — the import
    *  paths and the demo generator save estimates without ever having heard of an option. */
   options?: IncomingOption[];
+  /** The card's draft GROUPS. Same contract as `options`: undefined means "this caller does not
+   *  manage them", which is what the import paths and the demo generator want. */
+  groups?: IncomingGroup[];
 }) {
-  const { groupId, jobCardId, items, vatRate, vatRegistered, options } = args;
+  const { groupId, jobCardId, items, vatRate, vatRegistered, options, groups } = args;
   const grossEntry = args.grossEntry === true;
   const costWritable = args.costWritable === true;
 
@@ -380,6 +391,58 @@ export async function performEstimateSave(args: {
      * lines point at — is intersected with the drafts THIS CARD actually has, exactly as line ids
      * are. Nothing here trusts the browser about what belongs to whom.
      */
+    /**
+     * ── GROUPS FIRST, because every option names one ────────────────────────────────────────
+     * The builder mints a provisional id when you drop an icon, so an option can arrive naming a
+     * group that does not exist on the server yet. Reconciled in the same shape as the options
+     * below — kept by id, the rest removed — and the map turns provisional ids into stored ones.
+     *
+     * A group that goes takes its options with it (the FK cascades), and the FK from
+     * JobCardItem.option_draft_id is SET NULL, so the LINES return to the main quote rather than
+     * disappearing with the grouping somebody changed their mind about.
+     */
+    const existingGroups = (await tx.quoteOptionGroupDraft.findMany({
+      where: { job_card_id: jobCardId }, select: { id: true },
+    })) as Array<{ id: string }>;
+    const groupsOnCard = new Set(existingGroups.map((g) => g.id));
+    const incomingGroups = Array.isArray(groups) ? groups : null;
+    const groupIdMap = new Map<string, string>();
+    if (incomingGroups) {
+      const keptGroups = new Set(incomingGroups.map((g) => g.id).filter((id): id is string => !!id && groupsOnCard.has(id)));
+      const goneGroups = existingGroups.filter((g) => !keptGroups.has(g.id)).map((g) => g.id);
+      if (goneGroups.length) {
+        const orphanedOpts = (await tx.quoteOptionDraft.findMany({
+          where: { group_id: { in: goneGroups } }, select: { id: true },
+        })).map((o) => o.id);
+        if (orphanedOpts.length) {
+          await tx.jobCardItem.updateMany({ where: { option_draft_id: { in: orphanedOpts } }, data: { option_draft_id: null } });
+        }
+        await tx.quoteOptionGroupDraft.deleteMany({ where: { id: { in: goneGroups } } });
+      }
+      for (let i = 0; i < incomingGroups.length; i++) {
+        const g = incomingGroups[i];
+        const gdata = {
+          shape: g.shape === 'pick_one' ? 'pick_one' : 'base_plus_extras',
+          position: i,
+          title: String(g.title ?? '').trim().slice(0, 120) || 'Options',
+        };
+        if (g.id && groupsOnCard.has(g.id)) await tx.quoteOptionGroupDraft.update({ where: { id: g.id }, data: gdata });
+        else {
+          const made = await tx.quoteOptionGroupDraft.create({ data: { job_card_id: jobCardId, ...gdata }, select: { id: true } });
+          if (g.id) groupIdMap.set(g.id, made.id);
+        }
+      }
+    }
+    const liveGroups = new Set(((await tx.quoteOptionGroupDraft.findMany({
+      where: { job_card_id: jobCardId }, select: { id: true },
+    })) as Array<{ id: string }>).map((g) => g.id));
+    /** A group claim resolves to a stored id, the mapped one, or NOTHING — never another card's. */
+    const groupFor = (claim: string | null | undefined): string | null => {
+      if (!claim) return null;
+      const mapped = groupIdMap.get(claim) ?? claim;
+      return liveGroups.has(mapped) ? mapped : null;
+    };
+
     const existingOpts = (await tx.quoteOptionDraft.findMany({
       where: { job_card_id: jobCardId }, select: { id: true },
     })) as Array<{ id: string }>;
@@ -403,8 +466,16 @@ export async function performEstimateSave(args: {
           position: i,
           title: String(o.title ?? '').trim().slice(0, 120),
           group_key: o.kind === 'variation' ? (String(o.group_key ?? '').trim().slice(0, 60) || 'options') : null,
-          incentive_kind: o.incentive_kind === 'amount_off' || o.incentive_kind === 'included' ? o.incentive_kind : null,
+          group_id: groupFor(o.group_id),
+          is_base: !!o.is_base,
+          // THE THREE SHAPES. percent_off stores the RATE only: its pennies are resolved once, at
+          // freeze, from the option's own lines (lib/quote-version), because a draft has no frozen
+          // figures to take a percentage of and a rate re-applied later is a second answer.
+          incentive_kind: o.incentive_kind === 'amount_off' || o.incentive_kind === 'included' || o.incentive_kind === 'percent_off'
+            ? o.incentive_kind : null,
           incentive_label: o.incentive_kind ? String(o.incentive_label ?? '').trim().slice(0, 120) : null,
+          incentive_percent_bp: o.incentive_kind === 'percent_off'
+            ? Math.min(9999, Math.max(1, Math.round(Number(o.incentive_percent_bp ?? 0)))) : null,
           incentive_ex_pennies: o.incentive_kind === 'amount_off' ? Math.max(0, Math.round(Number(o.incentive_ex_pennies ?? 0))) : null,
           incentive_vatable: o.incentive_kind === 'amount_off' ? !!o.incentive_vatable : null,
           incentive_gross_off_pennies: o.incentive_kind === 'amount_off' ? Math.max(0, Math.round(Number(o.incentive_gross_off_pennies ?? 0))) : null,
