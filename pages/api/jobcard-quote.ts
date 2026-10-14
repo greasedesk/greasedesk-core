@@ -121,7 +121,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fin = financeVisibility(vis, perms);
   const totals: any = { ...saved.totals };
   if (!fin.seeMargin) { delete totals.labour_cost_pennies; delete totals.parts_cost_pennies; }
-  return res.status(200).json({ message: 'Estimate saved.', totals });
+  // `ids` is NOT margin-grained — a primary key tells the reader nothing about money — so it is
+  // returned whatever the saver can see. Without it the builder cannot address the rows it just
+  // created, which is the whole id-churn defect.
+  return res.status(200).json({ message: 'Estimate saved.', totals, ids: saved.ids });
 }
 
 /**
@@ -296,6 +299,25 @@ export async function performEstimateSave(args: {
     labour_hours: resolved[i].labourHours,
   }));
 
+  /**
+   * ── THE IDS THE SERVER MINTED, SO THE CLIENT CAN STOP GUESSING ──────────────────────────────
+   * DECLARED OUT HERE, not inside the transaction, because the whole point is that they OUTLIVE
+   * it. Both maps existed before and were built correctly and then dropped on the floor when the
+   * closure returned — so the reconcile-in-place below was unreachable from a browser. The client
+   * re-sent its provisional ids on the next autosave, none of them matched a stored row, and every
+   * option and every newly-typed line was deleted and recreated 900ms after it was typed.
+   *
+   * WHY THE GATE DID NOT CATCH IT: quote-line-order-gate saves WITH ids, feeding back ids it read
+   * from the database itself. That proves the server honours an id; it cannot prove anybody can
+   * obtain one. The clause asserted the writer agreed with itself — see the closed-loop rule.
+   */
+  const groupIdMap = new Map<string, string>();   // builder's provisional group id → stored id
+  const idMap = new Map<string, string>();        // builder's provisional option id → stored id
+  /** A NEW LINE HAS NO ID TO CLAIM, so it is correlated by the client's own row key instead. Keyed
+   *  on `uid` rather than position: the client may have inserted or reordered rows since it sent
+   *  this payload, and a positional answer would then be assigned to the wrong line. */
+  const lineIdByUid = new Map<string, string>();
+
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     /**
      * AUDIT THE COST BEFORE IT IS REPLACED. This number drives margin and FREEZES INTO THE INVOICE
@@ -406,7 +428,6 @@ export async function performEstimateSave(args: {
     })) as Array<{ id: string }>;
     const groupsOnCard = new Set(existingGroups.map((g) => g.id));
     const incomingGroups = Array.isArray(groups) ? groups : null;
-    const groupIdMap = new Map<string, string>();
     if (incomingGroups) {
       const keptGroups = new Set(incomingGroups.map((g) => g.id).filter((id): id is string => !!id && groupsOnCard.has(id)));
       const goneGroups = existingGroups.filter((g) => !keptGroups.has(g.id)).map((g) => g.id);
@@ -448,7 +469,6 @@ export async function performEstimateSave(args: {
     })) as Array<{ id: string }>;
     const optsOnCard = new Set(existingOpts.map((o) => o.id));
     const incomingOpts = Array.isArray(options) ? options : null;
-    const idMap = new Map<string, string>();        // client id → stored id, for new drafts
 
     if (incomingOpts) {
       const keptOpts = new Set(incomingOpts.map((o) => o.id).filter((id): id is string => !!id && optsOnCard.has(id)));
@@ -503,8 +523,13 @@ export async function performEstimateSave(args: {
       // The claim comes off the RAW payload row: `inputs` is the normalised pricing shape and has
       // no business carrying an option id through lib/quote-totals.
       const withOption = { ...rows[i], option_draft_id: optionFor((items[i] as IncomingLine | undefined)?.option_draft_id) };
-      if (id === null) await tx.jobCardItem.create({ data: withOption });
-      else await tx.jobCardItem.update({ where: { id }, data: withOption });
+      if (id === null) {
+        const made = await tx.jobCardItem.create({ data: withOption, select: { id: true } });
+        // …AND THE MINTED ID GOES BACK. Without this the line the estimator just typed is deleted
+        // and recreated on every subsequent autosave, taking any DueItemLine with it.
+        const uid = (items[i] as IncomingLine & { uid?: unknown } | undefined)?.uid;
+        if (typeof uid === 'string' && uid) lineIdByUid.set(uid, made.id);
+      } else await tx.jobCardItem.update({ where: { id }, data: withOption });
     }
     await tx.jobCard.update({
       where: { id: jobCardId },
@@ -565,5 +590,15 @@ export async function performEstimateSave(args: {
     }
   }
 
-  return { totals };
+  /** `ids` carries ONLY what this save minted. An empty map is the normal steady state — every row
+   *  already had an id — and is not the same as the field being absent, which is a caller that does
+   *  not manage that kind of row at all. */
+  return {
+    totals,
+    ids: {
+      groups: Object.fromEntries(groupIdMap),
+      options: Object.fromEntries(idMap),
+      lines: Object.fromEntries(lineIdByUid),
+    },
+  };
 }

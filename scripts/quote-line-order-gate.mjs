@@ -63,9 +63,13 @@ const sweepFixtures = async () => {
       await step(k, () => prisma.invoice.deleteMany({ where: { id: fix[k] } }));
     }
     await step('links', () => prisma.dueItemLine.deleteMany({ where: { group_id: ZZ } }));
-    await step('finding', () => fix.finding ? prisma.vehicleDueItem.deleteMany({ where: { id: fix.finding } }) : null);
-    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
-    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4].filter(Boolean) } } }));
+    await step('findings', () => prisma.vehicleDueItem.deleteMany({ where: { id: { in: [fix.finding, fix.finding2].filter(Boolean) } } }));
+    await step('items', () => prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: [fix.card, fix.card2, fix.card3, fix.card4, fix.card5].filter(Boolean) } } }));
+    // The drafts cascade from the card, but they are named anyway: a sweep that relies on a
+    // cascade is a sweep that stops working the day somebody relaxes the FK.
+    await step('option drafts', () => prisma.quoteOptionDraft.deleteMany({ where: { job_card_id: { in: [fix.card4, fix.card5].filter(Boolean) } } }));
+    await step('group drafts', () => prisma.quoteOptionGroupDraft.deleteMany({ where: { job_card_id: { in: [fix.card4, fix.card5].filter(Boolean) } } }));
+    await step('cards', () => prisma.jobCard.deleteMany({ where: { group_id: ZZ, id: { in: [fix.card, fix.card2, fix.card3, fix.card4, fix.card5].filter(Boolean) } } }));
     await step('edge', () => prisma.vehicleOwnership.deleteMany({ where: { vehicle_id: fix.veh } }));
     await step('vehicle', () => prisma.vehicle.deleteMany({ where: { group_id: ZZ, registration: REG } }));
     await step('customer', () => prisma.customer.deleteMany({ where: { group_id: ZZ, id: fix.cust } }));
@@ -96,7 +100,13 @@ try {
   // earlier one's end state and fails for a reason that has nothing to do with its subject.
   const card4 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id,
     customer_id: cust.id, status: 'in_progress' }, select: { id: true } });
-  fix = { cust: cust.id, veh: veh.id, card: card.id, card2: card2.id, card4: card4.id };
+  // card5 is the BROWSER's card. Kept apart from card4 so the screen-driven section cannot be
+  // perturbed by, or perturb, the payload-shaped sections above.
+  // `stage_details_done` because the Quote TAB is gated on Details being complete — a card without
+  // it renders the details tab and the section below would drive nothing.
+  const card5 = await prisma.jobCard.create({ data: { group_id: ZZ, site_id: site.id, vehicle_id: veh.id,
+    customer_id: cust.id, status: 'in_progress', stage_details_done: true }, select: { id: true } });
+  fix = { cust: cust.id, veh: veh.id, card: card.id, card2: card2.id, card4: card4.id, card5: card5.id };
 
   const saveQuote = async (descriptions) => {
     const { saveQuoteLines } = await import('../lib/quote-save.ts').catch(() => ({ saveQuoteLines: null }));
@@ -294,6 +304,75 @@ try {
     (await prisma.dueItemLine.count({ where: { due_item_id: finding.id, job_card_item_id: secondPass[0].id } })) === 1,
     'the cascade destroys it whenever the save recreates the row');
 
+  // ── 8b. AND THE BROWSER CAN ACTUALLY OBTAIN THOSE IDS ───────────────────────────────────────
+  // Section 7 and 8 above prove the server honours an id. They cannot prove anybody can GET one:
+  // every payload there was built by reading ids out of the database with Prisma, which no browser
+  // can do. The endpoint answered `{ message, totals }` and nothing else, so the real client
+  // re-sent its provisional id on the next autosave, the server found no such row, deleted the one
+  // it had minted 900ms earlier and minted another — and the link below died with it, every time.
+  //
+  // That is the closed-loop failure in one place: the clause asserted the writer agreed with
+  // itself. These clauses take the ids from the RESPONSE, which is the only source the client has.
+  console.log('\n— and the client can obtain an id —');
+  const UID = 'qlo-uid-minted';
+  const newLine = { item_type: 'part', description: 'QLO minted line', qty: 1, unit_price: 55, unit_cost: 20, vatable: true };
+  const m1 = await saveId([...withIds, { ...newLine, uid: UID }]);
+  const mintedId = m1.body?.ids?.lines?.[UID];
+  check('a save that mints a line answers with its id, keyed by the row key the client sent',
+    m1.status === 200 && typeof mintedId === 'string' && mintedId.length > 0,
+    `${m1.status} ids=${JSON.stringify(m1.body?.ids ?? null)}`);
+  // findMany + a LENGTH assertion, never findFirst: the whole subject here is whether a row was
+  // replaced, and a findFirst with no orderBy over two rows that read the same answers whichever
+  // one Postgres hands back first. The count IS part of the claim.
+  const mintedRows = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id, description: newLine.description },
+    select: { id: true, created_at: true } });
+  const minted = mintedRows[0];
+  check('  …and the id it names is the one row actually stored',
+    mintedRows.length === 1 && minted.id === mintedId,
+    `${mintedRows.length} row(s); answered ${String(mintedId).slice(0, 8)}, stored ${String(minted?.id).slice(0, 8)}`);
+
+  const finding2 = await prisma.vehicleDueItem.create({ data: {
+    group_id: ZZ, vehicle_id: veh.id, found_on_job_card_id: card4.id, description: 'QLO finding on a minted line',
+    due_basis: 'next_service', customer_response: 'not_raised', created_by: 'quote-line-order-gate' }, select: { id: true } });
+  fix.finding2 = finding2.id;
+  const link2 = await page.evaluate(async (b) => {
+    const r = await fetch('/api/due-items', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin', body: JSON.stringify(b) });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, { dueItemId: finding2.id, jobCardItemId: mintedId });
+  check('a finding links to the minted line', link2.status === 200 && link2.body.linked === true, JSON.stringify(link2).slice(0, 90));
+
+  // THE NEXT AUTOSAVE, SHAPED AS THE BROWSER NOW SHAPES IT: same row, now carrying the id it was
+  // handed. This is the loop the component closes.
+  const m2 = await saveId([...withIds, { ...newLine, id: mintedId, uid: UID }]);
+  const rows2 = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id, description: newLine.description },
+    select: { id: true, created_at: true } });
+  const after2 = rows2[0];
+  check('THE LOOP IS CLOSED: the next save updates that row rather than replacing it',
+    m2.status === 200 && rows2.length === 1 && after2.id === mintedId
+      && after2.created_at.toISOString() === minted?.created_at?.toISOString(),
+    `${m2.status} ${rows2.length} row(s) ${String(after2?.id).slice(0, 8)} vs ${String(mintedId).slice(0, 8)}`);
+  check('  …and the DueItemLine survives it',
+    (await prisma.dueItemLine.count({ where: { due_item_id: finding2.id, job_card_item_id: mintedId } })) === 1,
+    'the cascade takes the link whenever the save recreates the row');
+  check('  …and a save that mints nothing answers with empty maps, not with absence',
+    m2.body?.ids && Object.keys(m2.body.ids.lines ?? {}).length === 0 && !!m2.body.ids.options && !!m2.body.ids.groups,
+    `ids=${JSON.stringify(m2.body?.ids ?? null)} — "nothing was minted" and "this caller does not mint" are different answers`);
+
+  // THE DISCRIMINATOR. Without it the three clauses above pass against a client that ignores the
+  // answer, because the server's behaviour is identical either way — the defect was never in the
+  // server. This is what the OLD client sent, and it must still churn: an id-less line is an ADD.
+  const m3 = await saveId([...withIds, { ...newLine, uid: UID }]);
+  const rows3 = await prisma.jobCardItem.findMany({ where: { job_card_id: card4.id, description: newLine.description },
+    select: { id: true } });
+  const after3 = rows3[0];
+  check('a save that does NOT adopt the id replaces the row — which is why the answer matters',
+    m3.status === 200 && rows3.length === 1 && after3.id !== mintedId,
+    `${rows3.length} row(s), ${String(after3?.id).slice(0, 8)} vs ${String(mintedId).slice(0, 8)}`);
+  check('  …and that is exactly what took the link with it',
+    (await prisma.dueItemLine.count({ where: { due_item_id: finding2.id } })) === 0,
+    'the cascade, demonstrated rather than asserted');
+
   // ── 9. THE REFUSALS ──────────────────────────────────────────────────────────────────────────
   // Ids are CLAIMS. Each of these is 200 against an implementation that ignores them, which is
   // exactly what today's does — so all four are red before the change and none is vacuous.
@@ -360,6 +439,65 @@ try {
   check('  …while a real price change is NOT immaterial',
     !V.quoteMateriallyUnchanged(base, [base[0], { ...base[1], unit_price: 21 }], true),
     'the discriminating half — without it the two above pass on a broken comparison');
+
+  // ── 11b. THE REAL SCREEN: AUTHORING AN OPTION DOES NOT CHURN IT ─────────────────────────────
+  // Everything above drives the ENDPOINT. The id churn was a CLIENT defect — the server reconciled
+  // in place and always had; the browser simply never learned what to reconcile against. So this
+  // section walks the authoring surface: drop the icon, let the autosave land, edit again, and
+  // assert the rows are the same rows. Driven through the screen because that is the only place
+  // the provisional ids exist.
+  console.log('\n— and on the screen the estimator actually uses —');
+  await saveOn(card5.id, [{ item_type: 'labour', description: 'QLO churn subject', qty: 1, unit_price: 120, vatable: true }]);
+  await page.goto(`${BASE}/admin/jobcards/${card5.id}?tab=quote`, { waitUntil: 'domcontentloaded' });
+  const iconsThere = await page.locator('[data-testid="offer-alternatives"]').first()
+    .waitFor({ state: 'visible', timeout: 60000 }).then(() => true).catch(() => false);
+  check('the builder reaches the screen with the line and its icons', iconsThere,
+    iconsThere ? 'rendered' : ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 160));
+
+  /** Wait for the CONDITION the clause is about — the row landing — not for a spinner to stop. */
+  const until = async (label, fn, ms = 20000) => {
+    const end = Date.now() + ms;
+    for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await new Promise((r) => setTimeout(r, 250)); }
+  };
+  await page.locator('[data-testid="offer-alternatives"]').first().click();
+  const authored = await until('authored', async () => {
+    const g = await prisma.quoteOptionGroupDraft.findMany({ where: { job_card_id: card5.id }, select: { id: true } });
+    const o = await prisma.quoteOptionDraft.findMany({ where: { job_card_id: card5.id }, select: { id: true } });
+    return g.length === 1 && o.length === 2 ? { g, o } : null;
+  });
+  check('dropping the icon authors one group with two options, through the autosave', !!authored,
+    authored ? '1 group, 2 options' : 'the autosave never landed them');
+  const g1 = await prisma.quoteOptionGroupDraft.findMany({ where: { job_card_id: card5.id }, select: { id: true, created_at: true } });
+  const o1 = await prisma.quoteOptionDraft.findMany({ where: { job_card_id: card5.id }, orderBy: { position: 'asc' }, select: { id: true, created_at: true } });
+  const subject1 = await prisma.jobCardItem.findMany({ where: { job_card_id: card5.id, description: 'QLO churn subject' },
+    select: { id: true, option_draft_id: true } });
+  check('the dropped line is inside the option on the FIRST save, before any id has been adopted',
+    subject1.length === 1 && !!subject1[0].option_draft_id && o1.some((x) => x.id === subject1[0].option_draft_id),
+    `points at ${String(subject1[0]?.option_draft_id).slice(0, 8)} of ${o1.map((x) => x.id.slice(0, 8)).join(',')} — the provisional→stored map, which nothing else can do on a first save`);
+
+  // THE SECOND EDIT. This is the keystroke that used to delete both options and both their ids.
+  await page.locator('[data-testid="group-title"]').first().fill('QLO renamed group');
+  const renamed = await until('renamed', async () =>
+    (await prisma.quoteOptionGroupDraft.count({ where: { job_card_id: card5.id, title: 'QLO renamed group' } })) === 1);
+  check('a second edit saves', !!renamed, renamed ? 'the rename landed' : 'the rename never reached the database');
+  const g2 = await prisma.quoteOptionGroupDraft.findMany({ where: { job_card_id: card5.id }, select: { id: true, created_at: true } });
+  const o2 = await prisma.quoteOptionDraft.findMany({ where: { job_card_id: card5.id }, orderBy: { position: 'asc' }, select: { id: true, created_at: true } });
+  check('THE SECOND AUTOSAVE KEEPS THE SAME ROWS — the group is updated, not replaced',
+    g1.length === 1 && g2.length === 1 && g1[0].id === g2[0].id
+      && g1[0].created_at.toISOString() === g2[0].created_at.toISOString(),
+    `${g1.map((x) => x.id.slice(0, 8)).join(',')} → ${g2.map((x) => x.id.slice(0, 8)).join(',')}`);
+  check('  …and so do both options',
+    o1.length === 2 && o2.length === 2
+      && JSON.stringify(o1.map((x) => x.id)) === JSON.stringify(o2.map((x) => x.id))
+      && JSON.stringify(o1.map((x) => x.created_at.toISOString())) === JSON.stringify(o2.map((x) => x.created_at.toISOString())),
+    `${o1.map((x) => x.id.slice(0, 8)).join(',')} → ${o2.map((x) => x.id.slice(0, 8)).join(',')}`);
+  const subject = await prisma.jobCardItem.findMany({ where: { job_card_id: card5.id, description: 'QLO churn subject' },
+    select: { id: true, option_draft_id: true } });
+  // The SAME option, not merely AN option: under the churn the line was faithfully re-pointed at a
+  // freshly created row every save, so "it is in an option" was true throughout and said nothing.
+  check('  …and the line is still inside THE SAME option it was dropped into',
+    subject.length === 1 && !!subject[0].option_draft_id && subject[0].option_draft_id === subject1[0]?.option_draft_id,
+    `${String(subject1[0]?.option_draft_id).slice(0, 8)} → ${String(subject[0]?.option_draft_id).slice(0, 8)}`);
 
   // ── 12. THE JUNE GOLDEN IS UNMOVED — VERIFIED, NOT REISSUED ──────────────────────────────────
   console.log('\n— and June has not moved —');

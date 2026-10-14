@@ -90,6 +90,15 @@ export type DraftOption = {
 
 let _seq = 0;
 const uid = () => `row-${_seq++}`;
+/**
+ * A PROVISIONAL ID FOR A ROW THE SERVER HAS NOT SEEN YET — one monotonic counter, never a clock.
+ *
+ * These were `g-${Date.now()}`, `new-${Date.now()}` and `new-${Date.now()}-${os.length}`, which
+ * carried two collision classes: two drops inside the same millisecond, and a length-derived
+ * suffix that repeats as soon as an option is removed. They are map KEYS on the way back from the
+ * save, so a repeat silently assigns one stored id to two different rows.
+ */
+const provisional = (prefix: string) => `${prefix}-${_seq++}`;
 
 type Props = {
   jobCardId: string;
@@ -392,19 +401,35 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   // The estimate lives on the DRAFT JobCard's JobCardItem rows (Option B) — this writes to them.
   // Options are part of what a save persists, so they are part of what "dirty" means. Leaving them
   // out would make renaming an option or changing an incentive a change the autosave cannot see.
+  /**
+   * ── ONE SHAPE, BUILT ONCE ───────────────────────────────────────────────────────────────────
+   * The dirty-compare string and the POST body were two separate spellings of the same object.
+   * They agreed by inspection, which is the weakest way for two things to agree: a field added to
+   * one and not the other makes the autosave blind to an edit it is faithfully sending.
+   *
+   * `uid` rides along because a NEW line has no id, and the server's answer has to be addressed to
+   * something. It is the React key, which is stable for the life of the row, so it does not make
+   * an unchanged draft look dirty.
+   */
+  const payloadOf = (ls: Row[], vr: string, os: DraftOption[], gs: DraftGroup[]) => ({
+    vatRate: Number(vr || 0),
+    items: ls.map(({ _uid, code, ...rest }) => ({ ...rest, uid: _uid })),
+    options: os,
+    groups: gs,
+  });
   const serialize = (ls: Row[], vr: string, os: DraftOption[] = options, gs: DraftGroup[] = groups) =>
-    JSON.stringify({ vatRate: Number(vr || 0), items: ls.map(({ _uid, code, ...rest }) => rest), options: os, groups: gs });
+    JSON.stringify(payloadOf(ls, vr, os, gs));
   const lastSavedRef = useRef<string>(serialize(initialLines.map((l) => ({ ...l, _uid: '' } as Row)), String(initialVatRate)));
 
   // Persist the estimate lines. Also updates lastSavedRef, so autosave never re-posts an unchanged
   // draft after a manual Save. The parent's unified Save uses this via the imperative handle.
   async function commit(): Promise<CommitResult> {
-    const snap = serialize(lines, vatRate);
+    const sent = payloadOf(lines, vatRate, options, groups);
+    const snap = JSON.stringify(sent);
     try {
-      const items = lines.map(({ _uid, code, ...rest }) => rest); // strip client-only id + transient code
       const res = await fetch('/api/jobcard-quote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobCardId, vatRate: Number(vatRate || 0), items, options, groups }),
+        body: JSON.stringify({ jobCardId, ...sent }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -422,7 +447,40 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
         }
         return { ok: false, message: data?.message || t('estimate.saveError') };
       }
-      lastSavedRef.current = snap; // now on the server
+      /**
+       * ── ADOPT THE IDS THE SERVER MINTED ───────────────────────────────────────────────────
+       * Until this existed, a row the estimator typed was deleted and recreated on EVERY later
+       * autosave: the browser re-sent the provisional id, the server found no such row, removed
+       * the one it had made 900ms earlier and made another. Options and groups churned the same
+       * way, and anything pointing at a line — DueItemLine above all — went with it.
+       *
+       * Applied through the SAME adopt functions that build the new baseline, so the string the
+       * autosave compares against cannot drift from the state it describes. Written as functional
+       * updates because the estimator may have typed while this request was in flight: the maps
+       * are applied to whatever is on screen NOW, not to the snapshot that was sent.
+       */
+      const ids = (data?.ids ?? {}) as { groups?: Record<string, string>; options?: Record<string, string>; lines?: Record<string, string> };
+      const g = (x: string) => ids.groups?.[x] ?? x;
+      const o = (x: string) => ids.options?.[x] ?? x;
+      const adoptG = (x: DraftGroup): DraftGroup => ({ ...x, id: g(x.id) });
+      const adoptO = (x: DraftOption): DraftOption => ({ ...x, id: o(x.id), group_id: g(x.group_id) });
+      const adoptL = (x: Row): Row => ({
+        ...x,
+        id: x.id ?? ids.lines?.[x._uid],
+        option_draft_id: x.option_draft_id ? o(x.option_draft_id) : x.option_draft_id,
+      });
+      const minted = Object.keys(ids.groups ?? {}).length + Object.keys(ids.options ?? {}).length + Object.keys(ids.lines ?? {}).length;
+      if (minted > 0) {
+        setGroups((gs) => gs.map(adoptG));
+        setOptions((os) => os.map(adoptO));
+        setLines((ls) => ls.map(adoptL));
+      }
+      // THE BASELINE DESCRIBES WHAT THE SERVER NOW HOLDS, under the ids it holds it under — built
+      // from the payload that was SENT, never from current state, so an edit made mid-flight stays
+      // dirty and gets its own save.
+      lastSavedRef.current = minted > 0
+        ? JSON.stringify(payloadOf(lines.map(adoptL), vatRate, options.map(adoptO), groups.map(adoptG)))
+        : snap;
       onSaved?.(); // the server just cleared costs_inherited — let the advisory drop live
       return { ok: true };
     } catch {
@@ -478,8 +536,8 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   const makeGroup = (shape: DraftGroup['shape'], lineUid: string) => {
     const line = lines.find((l) => l._uid === lineUid);
     const name = (line?.description || '').trim();
-    const gid = `g-${Date.now()}`;
-    const oid = `new-${Date.now()}`;
+    const gid = provisional('g');
+    const oid = provisional('new');
     setGroups((gs) => [...gs, {
       id: gid, shape,
       title: name || (shape === 'pick_one' ? 'Choose one' : 'Extras'),
@@ -490,7 +548,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     } as const;
     setOptions((os) => [...os,
       { id: oid, group_id: gid, is_base: shape === 'base_plus_extras', title: name || 'This job', position: os.length, ...blank },
-      { id: `${oid}-b`, group_id: gid, is_base: false, position: os.length + 1, ...blank,
+      { id: provisional('new'), group_id: gid, is_base: false, position: os.length + 1, ...blank,
         title: shape === 'pick_one' ? 'Another choice' : 'An extra' },
     ]);
     setLines((ls) => ls.map((x) => (x._uid === lineUid ? { ...x, option_draft_id: oid } : x)));
@@ -519,8 +577,11 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
       <div className="flex items-center justify-between gap-2 mb-1">
         <h2 className="text-lg font-semibold text-ink">{t('estimate.title')}</h2>
         {/* Autosave status — the quote is saved as you build it (Option B: the draft is the store). */}
+        {/* `data-state` carries the state in English for a gate to wait on: the TEXT is translated
+            and must stay that way, and a clause keyed to translated words asserts the locale file
+            as much as the behaviour. */}
         {canEdit && (
-          <span className={`text-xs ${saveState === 'error' ? 'text-danger' : 'text-muted'}`}>
+          <span data-testid="autosave-state" data-state={saveState} className={`text-xs ${saveState === 'error' ? 'text-danger' : 'text-muted'}`}>
             {saveState === 'saving' ? t('estimate.autosaveSaving') : saveState === 'error' ? t('estimate.autosaveError') : t('estimate.autosaveSaved')}
           </span>
         )}
@@ -645,7 +706,7 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
                     onChange={(e) => setGroups((gs) => gs.map((x, i) => (i === gi ? { ...x, title: e.target.value } : x)))} />
                   <button type="button" data-testid="add-option" className="text-sm rounded-lg px-3 py-1.5 bg-surface-muted border border-line text-ink"
                     onClick={() => setOptions((os) => [...os, {
-                      id: `new-${Date.now()}-${os.length}`, group_id: g.id, is_base: false,
+                      id: provisional('new'), group_id: g.id, is_base: false,
                       title: g.shape === 'pick_one' ? 'Another choice' : 'Another extra', position: os.length,
                       incentive_kind: null, incentive_label: null, incentive_percent_bp: null,
                       incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null,
