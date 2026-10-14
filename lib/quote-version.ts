@@ -34,6 +34,36 @@ const toPennies = (d: Prisma.Decimal | number | string | null | undefined): numb
  * Runs in ONE transaction: a half-frozen version with a live link would be exactly the ambiguity
  * versions exist to prevent.
  */
+/**
+ * ── THE INCENTIVE FIGURES A DRAFT OPTION WILL FREEZE WITH ───────────────────────────────────────
+ * Extracted so the STAFF PREVIEW and the FREEZE run the same arithmetic. A preview that computed
+ * its own figures would be a second spelling of the promise, and the one screen whose job is to
+ * show what will be sent would be the one screen able to disagree with it.
+ *
+ * Per LINE and rounded per line, then summed — the lines are what the customer reads, and rounding
+ * the option total instead differs from them. The ex figure comes off the net lines and the gross
+ * off the gross lines, so a vatable discount takes its share of the VAT with it.
+ */
+export function resolveDraftIncentive(
+  d: { incentive_kind: string | null; incentive_percent_bp: number | null;
+       incentive_ex_pennies: number | null; incentive_vatable: boolean | null;
+       incentive_gross_off_pennies: number | null },
+  lines: ReadonlyArray<{ netPennies: number; vatPennies: number }>,
+): { incEx: number | null; incVatable: boolean | null; incGross: number | null } {
+  if (d.incentive_kind !== 'percent_off') {
+    return { incEx: d.incentive_ex_pennies, incVatable: d.incentive_vatable, incGross: d.incentive_gross_off_pennies };
+  }
+  const bp = d.incentive_percent_bp ?? 0;
+  const oVat = lines.reduce((t, l) => t + l.vatPennies, 0);
+  const incEx = resolvePercentOff(bp, lines.map((l) => l.netPennies));
+  const incVatable = oVat > 0;
+  return {
+    incEx,
+    incVatable,
+    incGross: incVatable ? resolvePercentOff(bp, lines.map((l) => l.netPennies + l.vatPennies)) : incEx,
+  };
+}
+
 export async function freezeQuoteVersion(args: {
   groupId: string;
   jobCardId: string;
@@ -157,17 +187,9 @@ export async function freezeQuoteVersion(args: {
        * it. The ex figure comes off the net lines and the gross figure off the gross lines, so a
        * vatable discount takes its share of the VAT with it and the two cannot disagree.
        */
-      let incEx = d.incentive_ex_pennies;
-      let incVatable = d.incentive_vatable;
-      let incGross = d.incentive_gross_off_pennies;
-      if (d.incentive_kind === 'percent_off') {
-        const bp = d.incentive_percent_bp ?? 0;
-        incEx = resolvePercentOff(bp, mine.map((r: any) => toPennies(r.line_total)));
-        incVatable = oVat > 0;
-        incGross = incVatable
-          ? resolvePercentOff(bp, mine.map((r: any) => toPennies(r.line_total) + toPennies(r.line_vat)))
-          : incEx;
-      }
+      const { incEx, incVatable, incGross } = resolveDraftIncentive(d, mine.map((r: any) => ({
+        netPennies: toPennies(r.line_total), vatPennies: toPennies(r.line_vat),
+      })));
       const opt = await tx.quoteOption.create({
         data: {
           quote_version_id: created.id, kind: d.kind, position: d.position, title: d.title,
