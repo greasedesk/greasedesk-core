@@ -37,7 +37,7 @@ import { RefundPanel } from '@/components/refund/RefundPanel';
 import JobCardAudit, { AuditEvent } from '@/components/jobcard/JobCardAudit';
 import JobClock, { type JobClockProps } from '@/components/jobcard/JobClock';
 import { JobStatus, StageKey } from '@/lib/jobcard-status';
-import { TAB_KEYS, TabKey, TabState, computeTabs, detailsMinDataMet, tabForStage } from '@/lib/jobcard-tabs';
+import { TAB_KEYS, TabKey, TabState, computeTabs, detailsMinDataMet, tabForStage, NON_STAGE_TABS } from '@/lib/jobcard-tabs';
 import { stagesRemaining } from '@/lib/jobcard-status';
 import { startTimeSlots } from '@/lib/booking-slots';
 import { computeFootprint, Break } from '@/lib/occupancy';
@@ -256,7 +256,17 @@ export default function JobCardWorkspace(p: Props) {
 
   // ----- active tab from URL, defaulting to the first reachable-incomplete step -----
   const firstOpen = useMemo(() => {
-    const open = TAB_KEYS.find((k) => eff.tabsState[k].reachable && !eff.tabsState[k].complete);
+    // ── NON-STAGE TABS ARE NOT WHERE A CARD OPENS ────────────────────────────────────────────
+    // This looked for the first reachable-and-incomplete tab, and `messages` is
+    // { reachable: true, complete: false } BY CONSTRUCTION — a reference tab, never "done". It
+    // sits second in TAB_KEYS, before `quote`, so EVERY card whose Details were complete opened
+    // on Messages and the work you came for was one click away and invisible. Not a quote bug:
+    // it did this on every card in the system.
+    //
+    // NON_STAGE_TABS already names the exception (lib/jobcard-tabs), so this reads the list that
+    // exists rather than spelling 'messages' here, where a second non-stage tab would be missed.
+    const open = TAB_KEYS.find((k) => !NON_STAGE_TABS.includes(k)
+      && eff.tabsState[k].reachable && !eff.tabsState[k].complete);
     if (open) return open;
     const lastReachable = [...TAB_KEYS].reverse().find((k) => eff.tabsState[k].reachable);
     return lastReachable ?? 'details';

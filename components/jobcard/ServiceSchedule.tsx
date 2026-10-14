@@ -235,8 +235,11 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
 
   const field = 'min-h-[40px] px-2 bg-surface border border-line rounded-lg text-ink text-sm tabular-nums';
 
+  // data-stage, because ARRIVAL and DEPARTURE are two different panels wearing one testid. A
+  // gate asserting "no service-schedule on this page" could not say which it meant, and passed
+  // only because the page it happened to land on showed neither.
   return (
-    <div className="bg-surface border border-line rounded-xl p-5" data-testid="service-schedule">
+    <div className="bg-surface border border-line rounded-xl p-5" data-testid="service-schedule" data-stage={stage}>
       <h3 className="text-sm font-semibold text-ink mb-1">
         {stage === 'arrival' ? 'Service schedule on arrival' : 'Service schedule — what’s next'}
       </h3>

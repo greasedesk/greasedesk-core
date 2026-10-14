@@ -605,8 +605,13 @@ try {
   check('Completion cannot be completed before In-Job', tooSoon.status === 409
     && /Complete the previous step/.test(tooSoon.body?.message ?? ''), JSON.stringify(tooSoon));
   await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=completion`, { waitUntil: 'domcontentloaded' });
-  check('  …and the panel is not reachable while it is locked',
-    (await page.locator('[data-testid="service-schedule"]').count()) === 0,
+  // THE SUBJECT IS THE DEPARTURE PANEL, and it has to be named. This asserted that NO
+  // service-schedule rendered anywhere, which was true only because ?tab=completion fell back to
+  // Messages when completion was unreachable — so the clause passed without ever reaching its
+  // subject. The moment the fallback became a real stage tab, Intake's ARRIVAL panel rendered and
+  // the clause failed, correctly. Two panels share one testid; data-stage tells them apart.
+  check('  …and the DEPARTURE panel is not reachable while it is locked',
+    (await page.locator('[data-testid="service-schedule"][data-stage="departure"]').count()) === 0,
     'this is the state the fixture used to skip past, and the state a real card sat in all morning');
 
   check('Intake completes, the arrival reading having been taken', (await stage('intake')).status === 200);
@@ -619,8 +624,12 @@ try {
   // Anchored on the tab's OWN stage button, which is present whether or not the panel is — so the
   // wait proves the tab rendered and the count below is then a real answer about the panel.
   await page.locator('[data-testid="stage-complete-complete"]').waitFor({ timeout: 25000 });
-  const panelHere = (await page.locator('[data-testid="service-schedule"]').count()) === 1;
-  check('the schedule panel is on Completion too', panelHere,
+  // ANCHORED ON data-stage, which PINS the attribute the locked-state clause above matches on.
+  // Without this, removing data-stage from the component would make that clause match nothing and
+  // pass on an empty selector — one side writes the attribute, the other matches it, and a
+  // one-sided change is silent. Here it must be PRESENT, so the pair cannot drift apart.
+  const panelHere = (await page.locator('[data-testid="service-schedule"][data-stage="departure"]').count()) === 1;
+  check('the schedule panel is on Completion too, and names itself the DEPARTURE one', panelHere,
     panelHere ? '' : 'THE DEPARTURE READING CANNOT BE TAKEN — every schedule line downstream of this is unreachable');
   if (!panelHere) throw new Error('departure panel absent — remaining assertions would be meaningless');
   check('  …opening on the DEPARTURE reading',

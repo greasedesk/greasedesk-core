@@ -139,6 +139,23 @@ try {
     const now = (await prisma.messageThread.findUnique({ where: { id: threadId }, select: { unread_count: true } })).unread_count;
     check('teardown restored the thread’s unread exactly', now === restoreUnread, `${restoreUnread} → ${now}`);
   }
+  // ── AND MESSAGES MUST NOT CAPTURE THE LANDING ───────────────────────────────────────────────
+  // `firstOpen` picks the first reachable-and-incomplete tab, and messages is
+  // { reachable: true, complete: false } BY CONSTRUCTION — a reference tab is never "done". It
+  // sits second in TAB_KEYS, before `quote`, so every card with Details complete opened here and
+  // the work the owner came for was one invisible click away. On every card, not just quotes.
+  console.log('\n— and the card does not OPEN here —');
+  const T = await import('../lib/jobcard-tabs.ts');
+  check('messages is declared a non-stage tab', T.NON_STAGE_TABS.includes('messages'),
+    T.NON_STAGE_TABS.join(', '));
+  check('  …and it can never be "complete", which is why it captured the default', (() => {
+    const st = T.computeTabs({ status: 'quoted', stages: { details: true }, skipped: {} });
+    return st.messages.reachable === true && st.messages.complete === false;
+  })(), 'reachable-and-incomplete is exactly what firstOpen looks for');
+  const wsSrc = readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8');
+  check('the default-tab search SKIPS non-stage tabs', /NON_STAGE_TABS\.includes\(k\)[\s\S]{0,120}?tabsState\[k\]\.reachable/.test(wsSrc),
+    'and reads NON_STAGE_TABS rather than naming messages, so a second one is not missed');
+
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);
