@@ -17,6 +17,7 @@ import { isCatalogueUsed, catalogueDeleteRefusal } from '@/lib/catalogue-retire'
 import { displayCurrency } from '@/lib/display-currency';
 import type { TierAvailabilityName } from '@/lib/catalogue';
 import PromotionsSection from '@/components/products/PromotionsSection';
+import CatalogueSetsSection from '@/components/products/CatalogueSetsSection';
 
 type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Comp = { description: string; qty: number; unitCostExVat: number };
@@ -444,6 +445,10 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
             <button onClick={addTier} disabled={busy || !newTier.trim()} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-1.5 disabled:opacity-50">{t('tiers.add')}</button>
           </div>
         </details>
+
+        {/* Product sets — a named group and the shape it is offered in. Above promotions because
+            a set is about what the garage SELLS; a promo is about what it discounts. */}
+        <CatalogueSetsSection products={items.filter((i) => i.active).map((i) => ({ id: i.id, code: i.code, title: i.title, name: i.name, itemType: i.itemType }))} />
 
         {/* Promotions (discount codes) — managed here, applied garage-side on the estimate. */}
         <PromotionsSection

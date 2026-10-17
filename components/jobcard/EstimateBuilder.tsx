@@ -13,6 +13,7 @@ import React, { useMemo, useState, useEffect, useRef, forwardRef, useImperativeH
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
 import { resolveTierPrice, tierOffers, tierPricePounds, fixedLineText } from '@/lib/catalogue';
+import { ladderForItem, rungsFor, type SetMemberInput } from '@/lib/catalogue-sets';
 import { PromoLite, computePromoDiscounts } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
 import { lineFlags, toPlausible } from '@/lib/line-plausibility';
@@ -65,6 +66,18 @@ type Row = EstimateLine & { _uid: string };
  * drop an icon on a line you have already quoted, and the group exists with that line in it. Which
  * icon decides the SHAPE, and the shape decides what choosing means (lib/quote-options).
  */
+/**
+ * A SET, AS THE BUILDER RECEIVES IT — members already joined to their pricing, because the ladder
+ * has to show real figures the instant the icon is pressed and a second fetch at that moment is a
+ * spinner where a price should be.
+ */
+export type CatalogueSetLite = {
+  id: string;
+  name: string;
+  shape: 'pick_one' | 'base_plus_extras';
+  members: SetMemberInput[];
+};
+
 export type DraftGroup = {
   id: string;
   shape: 'pick_one' | 'base_plus_extras';
@@ -110,6 +123,7 @@ type Props = {
   initialLines: EstimateLine[];
   initialOptions?: DraftOption[];   // the card's draft options; absent = none authored yet
   initialGroups?: DraftGroup[];     // …and the groups they sit in
+  catalogueSets?: CatalogueSetLite[]; // named product sets — what the ladder icon can reach
   vatRegistered?: boolean; // master switch; false → no VAT controls, no VAT in totals
   catalogue?: CatalogueLite[]; // active SIMPLE catalogue for code autocomplete (client-side match)
   fixedServices?: FixedServiceLite[]; // active fixed services for the tier picker
@@ -269,7 +283,7 @@ function LinePlausibilityNote({ row, idx, show, justFixed, canEdit, costVisible,
 export type CommitResult = { ok: boolean; message?: string; terminal?: boolean };
 export type EstimateHandle = { commit: () => Promise<CommitResult>; lines: () => EstimateLine[] };
 
-const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, initialOptions, initialGroups = [] = [], vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
+const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuilder({ jobCardId, canEdit, currency, locale, initialVatRate, labourRate = null, initialLines, initialOptions, initialGroups = [], catalogueSets = [], vatRegistered = true, catalogue = [], fixedServices = [], tiers = [], promos = [], priceVisible = true, costVisible = false, canCatalogue = false, onSaved }: Props, ref) {
   const { t } = useTranslation('jobcard');
   // SEEDED FROM THE SERVER ID where the line already exists. _uid is still just React's key — its
   // job is focus retention across a keystroke — but keying it to the real row means a re-render
@@ -546,17 +560,65 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     const name = (line?.description || '').trim();
     const gid = provisional('g');
     const oid = provisional('new');
-    setGroups((gs) => [...gs, {
-      id: gid, shape,
-      title: name || (shape === 'pick_one' ? 'Choose one' : 'Extras'),
-    }]);
-    const blank = {
+    // NOT `blank` — that is the module-level row factory, and shadowing it here made
+    // `blank('fixed')` a call on an object literal. Named for what it holds.
+    const noIncentive = {
       incentive_kind: null, incentive_percent_bp: null, incentive_label: null,
       incentive_ex_pennies: null, incentive_vatable: null, incentive_gross_off_pennies: null,
     } as const;
+
+    /**
+     * ── THE LADDER, WHEN THE LINE'S PRODUCT IS IN ONE ────────────────────────────────────────
+     * Drop the alternatives icon on Bronze and the other rungs arrive WITH THEIR PRICES, as lines
+     * of their own inside their own options. Without this an option could only ever hold work
+     * already typed on the estimate, so "offer alternatives" on Bronze offered Bronze again.
+     *
+     * EVERY RUNG, INCLUDING THE CHEAPER ONES. A customer moving down from Gold to Silver is still
+     * a sale, and a ladder that only points upwards turns a hesitation into a walk-out. The set's
+     * order is the order; the direction is nobody's. A rung the car's tier marks not_applicable is
+     * simply ABSENT — rungsFor drops it — because a greyed-out oil service on an electric car
+     * explains the catalogue rather than telling the customer anything.
+     */
+    const ladder = shape === 'pick_one' ? ladderForItem(catalogueSets, line?.catalogue_item_id ?? null) : null;
+    const rungs = ladder ? rungsFor(ladder.members, pickTier || null).filter((r) => r.catalogueItemId !== line?.catalogue_item_id) : [];
+
+    setGroups((gs) => [...gs, {
+      id: gid, shape,
+      title: ladder?.name || name || (shape === 'pick_one' ? 'Choose one' : 'Extras'),
+    }]);
+
+    if (rungs.length) {
+      // One option per rung, each holding one line priced from the catalogue. The dropped line
+      // keeps its own option and stays exactly as the estimator priced it — the ladder adds
+      // alternatives, it never re-prices the work already agreed on the card.
+      const made = rungs.map((r) => ({ r, optId: provisional('new'), uid: uid() }));
+      setOptions((os) => [
+        ...os,
+        { id: oid, group_id: gid, is_base: false, title: name || 'This job', position: os.length, ...noIncentive },
+        ...made.map((m, i) => ({ id: m.optId, group_id: gid, is_base: false, title: m.r.title, position: os.length + 1 + i, ...noIncentive })),
+      ]);
+      setLines((ls) => [
+        ...ls.map((x) => (x._uid === lineUid ? { ...x, option_draft_id: oid } : x)),
+        ...made.map((m) => ({
+          ...blank('fixed'),
+          _uid: m.uid,
+          description: m.r.title,
+          qty: '1',
+          // NULL price is "priced on the day" and arrives as an EMPTY box, never as 0 — which
+          // would print as free on the customer's copy.
+          unit_price: m.r.pricePounds == null ? '' : String(m.r.pricePounds),
+          vatable: m.r.vatRate > 0,
+          catalogue_item_id: m.r.catalogueItemId,
+          labour_hours: m.r.labourHours,
+          option_draft_id: m.optId,
+        })),
+      ]);
+      return;
+    }
+
     setOptions((os) => [...os,
-      { id: oid, group_id: gid, is_base: shape === 'base_plus_extras', title: name || 'This job', position: os.length, ...blank },
-      { id: provisional('new'), group_id: gid, is_base: false, position: os.length + 1, ...blank,
+      { id: oid, group_id: gid, is_base: shape === 'base_plus_extras', title: name || 'This job', position: os.length, ...noIncentive },
+      { id: provisional('new'), group_id: gid, is_base: false, position: os.length + 1, ...noIncentive,
         title: shape === 'pick_one' ? 'Another choice' : 'An extra' },
     ]);
     setLines((ls) => ls.map((x) => (x._uid === lineUid ? { ...x, option_draft_id: oid } : x)));
@@ -651,8 +713,10 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
                   <option value="">{t('estimate.pickService')}</option>
                   {fixedServices.map((s) => <option key={s.id} value={s.id}>{s.title || s.code}</option>)}
                 </select>
+                {/* The tier is read by the LADDER too, not only by "add a fixed service": it is
+                    what decides which rungs a particular car is offered. */}
                 {tiers.length > 0 && (
-                  <select value={pickTier} onChange={(e) => { setTierRefusal(null); setPickTier(e.target.value); }} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+                  <select value={pickTier} data-testid="estimate-tier" onChange={(e) => { setTierRefusal(null); setPickTier(e.target.value); }} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
                     <option value="">{t('estimate.pickTierBase')}</option>
                     {tiers.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}
                   </select>

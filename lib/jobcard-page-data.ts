@@ -30,7 +30,7 @@ import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { computeTabs } from '@/lib/jobcard-tabs';
 import { parseBreaks } from '@/lib/occupancy';
 import type { JobStatus, StageKey } from '@/lib/jobcard-status';
-import type { EstimateLine, CatalogueLite, FixedServiceLite, TierLite } from '@/components/jobcard/EstimateBuilder';
+import type { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, CatalogueSetLite } from '@/components/jobcard/EstimateBuilder';
 import type { PromoLite } from '@/lib/promo';
 import type { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import type { AuditEvent } from '@/components/jobcard/JobCardAudit';
@@ -46,7 +46,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   // (ruling 2026-07-14): the invoice + audit reads were previously fired here on the cardId PARAM,
   // before the access check — so a cross-tenant card's invoice/audit rows were read into memory and
   // discarded. They now wait for Wave 2 (ownership proven). No cross-tenant row is read, ever.
-  const [vis, perms, vat, [catalogueRows, tierRows, promoRows]] = await Promise.all([
+  const [vis, perms, vat, [catalogueRows, tierRows, promoRows, setRows]] = await Promise.all([
     getVisibility(userId),
     getTenantPermissions(groupId),
     getTenantVat(groupId),
@@ -62,6 +62,14 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
       }) as Promise<any[]>,
       prisma.serviceTier.findMany({ where: { group_id: groupId, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
       prisma.promo.findMany({ where: { group_id: groupId, active: true }, orderBy: { code: 'asc' }, select: { id: true, code: true, label: true, promo_type: true, amount: true, targets: { select: { item: { select: { id: true, title: true, name: true } } } } } }) as Promise<any[]>,
+      // THE SETS, in the SAME wave as the catalogue they point at — see the region pin: query
+      // depth is latency, and a set the builder cannot reach until a second round trip is a set
+      // the ladder icon cannot offer on the first press.
+      prisma.catalogueSet.findMany({
+        where: { group_id: groupId, active: true },
+        orderBy: [{ position: 'asc' }, { name: 'asc' }],
+        select: { id: true, name: true, shape: true, members: { orderBy: [{ position: 'asc' }, { id: 'asc' }], select: { catalogue_item_id: true, position: true } } },
+      }) as Promise<any[]>,
     ]),
   ]);
 
@@ -454,6 +462,27 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat), availability: tp.availability ?? null })),
   }));
   const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
+  /**
+   * THE SETS, carrying each member's PRICING with them.
+   *
+   * The builder needs a price per rung at the moment the icon is dropped, and the member rows hold
+   * only an id. Joining here — against `fixedServices`, which is already built from the same
+   * catalogue read — means the ladder offers real figures rather than a list of names with a
+   * second fetch behind it. A member whose product is not an active fixed service is DROPPED: a
+   * rung the estimate cannot price is not an offer.
+   */
+  const fixedById = new Map(fixedServices.map((f) => [f.id, f]));
+  const catalogueSets: CatalogueSetLite[] = !canEditPricing ? [] : setRows.map((st: any) => ({
+    id: st.id, name: st.name, shape: st.shape,
+    members: (st.members as any[]).flatMap((m) => {
+      const f = fixedById.get(m.catalogue_item_id);
+      if (!f) return [];
+      return [{
+        catalogueItemId: f.id, position: Number(m.position), title: f.title || f.name || f.code,
+        basePriceExVat: f.basePriceExVat, vatRate: f.vatRate, labourHours: f.labourHours, tierPrices: f.tierPrices,
+      }];
+    }),
+  })).filter((st: CatalogueSetLite) => st.members.length > 0);
   const promos: PromoLite[] = !priceVisible ? [] : promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) }));
 
   const lines: EstimateLine[] = (row.items as any[]).map((it) => ({
@@ -744,7 +773,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     vehicleIdLabel: profileForCard.vehicleIdLabel, vehicleLookupProvider: profileForCard.vehicleLookupProvider,
     clock,
     garageNotes: row.garage_notes ?? '',
-    lines, options, optionGroups, catalogue, fixedServices, tiers, promos,
+    lines, options, optionGroups, catalogue, fixedServices, tiers, promos, catalogueSets,
     priceVisible, costVisible, // the UI renders to these; the DATA above is already shaped to them
     labourRate: priceVisible && labourRateRow?.default_labour_rate != null ? Number(labourRateRow.default_labour_rate) : null,
     hasEstimate: (row.items as any[]).length > 0,

@@ -14,7 +14,7 @@ import React, { useMemo, useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useTranslation } from 'next-i18next';
-import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle, DraftOption, DraftGroup } from '@/components/jobcard/EstimateBuilder';
+import EstimateBuilder, { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, EstimateHandle, DraftOption, DraftGroup, CatalogueSetLite } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
 import { lineFlags, toPlausible, partsProfit } from '@/lib/line-plausibility';
 import { diaryReturnHref } from '@/lib/diary-return';
@@ -141,7 +141,7 @@ type Props = {
   costsInherited?: boolean;
   garageNotes: string;
   currency: string; locale: string; vatRate: number; vatRegistered: boolean;
-  lines: EstimateLine[]; options: DraftOption[]; optionGroups: DraftGroup[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
+  lines: EstimateLine[]; options: DraftOption[]; optionGroups: DraftGroup[]; catalogueSets: CatalogueSetLite[]; catalogue: CatalogueLite[]; fixedServices: FixedServiceLite[]; tiers: TierLite[]; promos: PromoLite[]; hasEstimate: boolean;
   labourRate?: number | null;
   resources: Resource[]; booking: CardBooking;
   siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] };
@@ -991,7 +991,7 @@ export default function JobCardWorkspace(p: Props) {
               {t('duplicate.costsInherited', { reg: p.duplicatedFrom?.registration ?? '' })}
             </div>
           )}
-          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={quoteEditable} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} initialOptions={p.options} initialGroups={p.optionGroups} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} onSaved={() => setInheritedCleared(true)} />
+          <EstimateBuilder ref={estimateRef} jobCardId={p.jobCardId} canEdit={quoteEditable} currency={p.currency} locale={p.locale} initialVatRate={p.vatRate} labourRate={p.labourRate} initialLines={p.lines} initialOptions={p.options} initialGroups={p.optionGroups} catalogueSets={p.catalogueSets} vatRegistered={p.vatRegistered} catalogue={p.catalogue} fixedServices={p.fixedServices} tiers={p.tiers} promos={p.promos} priceVisible={p.priceVisible} costVisible={p.costVisible} canCatalogue={p.isAdmin} onSaved={() => setInheritedCleared(true)} />
           {/* Warranty/comeback — a mechanic knows a job came back → operational (any assigned user).
               Makes the job zero-revenue for reporting (drag = parts cost only); the estimate lines stay
               intact as the true cost. It invoices at £0 on the warranty series (see the Invoice tab). */}

@@ -20,7 +20,7 @@ import { getTenantPermissions, canEditEstimate } from '@/lib/permissions';
 import { getTenantVat } from '@/lib/tenant-vat';
 import { getCurrentOwnerId } from '@/lib/vehicle-identity';
 import { withI18n } from '@/lib/gssp-i18n';
-import { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, DraftOption, DraftGroup } from '@/components/jobcard/EstimateBuilder';
+import { EstimateLine, CatalogueLite, FixedServiceLite, TierLite, DraftOption, DraftGroup, CatalogueSetLite } from '@/components/jobcard/EstimateBuilder';
 import { PromoLite } from '@/lib/promo';
 import JobCardWorkspace, { CardBooking } from '@/components/jobcard/JobCardWorkspace';
 import { type DueItemView } from '@/components/jobcard/DueItems';
@@ -102,6 +102,7 @@ type PageProps = {
   lines: EstimateLine[];
   options: DraftOption[];
   optionGroups: DraftGroup[];
+  catalogueSets: CatalogueSetLite[];
   catalogue: CatalogueLite[];
   fixedServices: FixedServiceLite[];
   tiers: TierLite[];
@@ -215,6 +216,7 @@ export default function JobCardDetailPage(props: PageProps) {
         lines={props.lines}
         options={props.options}
         optionGroups={props.optionGroups}
+        catalogueSets={props.catalogueSets}
         catalogue={props.catalogue}
         fixedServices={props.fixedServices}
         promos={props.promos}

@@ -218,6 +218,14 @@ export type AuditAction =
                          // gone and this row is the only record it existed:
                          // { code, name, itemType, active, jobLines, promoTargets }
   | 'catalogue.retired'  // active flipped — history untouched, gone from the estimate picker
+  // ── CATALOGUE SETS: a named group of products, and the shape it offers them in ──────────────
+  // Worth auditing even though no money moves: the SHAPE decides whether taking one item excludes
+  // the others, so a re-shape silently changes what every future quote built from the set offers.
+  | 'catalogue_set.created'  // { name, shape }
+  | 'catalogue_set.updated'  // { name, shape, members } — members is the COUNT, null when the
+                             // write did not touch membership at all (absent ≠ emptied)
+  | 'catalogue_set.deleted'  // { name } — SELF-DESCRIBING: the set is gone and the memberships
+                             // went with it; the products themselves are untouched
   | 'card.duplicated'    // created by copying a source card's estimate — SELF-DESCRIBING: the diff
                          // carries { source_card_id, source_registration, ... } so the row stays
                          // searchable even after the duplicated_from edge is SetNull'd by a purge
