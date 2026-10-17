@@ -45,10 +45,15 @@
   "basePrice": "Base price",
   "tierGrid": {
     "heading": "Tier prices (ex VAT)",
-    "hint": "Blank = inherit the base price. Enter a price to override, or tick “price on the day” to offer the tier with the price set per job.",
+    "hint": "Each tier says what it offers. “Inherit” uses the base price; “Not applicable” removes the service from that tier entirely — an electric car has no oil service, and 0 would print as free.",
     "inherit": "= base",
     "manual": "price on the day",
-    "perJob": "price set per job"
+    "perJob": "price set per job",
+    "stateInherit": "Inherit base price",
+    "statePriced": "Set a price",
+    "statePerJob": "Price on the day",
+    "stateNotApplicable": "Not applicable",
+    "notApplicable": "not offered to this tier"
   },
   "tierPricesShort": "tier prices",
   "tiers": {

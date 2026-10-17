@@ -12,7 +12,7 @@
 import React, { useMemo, useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'next-i18next';
 import { computeQuoteTotals, poundsToPennies, QuoteItemType } from '@/lib/quote-totals';
-import { resolveTierPrice, fixedLineText } from '@/lib/catalogue';
+import { resolveTierPrice, tierOffers, tierPricePounds, fixedLineText } from '@/lib/catalogue';
 import { PromoLite, computePromoDiscounts } from '@/lib/promo';
 import { formatMoney } from '@/lib/format-money';
 import { lineFlags, toPlausible } from '@/lib/line-plausibility';
@@ -280,6 +280,9 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved'); // autosave indicator
   const [pickService, setPickService] = useState('');
   const [pickTier, setPickTier] = useState('');
+  /** Named rather than silent: the service the chosen tier does not offer. Cleared on every change
+   *  of either picker, so it describes the CURRENT pair and never an earlier one. */
+  const [tierRefusal, setTierRefusal] = useState<string | null>(null);
   const [pickPromo, setPickPromo] = useState('');
   const [promoMsg, setPromoMsg] = useState<string | null>(null);
 
@@ -291,13 +294,18 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
     const svc = fixedServices.find((s) => s.id === pickService);
     if (!svc) return;
     const res = resolveTierPrice(svc.basePriceExVat, svc.tierPrices, pickTier || null);
+    // NOT OFFERED TO THIS TIER is a refusal, not a blank price. Adding the line anyway would put an
+    // oil service on an electric car's quote with an empty box, which reads as "we forgot the
+    // price" rather than "this car cannot have this".
+    if (!tierOffers(res)) { setTierRefusal(svc.title || svc.name); return; }
+    const priced = tierPricePounds(res);
     const desc = fixedLineText(svc.title, svc.name, svc.code);
     const costPounds = svc.components.reduce((s, c) => s + Math.max(0, c.qty) * c.unitCost, 0);
     setLines((p) => [...p, {
       _uid: uid(), item_type: 'fixed',
       description: desc,
       qty: '1',
-      unit_price: res.manual || res.pricePounds == null ? '' : String(res.pricePounds),
+      unit_price: priced == null ? '' : String(priced),
       unit_cost: costPounds.toFixed(2),
       vatable: svc.vatRate > 0,
       code: '', catalogue_item_id: svc.id,
@@ -639,17 +647,23 @@ const EstimateBuilder = forwardRef<EstimateHandle, Props>(function EstimateBuild
           {canEdit && (
             fixedServices.length > 0 ? (
               <div className="flex flex-wrap items-end gap-2 mb-4">
-                <select value={pickService} onChange={(e) => setPickService(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+                <select value={pickService} onChange={(e) => { setTierRefusal(null); setPickService(e.target.value); }} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
                   <option value="">{t('estimate.pickService')}</option>
                   {fixedServices.map((s) => <option key={s.id} value={s.id}>{s.title || s.code}</option>)}
                 </select>
                 {tiers.length > 0 && (
-                  <select value={pickTier} onChange={(e) => setPickTier(e.target.value)} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+                  <select value={pickTier} onChange={(e) => { setTierRefusal(null); setPickTier(e.target.value); }} className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
                     <option value="">{t('estimate.pickTierBase')}</option>
                     {tiers.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}
                   </select>
                 )}
                 <button onClick={addFixedService} disabled={!pickService} className="text-sm bg-accent hover:bg-accent-hover text-white rounded-lg px-3 py-2 disabled:opacity-50">+ {t('estimate.addFixed')}</button>
+                {/* NAMED, not a blank price. The refusal sits with the pickers that produced it. */}
+                {tierRefusal && (
+                  <p className="basis-full text-xs text-warn" data-testid="tier-not-applicable">
+                    {t('estimate.tierNotApplicable', { service: tierRefusal })}
+                  </p>
+                )}
               </div>
             ) : (
               <p className="text-xs text-muted mb-4">{t('estimate.noFixedServices')}</p>

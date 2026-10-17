@@ -15,11 +15,12 @@ import { withI18n } from '@/lib/gssp-i18n';
 import { formatMoney } from '@/lib/format-money';
 import { isCatalogueUsed, catalogueDeleteRefusal } from '@/lib/catalogue-retire';
 import { displayCurrency } from '@/lib/display-currency';
+import type { TierAvailabilityName } from '@/lib/catalogue';
 import PromotionsSection from '@/components/products/PromotionsSection';
 
 type ItemType = 'labour' | 'part' | 'misc' | 'fixed';
 type Comp = { description: string; qty: number; unitCostExVat: number };
-type TierPrice = { tierId: string; priceExVat: number | null };
+type TierPrice = { tierId: string; priceExVat: number | null; availability?: TierAvailabilityName | null };
 type Item = {
   id: string; code: string; title: string | null; name: string; itemType: ItemType; unitCost: number | null; unitPrice: number; vatRate: number; active: boolean;
   usage?: { jobLines: number; promoTargets: number };
@@ -28,7 +29,16 @@ type Item = {
 type Tier = { id: string; name: string; position: number; active: boolean };
 
 type FormComp = { description: string; qty: string; cost: string };
-type TierCell = { price: string; manual: boolean };
+/**
+ * FOUR STATES, NAMED. This was `{ price, manual }` — two booleans' worth of meaning spread across
+ * a checkbox and an empty string, which could say "inherit", "this price" and "price on the day"
+ * and had no way at all to say NOT APPLICABLE. An electric car's oil service could only be typed
+ * as 0, which prints as free, or left blank, which inherits the base price. Both are lies.
+ *
+ * `inherit` writes NO ROW, which is what it has always meant. The other three write one.
+ */
+type TierCellState = 'inherit' | 'priced' | 'per_job' | 'not_applicable';
+type TierCell = { price: string; state: TierCellState };
 type FormState = {
   id: string | null; code: string; title: string; name: string; itemType: ItemType; active: boolean; vatRate: string;
   cost: string; price: string;              // simple
@@ -80,7 +90,7 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
   );
 
   // ---- item form ----
-  const blankTierCells = (): Record<string, TierCell> => Object.fromEntries(activeTiers.map((tt) => [tt.id, { price: '', manual: false }]));
+  const blankTierCells = (): Record<string, TierCell> => Object.fromEntries(activeTiers.map((tt) => [tt.id, { price: '', state: 'inherit' as TierCellState }]));
   // Deep-link: /admin/products?edit=<id> opens that product's editor once items load
   // (the dashboard's missing-hours drill lands here).
   const router = useRouter();
@@ -115,7 +125,16 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
     const cells: Record<string, TierCell> = {};
     for (const tt of activeTiers) {
       const row = i.tierPrices.find((tp) => tp.tierId === tt.id);
-      cells[tt.id] = row ? (row.priceExVat === null ? { price: '', manual: true } : { price: String(row.priceExVat), manual: false }) : { price: '', manual: false };
+      // NO ROW is `inherit`. With a row, AVAILABILITY decides — falling back to the old reading
+      // (a figure is a price, an absent figure is per-job) only for a client that predates the
+      // column, never for stored data, which the migration backfilled to exactly that rule.
+      cells[tt.id] = !row
+        ? { price: '', state: 'inherit' }
+        : (row.availability ?? (row.priceExVat === null ? 'per_job' : 'priced')) === 'not_applicable'
+          ? { price: '', state: 'not_applicable' }
+          : (row.availability ?? (row.priceExVat === null ? 'per_job' : 'priced')) === 'per_job'
+            ? { price: '', state: 'per_job' }
+            : { price: row.priceExVat === null ? '' : String(row.priceExVat), state: 'priced' };
     }
     setForm({
       id: i.id, code: i.code, title: i.title ?? '', name: i.name, itemType: i.itemType, active: i.active, vatRate: String(i.vatRate),
@@ -171,11 +190,14 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
     const common = { id: form.id || undefined, code: form.code.trim(), title: form.title.trim(), name: form.name.trim(), itemType: form.itemType, vatRate: Number(form.vatRate || 0), active: form.active };
     let body: any;
     if (isFixed) {
-      const tierPrices = activeTiers.flatMap((tt): Array<{ tierId: string; priceExVat: number | null }> => {
-        const cell = form.tierCells[tt.id] || { price: '', manual: false };
-        if (cell.manual) return [{ tierId: tt.id, priceExVat: null }];
-        if (cell.price !== '') return [{ tierId: tt.id, priceExVat: Number(cell.price) }];
-        return []; // inherit base
+      const tierPrices = activeTiers.flatMap((tt): Array<{ tierId: string; priceExVat: number | null; availability: TierAvailabilityName }> => {
+        const cell = form.tierCells[tt.id] || { price: '', state: 'inherit' as TierCellState };
+        if (cell.state === 'not_applicable') return [{ tierId: tt.id, priceExVat: null, availability: 'not_applicable' }];
+        if (cell.state === 'per_job') return [{ tierId: tt.id, priceExVat: null, availability: 'per_job' }];
+        // `priced` with an empty box is still inherit: the garage picked "set a price" and typed
+        // none, and writing a row with no price would silently mean something else.
+        if (cell.state === 'priced' && cell.price !== '') return [{ tierId: tt.id, priceExVat: Number(cell.price), availability: 'priced' }];
+        return []; // inherit base — NO ROW
       });
       body = { ...common, basePriceExVat: Number(form.basePrice || 0), labourHours: form.labourHours.trim() === '' ? null : Number(form.labourHours), labourOutsourced: form.labourOutsourced, components: form.components.map((c) => ({ description: c.description.trim(), qty: Number(c.qty || 0), unitCostExVat: Number(c.cost || 0) })), tierPrices };
     } else {
@@ -326,18 +348,29 @@ export default function ProductsPage({ currency, locale }: { currency: string; l
                       <p className="text-xs text-muted">{t('tierGrid.hint')}</p>
                       <div className="mt-2 space-y-2">
                         {activeTiers.map((tt) => {
-                          const cell = form.tierCells[tt.id] || { price: '', manual: false };
-                          const eff = cell.manual ? null : (cell.price !== '' ? Number(cell.price) : Number(form.basePrice || 0));
+                          const cell = form.tierCells[tt.id] || { price: '', state: 'inherit' as TierCellState };
+                          const shows = cell.state === 'inherit' || cell.state === 'priced';
+                          const eff = shows ? (cell.price !== '' ? Number(cell.price) : Number(form.basePrice || 0)) : null;
                           return (
-                            <div key={tt.id} className="flex flex-wrap items-center gap-2">
+                            <div key={tt.id} className="flex flex-wrap items-center gap-2" data-testid="tier-row" data-tier={tt.id} data-state={cell.state}>
                               <span className="text-sm text-ink w-28 shrink-0">{tt.name}</span>
-                              <input type="number" inputMode="decimal" step="0.01" min={0} disabled={cell.manual}
-                                value={cell.price} placeholder={t('tierGrid.inherit')}
+                              {/* THE STATE IS CHOSEN, never inferred from whether a box is empty. */}
+                              <select value={cell.state} data-testid="tier-state"
+                                onChange={(e) => setCell(tt.id, { state: e.target.value as TierCellState })}
+                                className="bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink">
+                                <option value="inherit">{t('tierGrid.stateInherit')}</option>
+                                <option value="priced">{t('tierGrid.statePriced')}</option>
+                                <option value="per_job">{t('tierGrid.statePerJob')}</option>
+                                <option value="not_applicable">{t('tierGrid.stateNotApplicable')}</option>
+                              </select>
+                              <input type="number" inputMode="decimal" step="0.01" min={0} disabled={cell.state !== 'priced'}
+                                value={cell.price} placeholder={t('tierGrid.inherit')} data-testid="tier-price"
                                 onChange={(e) => setCell(tt.id, { price: e.target.value })}
                                 className="w-28 bg-surface border border-line rounded-lg px-2 py-1.5 text-sm text-ink text-right disabled:opacity-50" />
-                              <label className="flex items-center gap-1 text-xs text-muted"><input type="checkbox" checked={cell.manual} onChange={(e) => setCell(tt.id, { manual: e.target.checked })} />{t('tierGrid.manual')}</label>
                               <span className="text-xs text-muted">
-                                {cell.manual ? t('tierGrid.perJob') : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)} · {pctLabel(eff ?? 0, compCost)}</>}
+                                {cell.state === 'per_job' ? t('tierGrid.perJob')
+                                  : cell.state === 'not_applicable' ? t('tierGrid.notApplicable')
+                                  : <>{money(eff ?? 0)} {t('exVat')}{vatRegistered ? ` · ${money(inc(eff ?? 0, rate))} ${t('incVat')}` : ''} · {t('margin')} {money((eff ?? 0) - compCost)} · {pctLabel(eff ?? 0, compCost)}</>}
                               </span>
                             </div>
                           );

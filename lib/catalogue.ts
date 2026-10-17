@@ -34,24 +34,74 @@ export function fixedMirror(basePriceExVat: number, components: ComponentInput[]
 }
 
 /**
- * Resolve a fixed service's price for a chosen tier (pounds):
- *   tier row with a value → that price; tier row present with null → 'manual' (price on the day);
- *   no row for the tier (or no tier) → base_price.
+ * The TierAvailability values, as a LOCAL union rather than the Prisma enum.
+ *
+ * lib/catalogue is imported by EstimateBuilder, which is a client component, and a value import
+ * from @prisma/client at module scope is how this codebase has shipped lib/db to the browser
+ * before. A hand-written union has the opposite failure — it drifts from the database silently —
+ * so catalogue-sets-gate asserts these are exactly the enum's values, in the DMMF, every run. The
+ * gate is the part that makes the duplication safe; without it this is a copy waiting to rot.
  */
-export type TierResolution = { pricePounds: number | null; manual: boolean };
+export const TIER_AVAILABILITIES = ['priced', 'per_job', 'not_applicable'] as const;
+export type TierAvailabilityName = (typeof TIER_AVAILABILITIES)[number];
+
+/**
+ * ── WHAT A SERVICE COSTS AT A TIER, IN FOUR STATES ──────────────────────────────────────────────
+ *
+ *   no row for the tier (or no tier)   `base`            inherit base_price_ex_vat
+ *   row, availability `priced`         `priced`          that price
+ *   row, availability `per_job`        `per_job`         offered, priced on the day
+ *   row, availability `not_applicable` `not_applicable`  NOT OFFERED to this tier at all
+ *
+ * ── WHY A UNION AND NOT ANOTHER FLAG ───────────────────────────────────────────────────────────
+ * This returned `{ pricePounds, manual }` — two states for a question that has four. Adding
+ * `offered: false` beside them would have produced an object that passes every existing `if`: a
+ * caller reading `pricePounds` and `manual` would price a not-applicable service at "manual" and
+ * put it on a customer's quote, with nothing to say it had gone wrong. That is the shape of
+ * `{ withheld: true }` — truthy, field-compatible, silently wrong.
+ *
+ * So the branches do not share a field list. `not_applicable` carries no `pricePounds` at all, and
+ * a caller that forgets it stops compiling rather than stops being right. There was exactly one
+ * caller when this changed, which is the cheapest this will ever be.
+ *
+ * NOT a fifth state for "price is zero": 0 is a legitimately free service and is `priced`. The
+ * null/zero discipline is the same one CatalogueItem.unit_cost carries.
+ */
+export type TierResolution =
+  | { state: 'base'; pricePounds: number }
+  | { state: 'priced'; pricePounds: number }
+  | { state: 'per_job' }
+  | { state: 'not_applicable' };
+
+/** Is this service on offer to this tier at all? The one question the ladder builder asks. */
+export const tierOffers = (r: TierResolution): boolean => r.state !== 'not_applicable';
+
+/** The price to put on a line, or null when nobody can say yet. `not_applicable` has no price and
+ *  is not a blank one — call tierOffers FIRST; this returns null for it so a careless caller gets
+ *  an empty field rather than a number that was never true. */
+export const tierPricePounds = (r: TierResolution): number | null =>
+  r.state === 'base' || r.state === 'priced' ? r.pricePounds : null;
+
 export function resolveTierPrice(
   basePriceExVat: number,
-  tierPrices: Array<{ tierId: string; priceExVat: number | null }>,
+  tierPrices: Array<{ tierId: string; priceExVat: number | null; availability?: TierAvailabilityName | null }>,
   tierId: string | null,
 ): TierResolution {
   if (tierId) {
     const row = (tierPrices || []).find((t) => t.tierId === tierId);
     if (row) {
-      if (row.priceExVat === null || row.priceExVat === undefined) return { pricePounds: null, manual: true };
-      return { pricePounds: Number(row.priceExVat), manual: false };
+      // AVAILABILITY DECIDES, and the price is read only once it has. A row that predates the
+      // column reads as null here; it is resolved the way it always was — a figure is a price, an
+      // absent figure is per-job — which is exactly what the migration backfilled the stored rows
+      // to. The fallback is for a client that has not been regenerated, not for live data.
+      const a = row.availability ?? (row.priceExVat === null || row.priceExVat === undefined ? 'per_job' : 'priced');
+      if (a === 'not_applicable') return { state: 'not_applicable' };
+      if (a === 'per_job') return { state: 'per_job' };
+      if (row.priceExVat === null || row.priceExVat === undefined) return { state: 'per_job' };
+      return { state: 'priced', pricePounds: Number(row.priceExVat) };
     }
   }
-  return { pricePounds: Number(basePriceExVat || 0), manual: false };
+  return { state: 'base', pricePounds: Number(basePriceExVat || 0) };
 }
 
 /**

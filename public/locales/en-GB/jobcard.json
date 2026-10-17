@@ -10,6 +10,7 @@
     "addFixed": "Add",
     "pickService": "Choose a service…",
     "pickTierBase": "Base price",
+    "tierNotApplicable": "Not offered on this tier — {{service}} does not apply to this vehicle.",
     "noFixedServices": "No fixed-price services defined. Add them under Products.",
     "promo": "Discount code",
     "pickPromo": "Choose a code…",

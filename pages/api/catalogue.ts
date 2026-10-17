@@ -15,7 +15,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getTenantVat } from '@/lib/tenant-vat';
-import { fixedMirror, ComponentInput } from '@/lib/catalogue';
+import { fixedMirror, ComponentInput, TIER_AVAILABILITIES, type TierAvailabilityName } from '@/lib/catalogue';
 import { catalogueDeleteRefusal } from '@/lib/catalogue-retire';
 import { writeAudit } from '@/lib/audit';
 
@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         labourOutsourced: !!i.labour_outsourced,
         usage: { jobLines: jobLinesOf.get(i.id) ?? 0, promoTargets: promosOf.get(i.id) ?? 0 },
         components: i.components.map((c: any) => ({ description: c.description, qty: Number(c.qty), unitCostExVat: Number(c.unit_cost_ex_vat) })),
-        tierPrices: i.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
+        tierPrices: i.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat), availability: tp.availability ?? null })),
       })),
     });
   }
@@ -109,7 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // --- Fixed vs simple money handling ---
     let components: ComponentInput[] = [];
-    let tierRows: Array<{ tier_id: string; price_ex_vat: Prisma.Decimal | null }> = [];
+    let tierRows: Array<{ tier_id: string; price_ex_vat: Prisma.Decimal | null; availability: TierAvailabilityName }> = [];
 
     if (isFixed) {
       // base_price required (on POST, or when editing a fixed item's price).
@@ -134,19 +134,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Tier price rows (only tiers the tenant owns; price null = manual/price-on-the-day).
+      /**
+       * TIER PRICE ROWS — only tiers the tenant owns, and FOUR states (see TierAvailability).
+       *
+       * The state is taken from the payload and VALIDATED against the known values rather than
+       * inferred from whether a price arrived. Inferring is what the old code did, and it is why
+       * there was no way to say `not_applicable`: an absent price meant per-job and nothing else
+       * could be said. A client that sends an unknown word is refused, never defaulted — a typo
+       * silently becoming `priced` would put a price on a service the garage had withdrawn.
+       */
       if (Array.isArray(body.tierPrices)) {
         const validTiers = new Set(((await prisma.serviceTier.findMany({ where: { group_id: groupId }, select: { id: true } })) as Array<{ id: string }>).map((t) => t.id));
         for (const tp of body.tierPrices) {
           const tierId = String(tp?.tierId ?? '');
           if (!validTiers.has(tierId)) continue;
           const hasPrice = tp?.priceExVat !== undefined && tp?.priceExVat !== null && tp?.priceExVat !== '';
-          if (hasPrice) {
+          // Absent availability reads the old way, so a caller that predates the column still
+          // works and still means what it meant. Present-but-unknown is a refusal.
+          const claimed = tp?.availability === undefined || tp?.availability === null
+            ? (hasPrice ? 'priced' : 'per_job')
+            : String(tp.availability);
+          if (!(TIER_AVAILABILITIES as readonly string[]).includes(claimed)) {
+            return res.status(400).json({ message: `Unknown tier availability “${claimed}”.` });
+          }
+          const availability = claimed as TierAvailabilityName;
+          if (availability === 'priced') {
+            if (!hasPrice) return res.status(400).json({ message: 'A priced tier needs a price. Choose “price on the day” or “not applicable” instead.' });
             const pr = dec(tp.priceExVat);
             if (pr === null || pr < 0) return res.status(400).json({ message: 'Tier price (ex VAT) must be a non-negative number.' });
-            tierRows.push({ tier_id: tierId, price_ex_vat: new Prisma.Decimal(pr.toFixed(2)) });
+            tierRows.push({ tier_id: tierId, price_ex_vat: new Prisma.Decimal(pr.toFixed(2)), availability });
           } else {
-            tierRows.push({ tier_id: tierId, price_ex_vat: null }); // offered, price-on-the-day
+            // per_job and not_applicable both carry NO price. Dropping one that was sent is
+            // deliberate: a stored figure beside "not offered" is a contradiction the CHECK
+            // constraint will refuse outright once it lands, and silently keeping it here would
+            // make that later migration fail on data this endpoint wrote.
+            tierRows.push({ tier_id: tierId, price_ex_vat: null, availability });
           }
         }
       }
@@ -215,7 +237,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           if (Array.isArray(body.tierPrices)) {
             await tx.catalogueItemTierPrice.deleteMany({ where: { catalogue_item_id: itemId } });
-            if (tierRows.length) await tx.catalogueItemTierPrice.createMany({ data: tierRows.map((r) => ({ catalogue_item_id: itemId, tier_id: r.tier_id, price_ex_vat: r.price_ex_vat })) });
+            if (tierRows.length) await tx.catalogueItemTierPrice.createMany({ data: tierRows.map((r) => ({ catalogue_item_id: itemId, tier_id: r.tier_id, price_ex_vat: r.price_ex_vat, availability: r.availability })) });
           }
         } else {
           await tx.catalogueComponent.deleteMany({ where: { catalogue_item_id: itemId } });

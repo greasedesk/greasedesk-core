@@ -57,7 +57,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
         select: {
           id: true, code: true, title: true, name: true, item_type: true, unit_cost: true, unit_price: true, vat_rate: true, base_price_ex_vat: true, labour_hours: true,
           components: { orderBy: { position: 'asc' }, select: { description: true, qty: true, unit_cost_ex_vat: true } },
-          tier_prices: { select: { tier_id: true, price_ex_vat: true } },
+          tier_prices: { select: { tier_id: true, price_ex_vat: true, availability: true } },
         },
       }) as Promise<any[]>,
       prisma.serviceTier.findMany({ where: { group_id: groupId, active: true }, orderBy: [{ position: 'asc' }, { created_at: 'asc' }], select: { id: true, name: true } }) as Promise<any[]>,
@@ -448,7 +448,10 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     labourHours: c.labour_hours == null ? null : Number(c.labour_hours),
     // Components are the bill of materials WITH supplier costs — the strictest grain on the page.
     components: costVisible ? c.components.map((x: any) => ({ description: x.description, qty: Number(x.qty), unitCost: Number(x.unit_cost_ex_vat) })) : [],
-    tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat) })),
+    // `availability` RIDES ALONG, and the line below is why it has to: resolveTierPrice reads it
+    // first and the price second, so a shape that omits it silently resolves every not_applicable
+    // row as per_job — an oil service offered on an electric car with an empty price box.
+    tierPrices: c.tier_prices.map((tp: any) => ({ tierId: tp.tier_id, priceExVat: tp.price_ex_vat == null ? null : Number(tp.price_ex_vat), availability: tp.availability ?? null })),
   }));
   const tiers: TierLite[] = tierRows.map((tt) => ({ id: tt.id, name: tt.name }));
   const promos: PromoLite[] = !priceVisible ? [] : promoRows.map((p) => ({ id: p.id, code: p.code, label: p.label, type: p.promo_type, amount: Number(p.amount), targets: p.targets.map((t: any) => ({ id: t.item.id, title: t.item.title || t.item.name })) }));
