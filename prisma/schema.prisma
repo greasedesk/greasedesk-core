@@ -304,31 +304,31 @@ model Group {
 
   // Invoice number DISPLAY format (per-tenant). Rendered via lib/invoice-number.ts::formatInvoiceNumber.
   // FY-prefix is a format string, never a reset. Padding default 4 (Xero-style "0001").
-  invoice_prefix            String   @default("")
-  invoice_pad_width         Int      @default(4)
+  invoice_prefix              String    @default("")
+  invoice_pad_width           Int       @default(4)
   // Fiscal-year DISPLAY segment (e.g. INV-26-0042): 0 = off, 2 or 4 digits of the year the FY
   // started in. The counter underneath stays continuous — FY is formatting, never a reset.
-  invoice_fy_digits         Int      @default(0)
-  fy_start_month            Int      @default(4) // 1-12; UK default April
+  invoice_fy_digits           Int       @default(0)
+  fy_start_month              Int       @default(4) // 1-12; UK default April
   /// THE HISTORICAL-SALE BOUNDARY, DECLARED. "Every car sale from this date is invoiced through GreaseDesk;
   /// sales before it can be recorded as history." STAMPED with the day it is declared — never typed, so it
   /// can be neither a future date (the back door left open for months) nor a guess — and written once.
   /// It may later move EARLIER only, which narrows the door and can never reopen it (lib/stock-historical).
   /// NULL = not declared yet, and historical entry is refused until it is. The effective boundary is the
   /// EARLIER of this and the tenant's first invoiced car sale, so a sale invoiced first still closes the door.
-  car_sales_invoiced_from   DateTime? @db.Date
+  car_sales_invoiced_from     DateTime? @db.Date
   // Warranty-series prefix (comeback £0 invoices) — the filter key for the future comebacks tile.
-  invoice_warranty_prefix   String   @default("W")
+  invoice_warranty_prefix     String    @default("W")
   // Historical-series prefix. Deliberately distinct so a historical number can never be mistaken
   // for a VAT invoice number at a glance, in the list or on a document.
-  invoice_historical_prefix String   @default("H")
-  invoice_vehicle_sale_prefix String @default("VS")
-  invoice_credit_note_prefix String  @default("CN")
+  invoice_historical_prefix   String    @default("H")
+  invoice_vehicle_sale_prefix String    @default("VS")
+  invoice_credit_note_prefix  String    @default("CN")
   // "Sent with GreaseDesk" footer line in invoice EMAILS (never the PDF). Tiering policy later.
-  invoice_email_footer      Boolean  @default(true)
+  invoice_email_footer        Boolean   @default(true)
   // Bank-style clearance window (hours): mark-paid holds reversible + silent this long before the
   // cron confirms and sends the receipt. Flat window; working-day-aware is a banked refinement.
-  paid_confirm_window_hours Int      @default(24)
+  paid_confirm_window_hours   Int       @default(24)
   // --- Invoicing tab settings (ADMIN; Settings → Invoicing) ---
   // WHERE GARAGE-FACING OPERATIONAL NOTIFICATIONS GO — "a customer accepted a quote", "an email
   // arrived". NOT billing (billing_email is an IDENTITY key: onboarding upserts by it and
@@ -336,43 +336,44 @@ model Group {
   // reply address (invoice_reply_to is what a customer sees and replies to). Three addresses,
   // three jobs. NULL = fall back through lib/ops-email to invoice_reply_to then billing_email, so
   // an existing tenant keeps exactly today's behaviour until someone sets this deliberately.
-  ops_email                 String?
-  invoice_reply_to          String? // business Reply-To on invoice emails (fallback: billing_email)
+  ops_email                   String?
+  invoice_reply_to            String? // business Reply-To on invoice emails (fallback: billing_email)
   /// Display name on the GreaseDesk-owned From line. A NARROWING of trading_name, not a peer:
   /// the fallback chain is `invoice_sender_name || trading_name || group_name`, so a garage that
   /// sets only a trading name gets it here too. Set this ONLY when the email From should differ
   /// from the trading name — otherwise three name fields is how a garage ends up with three names
   /// and no idea which appears where. NULL = use the trading name.
-  invoice_sender_name       String?
-  invoice_footer_text       String? // payment terms / footer block — multi-line, rendered on the document
-  invoice_bcc               String? // garage-copy BCC (fallback: billing_email)
-  logo_r2_key               String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
+  invoice_sender_name         String?
+  invoice_footer_text         String? // payment terms / footer block — multi-line, rendered on the document
+  invoice_bcc                 String? // garage-copy BCC (fallback: billing_email)
+  logo_r2_key                 String? // tenant logo in R2 ({group}/branding/…), top-centre of the PDF
   // Per-tenant leave-type colour overrides (type→hex; defaults = Okabe–Ito in lib/leave-types;
   // admin-remappable for colour-blind accessibility). Read via resolveLeaveColours only.
-  leave_type_colours        Json?
+  leave_type_colours          Json?
   /// Show cars whose quote has lapsed on the marketing board. An OFF SWITCH for something that is
   /// on, not an opt-in — the opposite polarity from Site.intake_prompt_*, deliberately: a lapsed
   /// quote is a lead every garage has, where a diagnostic scan is equipment some garages lack.
-  marketing_expired_quotes  Boolean @default(true)
+  marketing_expired_quotes    Boolean   @default(true)
   /// How long a snooze lasts, in days. NULL = never set, so lib/marketing-lists::SNOOZE_DAYS
   /// applies — NOT "zero days" and not "30". Writing 30 here for everyone would make a deliberate
   /// choice of 30 indistinguishable from nobody having been asked, for ever.
-  marketing_snooze_days     Int?
+  marketing_snooze_days       Int?
   /// Days BEFORE expiry at which a live quote moves from Warm to Hot. NULL = only on expiry, which
   /// is a real answer rather than a stand-in for 0: it says "we never want it early".
-  marketing_quote_hot_days  Int?
-  status_colours            Json? // diary job-status band → curated-palette hex (lib/status-colours); null keys fall back to defaults. One palette per tenant (a mechanic moving sites shouldn't relearn colours).
+  marketing_quote_hot_days    Int?
+  status_colours              Json? // diary job-status band → curated-palette hex (lib/status-colours); null keys fall back to defaults. One palette per tenant (a mechanic moving sites shouldn't relearn colours).
   // Tax LABEL only (admin-typed: VAT/GST/Sales Tax…) — never derived from country; rate stays in Company Details.
-  tax_label                 String   @default("VAT")
-  phone                     String? // company-level contact number — the FALLBACK when a site has none (customer-facing escape hatch)
-  whatsapp                  String? // company-level WhatsApp, stored E.164 DIGITS (447700900123). INDEPENDENT of phone — a garage may run WhatsApp on a different number, or not at all.
-  billing_email             String   @unique
-  is_franchise_grp          Boolean  @default(false)
-  created_at                DateTime @default(now())
+  tax_label                   String    @default("VAT")
+  phone                       String? // company-level contact number — the FALLBACK when a site has none (customer-facing escape hatch)
+  whatsapp                    String? // company-level WhatsApp, stored E.164 DIGITS (447700900123). INDEPENDENT of phone — a garage may run WhatsApp on a different number, or not at all.
+  billing_email               String    @unique
+  is_franchise_grp            Boolean   @default(false)
+  created_at                  DateTime  @default(now())
 
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
   /**
+   * /**
    * /**
    * WRITTEN THE WAY POSTGRES STORES IT, not the way it is nicest to type. Postgres normalises the
    * literal in a DEFAULT expression and adds the cast, so `'GB-GD'` comes back as `'GB-GD'::text`.
@@ -454,11 +455,11 @@ model Group {
   //
   // NULL = a normal paying tenant, which is every row that exists today and nearly every one after.
   // Nobody has decided anything about them, and that absence is the honest state — never backfilled.
-  free_since              DateTime?
+  free_since  DateTime?
   // WHY, and it is not decoration: "this tenant pays nothing, forever" is exactly the kind of fact
   // that is indistinguishable from a mistake six months later. Same argument as the void reason and
   // the phone-step exemption. NULL only on rows that predate the column.
-  free_reason             String?
+  free_reason String?
 
   // --- Permission config (per-tenant admin toggles that relax STANDARD authority; default OFF).
   // Resolved via lib/permissions.ts and read inside the permission chokepoints — never scattered.
@@ -544,56 +545,57 @@ model Group {
   invoice_sequence InvoiceSequence?
 
   // Product catalogue (tenant-level; one shared catalogue across all sites)
-  catalogue_items     CatalogueItem[]
-  service_tiers       ServiceTier[]
-  leaveRecords        LeaveRecord[]
-  publicHolidays      PublicHoliday[]
-  employmentEvents    EmploymentEvent[]
+  catalogue_items         CatalogueItem[]
+  catalogue_sets          CatalogueSet[]
+  catalogue_set_members   CatalogueSetMember[]
+  service_tiers           ServiceTier[]
+  leaveRecords            LeaveRecord[]
+  publicHolidays          PublicHoliday[]
+  employmentEvents        EmploymentEvent[]
   contactPreferenceEvents ContactPreferenceEvent[]
-  siteConfigEvents    SiteConfigEvent[]
-  importBatches       ImportBatch[]
-  catalogueAliases    CatalogueAlias[]
-  lineSplitTemplates  LineSplitTemplate[]
-  notifications       NotificationLog[]
-  message_threads     MessageThread[]
+  siteConfigEvents        SiteConfigEvent[]
+  importBatches           ImportBatch[]
+  catalogueAliases        CatalogueAlias[]
+  lineSplitTemplates      LineSplitTemplate[]
+  notifications           NotificationLog[]
+  message_threads         MessageThread[]
   // Per-tenant inbound mailbox token. RANDOM AND ROTATABLE — deliberately NOT derived from `ref`
   // (sequentially allocated, so an attacker could enumerate every garage) nor from `id` (unguessable
   // but unrotatable: a leaked address would be unfixable without changing the primary key).
-  inbound_token       String?              @unique
-  magicLinks          CustomerMagicLink[]
-  countryWaitlist     CountryWaitlist[]
-  quoteVersions       QuoteVersion[]
-  payments            Payment[]
-  refunds             Refund[]
-  providerConnections ProviderConnection[]
-  applicationFeeRates ApplicationFeeRate[]
-  smsTopUps           SmsTopUp[]
-  commissionRefusals  CommissionRefusal[]
-  credit_notes CreditNote[]
-  due_items          VehicleDueItem[]
-  odometer_readings  VehicleOdometerReading[]
-  due_item_answers   DueItemCustomerAnswer[]
-  due_item_lines     DueItemLine[]
-  tyre_readings      TyreReading[]
-  battery_readings   BatteryReading[]
-  marketing_contacts MarketingContact[]
-  schedule_readings  ServiceScheduleReading[]
-  clockSessions   JobClockSession[]
-  purchaseModels  PurchaseModel[]
-  purchaseModelDefaults PurchaseModelDefaults?
-  stockItems            StockItem[]
-  stockDisposals        StockDisposal[]
-  stockCostSnapshots    StockCostSnapshot[]
-  stockCosts            StockCost[]
-  export_jobs ExportJob[]
+  inbound_token           String?                  @unique
+  magicLinks              CustomerMagicLink[]
+  countryWaitlist         CountryWaitlist[]
+  quoteVersions           QuoteVersion[]
+  payments                Payment[]
+  refunds                 Refund[]
+  providerConnections     ProviderConnection[]
+  applicationFeeRates     ApplicationFeeRate[]
+  smsTopUps               SmsTopUp[]
+  commissionRefusals      CommissionRefusal[]
+  credit_notes            CreditNote[]
+  due_items               VehicleDueItem[]
+  odometer_readings       VehicleOdometerReading[]
+  due_item_answers        DueItemCustomerAnswer[]
+  due_item_lines          DueItemLine[]
+  tyre_readings           TyreReading[]
+  battery_readings        BatteryReading[]
+  marketing_contacts      MarketingContact[]
+  schedule_readings       ServiceScheduleReading[]
+  clockSessions           JobClockSession[]
+  purchaseModels          PurchaseModel[]
+  purchaseModelDefaults   PurchaseModelDefaults?
+  stockItems              StockItem[]
+  stockDisposals          StockDisposal[]
+  stockCostSnapshots      StockCostSnapshot[]
+  stockCosts              StockCost[]
+  export_jobs             ExportJob[]
 
-  job_card_photos JobCardPhoto[]
-  prospects Prospect[]
-  staged_invoices StagedInvoice[]
+  job_card_photos        JobCardPhoto[]
+  prospects              Prospect[]
+  staged_invoices        StagedInvoice[]
   stock_number_sequences StockNumberSequence[]
-  upload_telemetries UploadTelemetry[]
-  vin_read_shadows VinReadShadow[]
-
+  upload_telemetries     UploadTelemetry[]
+  vin_read_shadows       VinReadShadow[]
 }
 
 /**
@@ -642,16 +644,13 @@ model Group {
  * Stripe Tax and VAT-ID collection are gated on it and are off). No VAT has ever been charged on an
  * application fee: every fee to date is exactly floor(amount × 25 / 10000) with nothing added —
  * 12p, 12p, 6p, of which 12p has been returned. There is no historical VAT to correct.
- *
  * On registration the 25bp becomes a VATable supply, and `applicationFeePennies` will need to know
  * whether a fee was struck BEFORE or AFTER that date. This model already carries the machinery for
  * exactly that: an append-only-forward timeline with a DB-unique constraint, the same shape
  * CommissionRate uses. The cut-over should be a rate row with an effective date, NOT a boolean read
  * at request time — a boolean cannot answer "what was the rule in March".
- *
  * Recording it here because the decision is free today and expensive later: three rows can be
  * reasoned about in one screen, and thirty thousand cannot.
- *
  * COMMERCIAL, NOT TECHNICAL: whether registration RAISES the fee 20% for existing tenants or is
  * absorbed is the owner's call. Terms §6 as published already says the fee is "plus VAT where
  * applicable" and that "if we become VAT-registered, VAT will be added to the fee" — i.e. the
@@ -685,26 +684,22 @@ model ApplicationFeeRate {
   /**
    * WHAT WAS TRUE OF THE VAT WHEN THIS RATE PRICED A PAYMENT — 'not_registered' | 'standard_exclusive'.
    * ApplicationFeeRate_vat_chk holds the set.
-   *
    * NOT NULL, AND NO DEFAULT, which is the whole point. `fee_rate_id` is FROZEN onto every payment,
    * so a row that cannot say what its VAT position was leaves that payment's history ambiguous
    * forever — and TMBS already carries ten payments with a frozen rate id. A default would answer
    * the question on the writer's behalf, which is the failure lib/due-items describes: it looks
    * like it is recording something while making the interesting value vanishingly rare.
-   *
    * The treatment was settled 2026-08-15 (lib/application-fee): the fee is a separate taxable
    * supply, standard-rated and EXCLUSIVE — 0.25% PLUS VAT — once we are registered. We are not, so
    * every row today reads `not_registered`, and that is a fact rather than a placeholder.
-   *
    * THIS COLUMN DOES NOT SAY HOW THE VAT IS COLLECTED. Whether it rides inside Stripe's single
    * application_fee_amount or is billed on a separate consolidated invoice is a different fact —
    * about how we pull money, not about what the fee is — and it is NOT DECIDED. It gets its own
    * shape on registration day; a value for it here would answer it by accident.
-   *
    * Added ahead of need for the reason min_fee_pennies and cap_fee_pennies were: adding a column
    * afterwards is a migration over money already charged.
    */
-  vat_treatment  String
+  vat_treatment String
 
   effective_from DateTime
   created_by     String? // operator id (audit)
@@ -850,9 +845,8 @@ model UploadTelemetry {
   attempts    Int      @default(0)
   created_at  DateTime @default(now())
 
-  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
-
 
   @@index([job_card_id, created_at])
   @@index([group_id, created_at])
@@ -901,25 +895,25 @@ model Operator {
 }
 
 model Rep {
-  id             String   @id @default(uuid())
+  id               String  @id @default(uuid())
   /// THE CREDENTIAL ITSELF. There is no password: a rep signs in with a single-use magic link sent
   /// to this address, so whoever controls the mailbox controls the account. That is why a rep can
   /// NEVER change it — the change is operator-only, in the Engine Room, and audited.
-  email          String   @unique
-  name           String
-  ref_code       String   @unique // the `?ref=<code>` marketing token that attributes a signup
-  country_code   String   @default("GB")
+  email            String  @unique
+  name             String
+  ref_code         String  @unique // the `?ref=<code>` marketing token that attributes a signup
+  country_code     String  @default("GB")
   /// THE PUBLISHED CONTACT NUMBER, and deliberately not the login email's neighbour.
   /// NULL = this rep has not published a number, which is an ordinary state and not a missing
   /// field: a garage sees the line omitted rather than a placeholder, and no `tel:` is rendered.
   /// Written ONLY through lib/tenant-rep::repPhoneFields, which derives the dialable form the same
   /// way customerPhoneFields does — a number that is published is a number that gets dialled, so it
   /// is stored dialable rather than reformatted at every render.
-  phone          String? // NULL = no published number; the support page omits the line
+  phone            String? // NULL = no published number; the support page omits the line
   /// The dialable form of `phone`. NULL when there is no number, or when what was typed could not
   /// be resolved to E.164 — honest-null, in step with Customer.phone_e164: an unresolvable number
   /// is still shown to a human, it just cannot be made into a link.
-  phone_e164     String?
+  phone_e164       String?
   // ── THE PROFILE. Captured once, and it GATES THE FIRST INVOICE — except the UTR. ─────────────
   // Every column here is nullable and NULL MEANS "NOT YET GIVEN". That is the honest state for a
   // rep an operator created five minutes ago, and it is what makes "profile incomplete" DERIVABLE
@@ -975,31 +969,26 @@ model Rep {
   bank_sort_code      String? // NULL with the other two — see Rep_bank_chk above
   bank_account_number String? // NULL with the other two — see Rep_bank_chk above
 
-  status         String   @default("active") // 'active' | 'suspended'
-  created_at     DateTime @default(now())
-  updated_at     DateTime @updatedAt
+  status     String   @default("active") // 'active' | 'suspended'
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   magic_links RepMagicLink[]
   invoices    RepInvoice[]
 
-  prospects_consent_by_rep Prospect[] @relation("Prospect_consent_by_rep_id")
-  prospects_created_by_rep Prospect[] @relation("Prospect_created_by_rep_id")
-  prospect_visits ProspectVisit[]
-
+  prospects_consent_by_rep Prospect[]      @relation("Prospect_consent_by_rep_id")
+  prospects_created_by_rep Prospect[]      @relation("Prospect_created_by_rep_id")
+  prospect_visits          ProspectVisit[]
 }
 
 /**
  * THE REP'S CREDENTIAL, MINTED ONE SIGN-IN AT A TIME.
- *
  * Its own model, not a widening of CustomerMagicLink: that one's header commits IN WRITING to being
  * multi-use ("a customer re-opening the same email must still work"), and its group_id and
  * job_card_id are NOT NULL. A rep belongs to no garage and no job card, and this link must burn.
- *
  * SINGLE USE IS THE CONDITIONAL UPDATE, not an index:
- *
- *     UPDATE "RepMagicLink" SET consumed_at = now()
- *      WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > now()
- *
+ * UPDATE "RepMagicLink" SET consumed_at = now()
+ * WHERE token_hash = $1 AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > now()
  * accepted only on affected-row count 1. Two concurrent replays both reach the UPDATE; the second
  * blocks on the row lock and, re-evaluating its WHERE after the first commits, matches nothing.
  * There is no window between a read and a write because there is no read. The code_step unique
@@ -1007,28 +996,28 @@ model Rep {
  * that repeats across rows, while this row IS the credential and is already unique by primary key.
  */
 model RepMagicLink {
-  id       String @id @default(uuid())
-  rep_id   String
+  id             String    @id @default(uuid())
+  rep_id         String
   /// ONE PURPOSE, NAMED — the narrow-grant discipline from lib/magic-link. A link minted to sign in
   /// can never be spent on anything else, because every lookup is scoped to it.
   /// RepMagicLink_purpose_chk holds the set: 'sign_in', and nothing else yet.
-  purpose  String
+  purpose        String
   /// sha256(raw). The RAW token exists only in the emailed URL, so a database reader gets nothing.
   /// RepMagicLink_token_shape_chk refuses anything that is not 64 hex characters.
-  token_hash String @unique
+  token_hash     String    @unique
   /// WHERE IT WENT, verbatim, at the moment of sending — not derived from Rep.email on read. An
   /// operator can change that address, and the audit answer "who could have signed in as this rep?"
   /// must not silently rewrite itself when they do.
-  sent_to    String
-  expires_at DateTime
+  sent_to        String
+  expires_at     DateTime
   /// NULL = UNSPENT. This column is the entire single-use mechanism — see the header.
-  consumed_at DateTime?
+  consumed_at    DateTime?
   /// NULL = live. The explicit kill switch, for a link sent to an address that turned out wrong.
-  revoked_at  DateTime?
+  revoked_at     DateTime?
   /// WHY it was killed, as a code from lib/rep-magic-link. NULL = not revoked; RepMagicLink_revoked_chk
   /// pairs it with revoked_at exactly, so a reason can never outlive the revocation it explains.
   revoked_reason String?
-  created_at DateTime @default(now())
+  created_at     DateTime  @default(now())
 
   rep Rep @relation(fields: [rep_id], references: [id], onDelete: Cascade)
 
@@ -1137,34 +1126,34 @@ model CommissionRefusal {
 }
 
 model CommissionEntry {
-  id             String   @id @default(uuid())
-  group_id       String
-  party_type     String
-  party_id       String
-  period         String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
-  kind           String // 'accrual' | 'clawback'
-  tier           String
+  id                      String                @id @default(uuid())
+  group_id                String
+  party_type              String
+  party_id                String
+  period                  String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
+  kind                    String // 'accrual' | 'clawback'
+  tier                    String
   /**
    * Which revenue produced this entry — see CommissionRate.revenue_stream. 'subscription' today.
    */
-  revenue_stream String   @default("subscription")
-  rate_id        String // FROZEN link to the CommissionRate applied
-  share_bp       Int
-  amount_pennies Int // + accrual, − clawback
-  currency       String
-  source_ref     String // idempotency key: payment ref (accrual) or refund ref (clawback)
-  payment_ref    String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
+  revenue_stream          String                @default("subscription")
+  rate_id                 String // FROZEN link to the CommissionRate applied
+  share_bp                Int
+  amount_pennies          Int // + accrual, − clawback
+  currency                String
+  source_ref              String // idempotency key: payment ref (accrual) or refund ref (clawback)
+  payment_ref             String // the collected payment this relates to (accrual: itself; clawback: the refunded payment) — netting key
   /// lib/rep-pay-run ENTRY_STATUSES — 'pending' | 'held' | 'released' | 'billed' | 'paid' | 'void'.
   /// CommissionEntry_status_chk holds the set; the transitions live in lib/rep-pay-run, not here.
   /// `void` is terminal from ANY state, including released — a voided line that was already in a
   /// CLOSED run keeps its pay_run_id, because a closed run never moves again.
-  status         String   @default("pending")
+  status                  String                @default("pending")
   /// WHY an area manager held this line — a code from lib/rep-pay-run HOLD_REASONS, never a
   /// sentence. Prose that could name a person goes in CommissionEntryNote.
   ///
   /// NULL = this line is not held. CommissionEntry_hold_chk pairs the two exactly, so a released
   /// line cannot carry a stale hold reason and a held line cannot carry none.
-  held_reason    String?
+  held_reason             String?
   /// WHY a line was released despite failing the fourteen-day rule, or with no matching visit at
   /// all — a code from RELEASE_OVERRIDE_REASONS.
   ///
@@ -1173,9 +1162,9 @@ model CommissionEntry {
   release_override_reason String?
   /// When the manager released it. NULL = not released — see shown_as_visited, which is null for
   /// the same reason and must never disagree with this one.
-  released_at    DateTime?
+  released_at             DateTime?
   /// The operator who released it. NULL until released.
-  released_by    String?
+  released_by             String?
   /// THE PICTURE THE AREA MANAGER WAS SHOWN when they released this entry — true = the month read
   /// as visited, false = it did not and they released it anyway.
   ///
@@ -1189,7 +1178,7 @@ model CommissionEntry {
   /// NOT BUILT (docs/rep-system.md §5) and nothing moves an entry off `pending`. Deliberately not
   /// defaulted: false is the decision "released without a visit", and an unreleased entry has made
   /// no decision at all.
-  shown_as_visited Boolean?
+  shown_as_visited        Boolean?
   /// THE RUN THIS LINE WAS RELEASED INTO. Renamed 2026-09-08 from `payout_id`: a rep is
   /// self-employed and invoices us for SALES COMMISSION — "payout" is the wrong noun and it had no
   /// writer, so the window to rename was open.
@@ -1197,8 +1186,8 @@ model CommissionEntry {
   /// NULL = not released into any run. A released line belongs to exactly ONE run, ever: a held
   /// line released after its original run closed joins whichever run is open at that moment, and
   /// never returns to the one it missed.
-  pay_run_id     String?
-  pay_run        RepPayRun? @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
+  pay_run_id              String?
+  pay_run                 RepPayRun?            @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
   /// THE REP INVOICE THIS LINE WAS BILLED ON.
   ///
   /// NULL = released but not yet billed — the ordinary state of every line waiting for a rep to
@@ -1214,11 +1203,11 @@ model CommissionEntry {
   /// does, and 'void' is exempt exactly as it is in the release check — a line voided after being
   /// billed keeps its invoice, because removing it would alter a submitted document. So null here
   /// is never "we lost track of it": it is exactly "no invoice has claimed this line".
-  rep_invoice_id String?
-  rep_invoice    RepInvoice? @relation(fields: [rep_invoice_id], references: [id], onDelete: Restrict)
-  invoice_lines  RepInvoiceLine[]
-  notes          CommissionEntryNote[]
-  created_at     DateTime @default(now())
+  rep_invoice_id          String?
+  rep_invoice             RepInvoice?           @relation(fields: [rep_invoice_id], references: [id], onDelete: Restrict)
+  invoice_lines           RepInvoiceLine[]
+  notes                   CommissionEntryNote[]
+  created_at              DateTime              @default(now())
 
   @@unique([source_ref, party_id, kind]) // a re-delivered webhook is a no-op
   @@index([group_id, period])
@@ -1230,35 +1219,32 @@ model CommissionEntry {
 
 /**
  * A SALES COMMISSION PAY RUN — platform-wide, dated, and closed by a person.
- *
  * Not per rep. One run is open at a time across the whole platform, enforced by a PARTIAL UNIQUE
  * INDEX on the open status rather than by application logic a second writer could skip. The screen
  * filters one rep's slice out of it.
- *
  * `scheduled_on` makes a run ELIGIBLE to close. It never closes it: nothing in this system pays
  * itself, and a date that closed a run would be a payment nobody signed for.
- *
  * IMMUTABLE ONCE CLOSED. One predicate — lib/rep-pay-run::canEditPayRun, the canEditInvoice shape —
  * and every caller asks it rather than re-deriving "closed" for itself. No line may join, leave or
  * change afterwards, which is why the totals are SNAPSHOT at close rather than recomputed on read:
  * a figure that is recalculated is a figure that can move.
  */
 model RepPayRun {
-  id           String   @id @default(uuid())
-  period       String // 'YYYY-MM' the run is FOR. Lines from earlier periods appear as arrears.
-  scheduled_on DateTime // the fixed day it becomes eligible to close — a prompt, never a trigger
-  status       String // lib/rep-pay-run PAY_RUN_STATUSES — 'open' | 'closed'. One open, platform-wide.
-  opened_at    DateTime @default(now())
+  id                      String    @id @default(uuid())
+  period                  String // 'YYYY-MM' the run is FOR. Lines from earlier periods appear as arrears.
+  scheduled_on            DateTime // the fixed day it becomes eligible to close — a prompt, never a trigger
+  status                  String // lib/rep-pay-run PAY_RUN_STATUSES — 'open' | 'closed'. One open, platform-wide.
+  opened_at               DateTime  @default(now())
   /// The operator who opened it. NULL = opened by the platform rather than a person — the same
   /// honest sentinel SuperAdminAudit.operator_user_id uses.
-  opened_by    String?
+  opened_by               String?
   /// NULL exactly while the run is open. RepPayRun_closure_chk pairs these four with the status, so
   /// a closed run can never be missing its signoff and an open one can never carry a stale one.
-  closed_at    DateTime?
-  closed_by    String?
+  closed_at               DateTime?
+  closed_by               String?
   /// What the person signed off. NULL while open; non-blank at close, and the close is REFUSED
   /// without it — a run closed with no words is a payment nobody explained.
-  signoff      String?
+  signoff                 String?
   /// TOTALS FROZEN AT CLOSE, not recomputed on read. NULL while open, because an open run's totals
   /// are a live figure and pretending otherwise would put a number on a screen that moves.
   snapshot_parties        Int?
@@ -1273,20 +1259,18 @@ model RepPayRun {
 
 /**
  * THE REP'S INVOICE TO US — their document, their number, FROZEN ON SUBMISSION.
- *
  * IT DOES NOT INHERIT THE GARAGE-INVOICE BEHAVIOUR, and that difference is the reason the bytes are
  * stored. A garage invoice is GreaseDesk's own: it re-renders from frozen InvoiceLine rows every
  * time it is opened, which is safe because we own it and the freeze is in the data. This one is
  * somebody else's accounting record, and rebuilding it from data would be forging another
  * business's books. So the PDF ITSELF is the artefact, stored and hashed, and the renderer is never
  * called for it again — refuseIfSubmitted, one predicate, the canEditInvoice shape.
- *
  * A wrong invoice is REJECTED and resubmitted under a NEW number, or credit-noted. Never edited.
  */
 model RepInvoice {
-  id         String @id @default(uuid())
-  rep_id     String
-  pay_run_id String
+  id                 String @id @default(uuid())
+  rep_id             String
+  pay_run_id         String
   /// THE REP'S OWN NUMBER, FROM THE REP'S OWN SERIES — not ours, and NOT globally unique.
   /// Uniqueness is (rep_id, rep_invoice_number): two reps may both issue their 001, because they
   /// are two businesses with two sales ledgers and neither has heard of the other. A global unique
@@ -1295,7 +1279,7 @@ model RepInvoice {
   rep_invoice_number String
   /// RepInvoice_status_chk: 'pending_review' | 'approved' | 'paid' | 'rejected' | 'cancelled'.
   /// RepInvoice_lifecycle_chk names every column each status may and may not carry.
-  status String
+  status             String
 
   /// Defaults to the moment of submission and is FLOORED at the run's close date: a rep cannot date
   /// an invoice before the money it bills for was signed off.
@@ -1303,7 +1287,7 @@ model RepInvoice {
   /// THE VAT TAX POINT. NULL = no VAT on this document, so there is no tax point to state — true of
   /// an unregistered rep, and equally of a registered rep invoicing for a period before their
   /// registration took effect. Paired with vat_applied by RepInvoice_vat_chk.
-  tax_point DateTime?
+  tax_point    DateTime?
 
   currency         String
   subtotal_pennies Int
@@ -1312,12 +1296,12 @@ model RepInvoice {
   /// for a pre-registration period is registered AND carries no VAT, so a column named for their
   /// registration status would read false while the rep is plainly registered. This names what the
   /// document does.
-  vat_applied Boolean
+  vat_applied      Boolean
   /// NULL = no VAT applied. Basis points, so 20% is 2000 and a future 17.5% needs no migration.
-  vat_rate_bp Int?
+  vat_rate_bp      Int?
   /// NULL = no VAT applied. Never 0: zero-rated VAT and no VAT are different documents.
-  vat_pennies Int?
-  total_pennies Int
+  vat_pennies      Int?
+  total_pennies    Int
 
   // ── THE ISSUER, FROZEN — the rep's details AS THEY WERE at submission. Read from these, never
   // from Rep: an operator correcting an address next month must not change what a filed document
@@ -1349,25 +1333,25 @@ model RepInvoice {
 
   /// Submission IS creation: there is no draft, so there is no submitted-by column separate from
   /// rep_id. Two columns that must always be equal are a lie waiting to be written to.
-  submitted_at DateTime @default(now())
+  submitted_at     DateTime  @default(now())
   /// NULL = not reviewed yet. Set with reviewed_by, held together by RepInvoice_lifecycle_chk.
-  reviewed_at  DateTime?
+  reviewed_at      DateTime?
   /// The operator who reviewed it. NULL = not reviewed yet.
-  reviewed_by  String?
+  reviewed_by      String?
   /// NULL unless rejected. A rejection with no words is a rep who cannot act on it.
-  rejected_reason String?
+  rejected_reason  String?
   /// NULL = not paid. When WE paid the rep's invoice, not when anything cleared.
-  paid_at        DateTime?
+  paid_at          DateTime?
   /// Our own payment reference. NULL = not paid, or paid without one.
-  paid_reference String?
+  paid_reference   String?
   /// NULL = not cancelled.
   cancelled_at     DateTime?
   /// NULL unless cancelled. Same rule as rejection: a withdrawal with no reason is unreadable.
   cancelled_reason String?
-  created_at DateTime @default(now())
+  created_at       DateTime  @default(now())
 
-  rep     Rep       @relation(fields: [rep_id], references: [id], onDelete: Restrict)
-  pay_run RepPayRun @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
+  rep     Rep               @relation(fields: [rep_id], references: [id], onDelete: Restrict)
+  pay_run RepPayRun         @relation(fields: [pay_run_id], references: [id], onDelete: Restrict)
   lines   RepInvoiceLine[]
   entries CommissionEntry[]
 
@@ -1382,28 +1366,27 @@ model RepInvoice {
 
 /**
  * THE LINES, SNAPSHOT ONTO THE DOCUMENT — the InvoiceLine shape, for the same reason.
- *
  * Every rendered value lives HERE, not behind entry_id: the amount, the period, the description and
  * the garage's name are all frozen columns on this row. A clawback upstream next month, a renamed
  * tenant, or a purged one does not alter a document already submitted. entry_id is kept so the two
  * can be reconciled and is never read to render.
  */
 model RepInvoiceLine {
-  id             String @id @default(uuid())
-  rep_invoice_id String
+  id                  String   @id @default(uuid())
+  rep_invoice_id      String
   /// WHERE THIS LINE CAME FROM. Reconciliation only — never read to render.
-  entry_id       String
+  entry_id            String
   /// The entry's OWN period, which is what makes arrears legible: a line from an earlier month
   /// appearing in this run's invoice is marked with the period it is actually for.
-  period         String
-  is_arrears     Boolean
+  period              String
+  is_arrears          Boolean
   /// The garage, as it was named at submission. A tenant can rename, and a purged tenant leaves no
   /// row to read — and this document must still say what it said.
   group_name_snapshot String
-  description    String
-  amount_pennies Int
-  position       Int      @default(0)
-  created_at     DateTime @default(now())
+  description         String
+  amount_pennies      Int
+  position            Int      @default(0)
+  created_at          DateTime @default(now())
 
   invoice RepInvoice      @relation(fields: [rep_invoice_id], references: [id], onDelete: Cascade)
   entry   CommissionEntry @relation(fields: [entry_id], references: [id], onDelete: Restrict)
@@ -1418,7 +1401,6 @@ model RepInvoiceLine {
 
 /**
  * THE SENTENCE BESIDE A CODE — whatever the manager wanted to add about a hold or an override.
- *
  * Its own row because the codes on CommissionEntry are the audit answer and name nobody, while a
  * note about why a garage disputed a visit is unbounded text about somebody's business. Same split,
  * and the same reason, as RepVisitNote one model over.
@@ -1441,10 +1423,8 @@ model CommissionEntryNote {
 
 /**
  * A REP VISIT — the evidence that somebody actually turned up, and the month it pays for.
- *
  * This is what makes CommissionRate.amount_unvisited_pennies reachable (£12.50 against £30.00). The
  * rule lives in lib/rep-visit and nothing reads the reduced rate yet; rep-visit-gate pins that.
- *
  * The scan facts are IMMUTABLE. A visit is evidence, and evidence that can be edited afterwards is
  * notes. The answers a rep writes up that evening are notes, and they are DELIBERATELY NOT BUILT
  * here — the four questions and the payments lead are their own slice, with their own three-state
@@ -1499,20 +1479,19 @@ model RepVisit {
 
 /**
  * THE SENTENCE BESIDE THE CODE — whatever a person wanted to add about an unscanned visit.
- *
  * Its own row for one reason: RepVisit SURVIVES a tenant purge and this must not. The code on the
  * visit answers "why was this not scanned?" for the ledger; this answers "what actually happened?"
  * for whoever reads it next week, and it is unbounded text about somebody's garage. Same split, and
  * the same reason, as the answers one model down.
  */
 model RepVisitNote {
-  id         String   @id @default(uuid())
-  visit_id   String   @unique // 0..1 per visit, by the index rather than by convention
+  id         String    @id @default(uuid())
+  visit_id   String    @unique // 0..1 per visit, by the index rather than by convention
   /// The free text. NOT NULL — a note row that exists with nothing in it is a row nobody meant to
   /// write; the absence of a note is the absence of the ROW, which is a state the unique index
   /// above already expresses.
   body       String
-  created_at DateTime @default(now())
+  created_at DateTime  @default(now())
   /// NULL until the first correction — the same rule the answers use.
   updated_at DateTime?
 
@@ -1521,18 +1500,16 @@ model RepVisitNote {
 
 /**
  * WHAT THE REP WROTE UP — its own row, so RepVisit has nothing to update.
- *
  * The scan facts are evidence and the answers are notes, and they have different rules. Keeping
  * them in one table would have made "the visit is immutable" a convention somebody has to obey;
  * split, there is simply nothing on RepVisit to write to, and rep-answers-gate can scan for
  * `repVisit.update` and mean it.
- *
  * THREE-STATE ON NOT NULL COLUMNS, with `not_asked` as a value and the `_at` column carrying the
  * absence — lib/due-items::responseAtFor, followed rather than re-decided. See lib/rep-answers.
  */
 model RepVisitAnswer {
-  id                  String   @id @default(uuid())
-  visit_id            String   @unique // 0..1 per visit, by the index rather than by convention
+  id                  String    @id @default(uuid())
+  visit_id            String    @unique // 0..1 per visit, by the index rather than by convention
   app_working         String // lib/rep-answers APP_WORKING — 'working' | 'problems' | 'not_asked'
   /// What the problem was. NULL = none was described, which is only legitimate when the answer is
   /// not `problems`: lib/rep-answers::refuseAnswer requires prose beside a problem. A REFUSAL and
@@ -1551,7 +1528,7 @@ model RepVisitAnswer {
   whats_missing_text  String?
   /// NULL when whats_missing_state is `not_asked`. `nothing` DOES stamp — it was asked and answered.
   whats_missing_at    DateTime?
-  created_at          DateTime @default(now())
+  created_at          DateTime  @default(now())
   /// NULL until the first correction. Answers are notes and may be edited; every edit also writes a
   /// SuperAdminAudit row (lib/rep-answers::auditAnswerEdit) — the PLATFORM ledger, never the
   /// tenant's, because a garage must not be able to read what a rep recorded about them.
@@ -1564,35 +1541,34 @@ model RepVisitAnswer {
  * THE PAYMENTS AND FINANCE ANSWER, which is a lead and has a life of its own — someone follows it
  * up weeks later, and it converts or dies long after the visit is history. Its own row for that
  * reason, 0..1 per visit.
- *
  * INTEREST AND STATUS ARE TWO AXES: interest is what the garage SAID, status is what we DID. See
  * lib/rep-answers::refuseLead for why collapsing them hides the expensive case.
  */
 model RepLead {
-  id           String    @id @default(uuid())
-  visit_id     String    @unique
+  id               String    @id @default(uuid())
+  visit_id         String    @unique
   /// Who they use for card payments today. NULL = not established — the commonest outcome of a
   /// short visit, and not the same as "nobody", which is a provider answer of its own.
-  provider     String?
+  provider         String?
   /// What they pay now, in pennies. NULL = not established, including the frequent "they didn't
   /// know". Never 0 as a stand-in: zero is a rate somebody quoted, absence is not.
   pays_now_pennies Int?
   /// When their current contract ends. NULL = not established or they did not know.
-  contract_end DateTime?
-  interest     String // lib/rep-answers LEAD_INTEREST — 'interested' | 'not_interested' | 'not_asked'
+  contract_end     DateTime?
+  interest         String // lib/rep-answers LEAD_INTEREST — 'interested' | 'not_interested' | 'not_asked'
   /// NULL when interest is `not_asked`; set for both real answers, `not_interested` included —
   /// that one is the lead OUTCOME and the most useful thing a rep learns. RepLead_asked_at_chk.
-  interest_at  DateTime?
+  interest_at      DateTime?
   /// When somebody should come back to it. NULL = none set. Overdue is DERIVED from this against
   /// the clock and never stored, so it cannot go stale.
-  follow_up_on DateTime?
-  status       String    @default("open") // 'open' | 'converted' | 'declined' — writers set it explicitly
+  follow_up_on     DateTime?
+  status           String    @default("open") // 'open' | 'converted' | 'declined' — writers set it explicitly
   /// NULL exactly while the status is `open`. RepLead_closure_chk holds the pairing, so a closed
   /// lead can never be missing its date and an open one can never carry a stale one.
-  closed_at    DateTime?
-  created_at   DateTime  @default(now())
+  closed_at        DateTime?
+  created_at       DateTime  @default(now())
   /// NULL until the first edit — same rule, and the same platform-ledger audit, as the answers.
-  updated_at   DateTime?
+  updated_at       DateTime?
 
   visit RepVisit @relation(fields: [visit_id], references: [id], onDelete: Cascade)
 
@@ -1973,12 +1949,9 @@ model Site {
   config_events    SiteConfigEvent[]
   import_batches   ImportBatch[]
 
-  credit_notes CreditNote[]
-  payments Payment[]
-  users_primary_site User[] @relation("User_primary_site_id")
-
-
-  @@index([group_id])
+  credit_notes       CreditNote[]
+  payments           Payment[]
+  users_primary_site User[]       @relation("User_primary_site_id")
 
   // ── INTAKE PROMPTS (per SITE, default OFF) ────────────────────────────────────────────────────
   // PROMPT, never require: the mechanic is asked, and may proceed regardless. A hard gate gets
@@ -1987,13 +1960,13 @@ model Site {
   // Per SITE because the scanner is a physical object one site owns, and a multi-site group will
   // not have the same kit everywhere. Read at RENDER — never stamped onto a card — so switching one
   // on mid-job starts prompting, and switching it off stops it generating anything.
-  intake_prompt_findings   Boolean @default(false)
+  intake_prompt_findings    Boolean @default(false)
   intake_prompt_mileage_vin Boolean @default(false)
-  intake_prompt_walkaround Boolean @default(false)
-  intake_prompt_diag_scan  Boolean @default(false)
+  intake_prompt_walkaround  Boolean @default(false)
+  intake_prompt_diag_scan   Boolean @default(false)
   /// The level is not stored here — see the migration. This switch only decides whether a mechanic
   /// is ASKED, like the four above it.
-  intake_prompt_oil_level  Boolean @default(false)
+  intake_prompt_oil_level   Boolean @default(false)
 
   /// "No thanks" to the offer on the Intake tab. A SITE FACT, deliberately, not a browser
   /// dismissal: a prompt that comes back on the next device teaches people that dismissing things
@@ -2003,6 +1976,8 @@ model Site {
   /// offer stays gone — Settings is where that decision lives and can be revisited.
   intake_offer_dismissed_at DateTime?
   intake_offer_dismissed_by String?
+
+  @@index([group_id])
 }
 
 model SiteFeature {
@@ -2046,9 +2021,8 @@ model Resource {
   job_cards   JobCard[]
   diary_notes DiaryNote[]
 
-  bookings Booking[]
+  bookings        Booking[]
   staged_invoices StagedInvoice[]
-
 
   @@index([site_id])
 }
@@ -2107,19 +2081,19 @@ model User {
   site_id         String?
   primary_site_id String? // admin-set landing/default site (must be one of the user's assigned sites)
   role_id         String?
-  is_active       Boolean  @default(true)
+  is_active       Boolean   @default(true)
   /// Stamped by the tenant authorize() on a successful sign-in, mirroring Operator.last_login_at.
   /// NULL = never signed in since this column existed — which is EVERY user today, and stays the
   /// honest answer for anyone who has not logged in since. Deliberately not backfilled from
   /// created_at: an account's creation is not a login, and a made-up timestamp here would be
   /// indistinguishable from a real one for exactly the question this column exists to answer.
   last_login_at   DateTime?
-  is_owner        Boolean  @default(false) // immutable: marks the one primary-subscriber per group
+  is_owner        Boolean   @default(false) // immutable: marks the one primary-subscriber per group
   // Per-user grant (ADMIN-set, off by default): a trusted STANDARD mechanic may RAISE an invoice
   // (in_progress→invoiced) at an assigned site, without being promoted to SITE_MANAGER. Grants ONLY
   // the issue transition + retail price visibility — NOT mark-paid, NOT unlock (ADMIN), NOT margin.
-  can_invoice     Boolean  @default(false)
-  created_at      DateTime @default(now())
+  can_invoice     Boolean   @default(false)
+  created_at      DateTime  @default(now())
 
   // --- INVITE / SET-PASSWORD TOKEN (single-use; SHA-256 of a high-entropy random token) ---
   invite_token_hash    String?
@@ -2178,11 +2152,10 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  primary_site Site? @relation("User_primary_site_id", fields: [primary_site_id], references: [id], onDelete: SetNull)
-  contact_preference_events ContactPreferenceEvent[]
-  job_clock_sessions_corrected_by_user JobClockSession[] @relation("JobClockSession_corrected_by_user_id")
-  job_clock_sessions_user JobClockSession[] @relation("JobClockSession_user_id")
-
+  primary_site                         Site?                    @relation("User_primary_site_id", fields: [primary_site_id], references: [id], onDelete: SetNull)
+  contact_preference_events            ContactPreferenceEvent[]
+  job_clock_sessions_corrected_by_user JobClockSession[]        @relation("JobClockSession_corrected_by_user_id")
+  job_clock_sessions_user              JobClockSession[]        @relation("JobClockSession_user_id")
 
   @@index([group_id])
   @@index([site_id])
@@ -2190,16 +2163,16 @@ model User {
 }
 
 model Customer {
-  id                 String    @id @default(uuid())
-  group_id           String
+  id                      String    @id @default(uuid())
+  group_id                String
   // ORIGIN site, not ownership. A customer belongs to the GARAGE (group_id above), not to a bay —
   // so this is NULLABLE + SetNull, mirroring User.site_id. Previously it was required + Cascade,
   // which meant deleting a Location would have destroyed its customers AND their VehicleOwnership
   // edges (which cascade from Customer) — the spine of the car-first model. Only the application-
   // level delete guard stood in the way; invoices had DB-level protection and customers did not.
   // Null = the origin site is gone; the customer survives as a group-level record.
-  site_id            String?
-  name               String
+  site_id                 String?
+  name                    String
   // TWO COLUMNS, ONE NUMBER. `phone` stays the OPERATOR'S RAW INPUT, exactly as typed — it is what
   // the garage recognises on the screen and every display reads it unchanged. `phone_e164` is the
   // machine-dialable form, derived on write by lib/contact-routes::toE164Digits using the TENANT'S
@@ -2207,11 +2180,11 @@ model Customer {
   // HONEST-NULL: an unparseable number leaves phone_e164 NULL while phone keeps the raw string —
   // unknown, not absent. Normalising in place would be unrecoverable for a mistyped number, so the
   // raw is never overwritten. Digits-only, no leading '+', matching what toE164Digits returns.
-  phone              String?
-  phone_e164         String?
-  email              String?
-  address            String? // billing address — source for Invoice.customer_address_snapshot
-  notes              String?
+  phone                   String?
+  phone_e164              String?
+  email                   String?
+  address                 String? // billing address — source for Invoice.customer_address_snapshot
+  notes                   String?
   // ── ON ACCOUNT, AND THE TERMS, AS ONE FACT ──────────────────────────────────────────────────────
   // NULL = a retail customer who pays on collection, which is every customer that existed before
   // this column and the overwhelming majority after it. Non-null = an account customer, and the
@@ -2220,7 +2193,7 @@ model Customer {
   // Deliberately NOT a boolean beside a number. An `is_trade` flag and a `terms_days` column can
   // disagree — a trade customer with no terms, terms sitting on a retail customer — and then
   // something has to decide which of them is lying. One nullable column cannot contradict itself.
-  account_terms_days Int?
+  account_terms_days      Int?
   // ── WHO THE INVOICE IS ADDRESSED TO, WHEN THAT IS NOT THIS PERSON ─────────────────────────────
   // An employer paying for an employee's company car, a lease company, an insurer. NULL on both =
   // bill the customer, which is nearly every invoice a garage raises.
@@ -2229,15 +2202,15 @@ model Customer {
   // NULL the document prints no address at all, because the alternative a `??` would reach for is
   // the customer's HOME address under the company's name — a haulage firm addressed at an
   // employee's house, which is a worse document than one with no address on it.
-  account_name       String?
-  account_address    String?
+  account_name            String?
+  account_address         String?
   // ── CONTACT PREFERENCES (per channel — a customer may refuse SMS and still accept email) ────────
   // The GARAGE is controller of this consent, so it is tenant-scoped customer data, not a platform
   // record. THREE STATES, deliberately nullable: NULL = no record (unknown), true = opted OUT,
   // false = explicitly opted IN. Unknown must never render as "opted in"; for service messages
   // unknown means send. Enforced in lib/notify::sendNotification, which REFUSES rather than filters.
-  sms_opt_out        Boolean?
-  email_opt_out      Boolean?
+  sms_opt_out             Boolean?
+  email_opt_out           Boolean?
   // ── MARKETING, SEPARATELY (owner decision B, 2026-09-10) ──────────────────────────────────────
   // "No reminders or offers" on a channel, beside "nothing at all" above. Same three states: NULL =
   // no record (nobody asked), true = opted OUT of marketing, false = explicitly opted IN (a staff
@@ -2248,25 +2221,24 @@ model Customer {
   sms_marketing_opt_out   Boolean? // null = no record — see the block above
   // When any preference above last CHANGED — null = none ever has on this customer. Who and how:
   // ContactPreferenceEvent since 2026-09-10 (the one writer moves this with it); AuditLog before.
-  opt_out_updated_at DateTime?
-  created_at         DateTime  @default(now())
+  opt_out_updated_at      DateTime?
+  created_at              DateTime  @default(now())
 
   // +++ CUSTOMER PORTAL LINK ---
   userId String? @unique
   user   User?
 
   // --- RELATIONS ---
-  group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  site       Site?              @relation(fields: [site_id], references: [id], onDelete: SetNull)
-  vehicles   Vehicle[]
-  ownerships VehicleOwnership[]
-  bookings   Booking[]
-  job_cards  JobCard[]
-  threads    MessageThread[]
+  group                   Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  site                    Site?                    @relation(fields: [site_id], references: [id], onDelete: SetNull)
+  vehicles                Vehicle[]
+  ownerships              VehicleOwnership[]
+  bookings                Booking[]
+  job_cards               JobCard[]
+  threads                 MessageThread[]
   contactPreferenceEvents ContactPreferenceEvent[]
 
   stock_disposals StockDisposal[]
-
 
   @@index([group_id, site_id])
   @@index([group_id, phone_e164])
@@ -2309,7 +2281,7 @@ model VehicleDueItem {
   observation_key String?
 
   /// What the car needs, in the mechanic's words. Freeform because that is the bay reality.
-  description String
+  description          String
   /// Optional link to the priced service, when it maps to one. NULLABLE on purpose: a catalogue
   /// entry can be retired (lib/catalogue-retire) and the finding must survive that.
   service_catalogue_id String?
@@ -2338,14 +2310,14 @@ model VehicleDueItem {
   /// and every reader would have to handle it, which is the point. It is NOT done here because
   /// refuseDueItem deliberately requires a basis ("NOT inferred from which value is filled") and
   /// reversing a deliberate decision deserves its own report, not a quiet ride on someone's slice.
-  due_basis   DueBasis
+  due_basis          DueBasis
   /// The non-binding one may still be recorded as context; only the basis decides.
-  due_date    DateTime?
+  due_date           DateTime?
   /// WHAT THE DATE KNOWS. `day` is a real calendar day; `month` means only the month and year were
   /// ever known and the stored day (always the 1st) was never meant — see lib/due-items::dueLabel,
   /// which is what stops an invented day reaching a customer's invoice.
   due_date_precision DueDatePrecision @default(day)
-  due_mileage Int?
+  due_mileage        Int?
 
   /// The countdown this target was derived from, when the garage read one off the cluster rather
   /// than a target. See ServiceScheduleReading.countdown_miles for the whole reasoning — same fact,
@@ -2373,18 +2345,18 @@ model VehicleDueItem {
   customer_response DueItemResponse
   /// When they answered. NULL for `not_raised`, because nobody answered: that is an absence of an
   /// event, not an event at time-unknown.
-  response_at DateTime?
+  response_at       DateTime?
 
   /// Open until done or dismissed. `closed_job_card_id` names the job that finally did it.
-  closed_at         DateTime?
+  closed_at          DateTime?
   closed_job_card_id String?
   /// Why it was closed without being done, when that is what happened. NULL while open.
-  closed_reason String?
+  closed_reason      String?
   /// WHY it was closed, typed so it can be branched on: fixed | declined | no_longer_applies.
   /// `closed_reason` keeps the words; this decides the consequence — only `fixed` prints on the
   /// customer's document as work done. NULL means we do not know, which is the honest state of
   /// every closure written before 2026-08-20, when the only UI sent an id and nothing else.
-  closed_kind String?
+  closed_kind        String?
 
   created_by String?
   created_at DateTime @default(now())
@@ -2396,7 +2368,11 @@ model VehicleDueItem {
 
   /// The surfacing read: open items for a vehicle. Partial-index shape via the composite.
 
-  service_catalogue ServiceCatalogue? @relation(fields: [service_catalogue_id], references: [id], onDelete: SetNull)
+  service_catalogue ServiceCatalogue?       @relation(fields: [service_catalogue_id], references: [id], onDelete: SetNull)
+  /// The customer's OWN answers, token-authenticated. See DueItemCustomerAnswer for why these are
+  /// kept apart from `customer_response` above.
+  customer_answers  DueItemCustomerAnswer[]
+  lines             DueItemLine[]
 
   @@index([group_id, vehicle_id, closed_at])
   /// The work-done block on an invoice reads exactly this pair.
@@ -2406,10 +2382,6 @@ model VehicleDueItem {
   /// Prisma cannot express a partial unique. One open item per observation per car, enforced.
   @@index([group_id, vehicle_id, observation_key])
   @@index([found_on_job_card_id])
-  /// The customer's OWN answers, token-authenticated. See DueItemCustomerAnswer for why these are
-  /// kept apart from `customer_response` above.
-  customer_answers DueItemCustomerAnswer[]
-  lines            DueItemLine[]
 }
 
 /// EVERY ODOMETER READING WE HAVE FOR A CAR — the MOT history DVSA already sends us, plus our own.
@@ -2454,9 +2426,9 @@ model VehicleDueItem {
 /// beside the field being changed, so the override is informed rather than announced afterwards.
 /// The divergence then stays visible on the finding, permanently.
 model DueItemCustomerAnswer {
-  id           String @id @default(uuid())
-  group_id     String
-  due_item_id  String
+  id          String @id @default(uuid())
+  group_id    String
+  due_item_id String
 
   answer      CustomerAnswer
   answered_at DateTime       @default(now())
@@ -2465,8 +2437,8 @@ model DueItemCustomerAnswer {
   /// recorded by another route later; today every row has one.
   magic_link_id String?
 
-  group     Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  due_item  VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
+  group    Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  due_item VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
 
   /// APPEND-ONLY: a customer who changes their mind on the same report leaves two rows, in order.
   @@index([due_item_id, answered_at])
@@ -2490,22 +2462,22 @@ model DueItemCustomerAnswer {
 /// an issued invoice, the card offers "mark done" pre-ticked and a human confirms in one tap. That
 /// keeps the marketing list clean without a rule that quietly clears things nobody checked.
 model DueItemLine {
-  id          String @id @default(uuid())
-  group_id    String
-  due_item_id String
+  id               String @id @default(uuid())
+  group_id         String
+  due_item_id      String
   /// The estimate line this finding turned into.
   job_card_item_id String
 
   /// Who linked them, and when. A link is a judgement — "this line is that finding" — not a fact
   /// the system derived, so it carries an author.
-  linked_by String?
+  linked_by  String?
   created_at DateTime @default(now())
 
-  group     Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  due_item  VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
+  group         Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  due_item      VehicleDueItem @relation(fields: [due_item_id], references: [id], onDelete: Cascade)
   /// Cascade: a deleted estimate line takes its link with it. The FINDING survives — it is about
   /// the car, and deleting a line is a pricing decision, not a statement that the car is fine.
-  job_card_item JobCardItem @relation(fields: [job_card_item_id], references: [id], onDelete: Cascade)
+  job_card_item JobCardItem    @relation(fields: [job_card_item_id], references: [id], onDelete: Cascade)
 
   /// One line serves one finding. Re-linking the same pair is a no-op, not a duplicate.
   @@unique([due_item_id, job_card_item_id])
@@ -2528,7 +2500,7 @@ model DueItemLine {
 ///
 /// A free-text VehicleDueItem cannot hold this. The structure IS the finding.
 model TyreReading {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   group_id    String
   vehicle_id  String
   /// The visit it was taken on. SetNull, like a due item's provenance: the reading is about the CAR
@@ -2548,9 +2520,9 @@ model TyreReading {
   measured_at DateTime @default(now())
   measured_by String?
 
-  group    Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  vehicle  Vehicle        @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
-  job_card JobCard?       @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+  group    Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  vehicle  Vehicle  @relation(fields: [vehicle_id], references: [id], onDelete: Cascade)
+  job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
 
   /// One reading per corner per visit — re-measuring a corner corrects it rather than stacking.
   @@unique([job_card_id, corner])
@@ -2629,7 +2601,7 @@ model MarketingContact {
   state  MarketingState
 
   /// The trigger this contact was about. The record is SPENT once it passes — see the migration.
-  for_date DateTime
+  for_date     DateTime
   /// Set if and only if state is `snoozed`, enforced by a CHECK constraint: a snooze with no end
   /// is a hide, and a hide is how a list quietly empties.
   snooze_until DateTime?
@@ -2748,17 +2720,17 @@ model BatteryReading {
   /// no business near a threshold — the same argument as tread depth in tenths.
   voltage_mv Int
   /// State of charge, whole percent. How full it is NOW — says nothing about condition on its own.
-  soc_pct Int
+  soc_pct    Int
   /// State of health, whole percent, against the rated CCA below. What the tester thinks the
   /// battery has left relative to new. UNRELIABLE at low charge — lib/battery refuses to act on it.
-  soh_pct Int
+  soh_pct    Int
 
   /// THE DENOMINATOR the health figure was computed against — typed into the tester by hand, so a
   /// wrong entry makes a plausible and completely wrong health reading. NULL is honest (nobody
   /// recorded what it was set to); it cannot be retrofitted, which is why it is captured at all.
   /// Both this and its standard are set together or neither is — enforced by a CHECK constraint.
-  rated_cca     Int?
-  cca_standard  CcaStandard?
+  rated_cca    Int?
+  cca_standard CcaStandard?
 
   measured_at DateTime @default(now())
   measured_by String?
@@ -2844,29 +2816,28 @@ model Vehicle {
   v5c_reference           String?
   created_at              DateTime  @default(now())
 
-  group      Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  customer   Customer?          @relation(fields: [customer_id], references: [id], onDelete: SetNull)
-  identity   VehicleIdentity?   @relation(fields: [identity_id], references: [id], onDelete: SetNull)
-  ownerships VehicleOwnership[]
-  bookings   Booking[]
-  job_cards  JobCard[]
-  threads    MessageThread[]
-  due_items  VehicleDueItem[]
+  group             Group                    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  customer          Customer?                @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+  identity          VehicleIdentity?         @relation(fields: [identity_id], references: [id], onDelete: SetNull)
+  ownerships        VehicleOwnership[]
+  bookings          Booking[]
+  job_cards         JobCard[]
+  threads           MessageThread[]
+  due_items         VehicleDueItem[]
   odometer_readings VehicleOdometerReading[]
 
-  purchase_models PurchaseModel[]
-
+  purchase_models    PurchaseModel[]
+  tyre_readings      TyreReading[]
+  battery_readings   BatteryReading[]
+  marketing_contacts MarketingContact[]
+  schedule_readings  ServiceScheduleReading[]
+  stockItems         StockItem[]
 
   @@index([group_id, customer_id])
   @@index([registration])
   @@index([identity_id])
   @@index([group_id, vin_normalized])
   @@index([group_id, registration_normalized])
-  tyre_readings    TyreReading[]
-  battery_readings BatteryReading[]
-  marketing_contacts MarketingContact[]
-  schedule_readings  ServiceScheduleReading[]
-  stockItems StockItem[]
 }
 
 // Car-first re-root: the stable, VIN-soft-anchored identity underneath a Vehicle. Tenant-scoped
@@ -2928,7 +2899,6 @@ model ServiceCatalogue {
 
   vehicle_due_items VehicleDueItem[]
 
-
   @@index([group_id, site_id])
 }
 
@@ -2987,7 +2957,6 @@ model Booking {
 
   resource Resource? @relation(fields: [resource_id], references: [id], onDelete: SetNull)
 
-
   @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
 }
 
@@ -3021,14 +2990,14 @@ model JobCard {
   created_at             DateTime      @default(now())
 
   // --- SLICE 1: flags (main tab) ---
-  flag_urgent       Boolean @default(false) // Urgent / Priority
-  flag_sales_car    Boolean @default(false)
-  flag_customer_car Boolean @default(false)
-  flag_mot          Boolean @default(false) // MOT bay needed
-  flag_diag         Boolean @default(false) // Diagnostic
+  flag_urgent           Boolean @default(false) // Urgent / Priority
+  flag_sales_car        Boolean @default(false)
+  flag_customer_car     Boolean @default(false)
+  flag_mot              Boolean @default(false) // MOT bay needed
+  flag_diag             Boolean @default(false) // Diagnostic
   // Warranty / comeback: work redone free (a job came back). REAL cost (parts/labour still on the
   // estimate) but ZERO revenue — reporting reads revenue as 0 when set, cost unchanged. Faithful margin.
-  is_comeback       Boolean @default(false)
+  is_comeback           Boolean @default(false)
   /// ── AN INTERNAL PREP CARD: WORK ON OUR OWN STOCK, NOT A CUSTOMER'S CAR ────────────────────────
   /// The StockItem this card is preparing. NULL = an ordinary customer card, which is nearly all of
   /// them. Set = this card bills nobody: its parts accrue to that car's reconditioning cost base and
@@ -3043,7 +3012,7 @@ model JobCard {
   /// NO FOREIGN KEY, deliberately. JobCard is a table production writes constantly; ADD CONSTRAINT
   /// pointing into StockItem would be a constraining migration on a shared database. Same precedent
   /// as Invoice.stock_disposal_id, decided for the same reason.
-  stock_item_id     String?
+  stock_item_id         String?
   /// THE CAR THIS CARD IS SELLING — set only on a SALE card, and DELIBERATELY NOT stock_item_id.
   ///
   /// stock_item_id above means this card is PREPARING a car we own, and lib/invoice-issue's
@@ -3061,10 +3030,10 @@ model JobCard {
   sale_of_stock_item_id String?
 
   // --- SLICE 1: four-stage status (each Pending=false / Done=true) ---
-  stage_details_done     Boolean @default(false) // 1. Job Card (details/estimate)
-  stage_intake_done      Boolean @default(false) // 2. Intake Photos
-  stage_injob_done       Boolean @default(false) // 3. In-Job
-  stage_complete_done    Boolean @default(false) // 4. Complete Photos
+  stage_details_done  Boolean   @default(false) // 1. Job Card (details/estimate)
+  stage_intake_done   Boolean   @default(false) // 2. Intake Photos
+  stage_injob_done    Boolean   @default(false) // 3. In-Job
+  stage_complete_done Boolean   @default(false) // 4. Complete Photos
   // Photo stages are SOFT gates: complete OR skipped advances the spine (capture can't be enforced).
   // A skip is a first-class audited event (actor + timestamp + optional reason in the audit diff).
   // Details has NO skip — it's a data gate, not a capture stage.
@@ -3074,9 +3043,9 @@ model JobCard {
   /// predates the tick as well as one where the scan was never done — we cannot tell those apart
   /// and must not pretend to. Undoable, so a mis-tap clears both columns; the AuditLog keeps the
   /// tick and the correction. Same shape as intake_nothing_found_at/_by.
-  diag_scan_at           DateTime?
+  diag_scan_at        DateTime?
   /// The user who ticked it. NULL exactly when diag_scan_at is null — set and cleared together.
-  diag_scan_by           String?
+  diag_scan_by        String?
 
   stage_intake_skipped   Boolean @default(false)
   stage_injob_skipped    Boolean @default(false)
@@ -3135,21 +3104,14 @@ model JobCard {
   duplicated_from   JobCard?            @relation("CardDuplicate", fields: [duplicated_from_id], references: [id], onDelete: SetNull)
   duplicates        JobCard[]           @relation("CardDuplicate")
 
-  import_batch ImportBatch? @relation(fields: [import_batch_id], references: [id], onDelete: SetNull)
-  stock_item StockItem? @relation(fields: [stock_item_id], references: [id], onDelete: SetNull)
-  staged_invoices StagedInvoice[]
+  import_batch         ImportBatch?        @relation(fields: [import_batch_id], references: [id], onDelete: SetNull)
+  stock_item           StockItem?          @relation(fields: [stock_item_id], references: [id], onDelete: SetNull)
+  staged_invoices      StagedInvoice[]
   stock_cost_snapshots StockCostSnapshot[]
-  upload_telemetries UploadTelemetry[]
-  vin_read_shadows VinReadShadow[]
-
-
-  @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
-  @@index([status])
-  @@index([resource_id, scheduled_date])
-  @@index([resource_id, start_at])
-  @@index([duplicated_from_id])
-  due_items_found    VehicleDueItem[] @relation("DueItemFoundOn")
-  due_items_closed   VehicleDueItem[] @relation("DueItemClosedBy")
+  upload_telemetries   UploadTelemetry[]
+  vin_read_shadows     VinReadShadow[]
+  due_items_found      VehicleDueItem[]    @relation("DueItemFoundOn")
+  due_items_closed     VehicleDueItem[]    @relation("DueItemClosedBy")
 
   /// ── "CHECKED, NOTHING FOUND" ──────────────────────────────────────────────────────────────────
   /// The affirmative that keeps the escalation honest. Absence of findings is NOT absence of
@@ -3160,13 +3122,13 @@ model JobCard {
   /// CLEARED when a due item is recorded on this card: the current state is then "findings exist",
   /// and a stale affirmative alongside real findings would say two things at once. The audit log
   /// keeps the history of both.
-  intake_nothing_found_at DateTime?
-  intake_nothing_found_by String?
-  tyre_readings      TyreReading[]
-  battery_readings   BatteryReading[]
-  schedule_readings  ServiceScheduleReading[]
-  clockSessions   JobClockSession[]
-  quote_option_drafts QuoteOptionDraft[]
+  intake_nothing_found_at   DateTime?
+  intake_nothing_found_by   String?
+  tyre_readings             TyreReading[]
+  battery_readings          BatteryReading[]
+  schedule_readings         ServiceScheduleReading[]
+  clockSessions             JobClockSession[]
+  quote_option_drafts       QuoteOptionDraft[]
   quote_option_group_drafts QuoteOptionGroupDraft[]
 
   /// ── THE CUSTOMER VIEW IS A STEP, NOT A PREVIEW BUTTON ───────────────────────────────────────
@@ -3181,6 +3143,12 @@ model JobCard {
   quote_preview_hash String?
   quote_preview_at   DateTime?
   quote_preview_by   String?
+
+  @@index([group_id, site_id, profit_centre_id, customer_id, vehicle_id])
+  @@index([status])
+  @@index([resource_id, scheduled_date])
+  @@index([resource_id, start_at])
+  @@index([duplicated_from_id])
 }
 
 model JobCardPhoto {
@@ -3215,9 +3183,8 @@ model JobCardPhoto {
   job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   user     User?   @relation("JobCardPhotoUploader", fields: [uploaded_by], references: [id], onDelete: SetNull)
 
-  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  group            Group           @relation(fields: [group_id], references: [id], onDelete: Cascade)
   vin_read_shadows VinReadShadow[]
-
 
   @@index([job_card_id])
   @@index([job_card_id, stage])
@@ -3265,12 +3232,8 @@ model JobCardItem {
   job_card  JobCard        @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   catalogue CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
 
-  option_draft QuoteOptionDraft? @relation(fields: [option_draft_id], references: [id], onDelete: SetNull)
-
-
-  @@index([job_card_id])
-  @@index([catalogue_item_id])
-  due_item_links   DueItemLine[]
+  option_draft    QuoteOptionDraft? @relation(fields: [option_draft_id], references: [id], onDelete: SetNull)
+  due_item_links  DueItemLine[]
   ///
   /// @nulls: option_draft_id
   /// NULL means THE MAIN QUOTE, exactly as QuoteVersionLine.option_id does on the frozen side.
@@ -3278,6 +3241,8 @@ model JobCardItem {
   /// membership across. No foreign key, like every other *_id added to an existing table here.
   option_draft_id String?
 
+  @@index([job_card_id])
+  @@index([catalogue_item_id])
 }
 
 // Lightweight labelled diary entry — NOT a job card (no customer/vehicle/quote). A note may be
@@ -3381,7 +3346,7 @@ model Invoice {
   /// differently, and what prints on the document differs too — a margin sale may not show VAT
   /// separately at all. TEXT, not a second enum: a pg_enum drifting from its TypeScript union has
   /// already cost a 500 here, and the union is the single authority. NULL on every garage invoice.
-  vat_position String?
+  vat_position      String?
 
   // PROVENANCE. external_ref carries the ORIGINAL system's number (Xero) — the GreaseDesk series
   // is still minted normally and stays gapless; on imported invoices the UI shows external_ref as
@@ -3453,9 +3418,9 @@ model Invoice {
   void_reason_corrections Json?
 
   // Header snapshot captured at ISSUE (resolved values — never rewritten by later profile edits).
-  company_name_snapshot       String
-  company_vat_number_snapshot String?
-  company_address_snapshot    String?
+  company_name_snapshot         String
+  company_vat_number_snapshot   String?
+  company_address_snapshot      String?
   /// The TRADING name as it stood at issue. Frozen for the same reason every other snapshot here is:
   /// a garage that rebrands must not have every historical document reprint under the new name — an
   /// invoice is a record of what the customer received, not a view of who the garage is today. Same
@@ -3465,8 +3430,8 @@ model Invoice {
   /// trading name, and the renderer falls back to company_name_snapshot for them rather than
   /// pretending. It is not "a caller forgot" — the mint always writes it now.
   company_trading_name_snapshot String?
-  customer_name_snapshot      String
-  customer_address_snapshot   String?
+  customer_name_snapshot        String
+  customer_address_snapshot     String?
   /// ── THE PARTY THE DOCUMENT IS ADDRESSED TO, WHEN IT IS NOT THE CUSTOMER ──────────────────────
   /// NULL = billed to the customer, and that is the honest answer for the whole back catalogue as
   /// well as for nearly every invoice raised since. NOT backfilled: an empty string here would say
@@ -3476,20 +3441,20 @@ model Invoice {
   /// person whose car it is on 3,395 existing documents; writing a company into them would restate
   /// every one of those retrospectively, and the invoice list's Customer column would show people
   /// for some rows and companies for others with nothing to tell them apart.
-  account_name_snapshot       String?
+  account_name_snapshot         String?
   /// NULL when the account had no address recorded. Never the customer's own — see Customer.
-  account_address_snapshot    String?
+  account_address_snapshot      String?
   /// ── THE CAR, AS THE DOCUMENT NAMED IT ────────────────────────────────────────────────────────
   /// Each says its own meaning ON ITS OWN LINE, deliberately. These three carried no explanation at
   /// all until 2026-09-03: they satisfied nullable-annotation-gate only while a NEIGHBOURING
   /// column's comment happened to fall inside its four-line window, and inserting a column above
   /// them revealed it. A shared block above the group would recreate exactly that fragility.
-  vehicle_reg_snapshot        String? // NULL = no registration on the card at issue (a counter parts sale has none)
-  vehicle_desc_snapshot       String? // NULL = make and model both unknown; "we did not know", never "it has none"
-  vehicle_vin_snapshot        String? // NULL = no VIN recorded — usual on a hand-typed vehicle with no lookup
-  vehicle_mileage_snapshot    Int? // odometer_in at issue (falls back to mileage_at_create); NULL = no reading taken
-  vat_registered_at_issue     Boolean
-  created_at                  DateTime @default(now())
+  vehicle_reg_snapshot          String? // NULL = no registration on the card at issue (a counter parts sale has none)
+  vehicle_desc_snapshot         String? // NULL = make and model both unknown; "we did not know", never "it has none"
+  vehicle_vin_snapshot          String? // NULL = no VIN recorded — usual on a hand-typed vehicle with no lookup
+  vehicle_mileage_snapshot      Int? // odometer_in at issue (falls back to mileage_at_create); NULL = no reading taken
+  vat_registered_at_issue       Boolean
+  created_at                    DateTime @default(now())
 
   group          Group               @relation(fields: [group_id], references: [id], onDelete: Cascade)
   site           Site                @relation(fields: [site_id], references: [id], onDelete: NoAction)
@@ -3499,19 +3464,9 @@ model Invoice {
   payments       Payment[]
   magic_links    CustomerMagicLink[]
 
-  stock_disposal StockDisposal? @relation(fields: [stock_disposal_id], references: [id], onDelete: SetNull)
+  stock_disposal  StockDisposal?  @relation(fields: [stock_disposal_id], references: [id], onDelete: SetNull)
   staged_invoices StagedInvoice[]
-
-
-  @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
-  // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
-  // checks at runtime, but two concurrent commits could both pass that check and both write;
-  // only a constraint makes it impossible. NULL external_ref is exempt (Postgres), so ordinary
-  // GreaseDesk invoices are unaffected.
-  @@unique([group_id, external_ref])
-  @@index([group_id])
-  @@index([site_id])
-  credit_notes CreditNote[]
+  credit_notes    CreditNote[]
 
   /// ── WHAT THE CAR ALSO NEEDED, AS PRINTED ──────────────────────────────────────────────────────
   /// A frozen TEXT BLOCK, not a relation, and frozen for the same reason every other snapshot here
@@ -3533,7 +3488,16 @@ model Invoice {
   /// WHAT WE MEASURED — tread depths and the battery reading, frozen at issue. NULL on an invoice
   /// minted before 2026-08-21 means the three categories were written as ONE block in
   /// due_items_snapshot; that is how a renderer tells the shapes apart, so it is never backfilled.
-  measured_snapshot String?
+  measured_snapshot  String?
+
+  @@unique([group_id, series, sequence_value]) // no duplicate sequence per tenant per series
+  // THE DATABASE IS THE BACKSTOP against double-posting an imported invoice. commit.ts also
+  // checks at runtime, but two concurrent commits could both pass that check and both write;
+  // only a constraint makes it impossible. NULL external_ref is exempt (Postgres), so ordinary
+  // GreaseDesk invoices are unaffected.
+  @@unique([group_id, external_ref])
+  @@index([group_id])
+  @@index([site_id])
 }
 
 model InvoiceLine {
@@ -3563,7 +3527,6 @@ model InvoiceLine {
 
   catalogue_item CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
 
-
   @@index([invoice_id])
 }
 
@@ -3583,10 +3546,9 @@ model VinReadShadow {
   cost_microdollars Int? // engine cost estimate in µ$ (Vision flat ~1500; Haiku from usage)
   created_at        DateTime @default(now())
 
-  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  job_card JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
-  photo JobCardPhoto @relation(fields: [photo_id], references: [id], onDelete: Cascade)
-
+  group    Group        @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card JobCard      @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  photo    JobCardPhoto @relation(fields: [photo_id], references: [id], onDelete: Cascade)
 
   @@index([photo_id])
   @@index([group_id, created_at])
@@ -3609,7 +3571,7 @@ model VinReadShadow {
  * the natural key of the thing that caused the row, so a redelivered webhook writes once.
  */
 model Payment {
-  id         String  @id @default(uuid())
+  id         String @id @default(uuid())
   group_id   String
   invoice_id String
   /// NOT NULL, and deliberately so. A denormalisation of Invoice.site_id — which is non-nullable,
@@ -3683,8 +3645,7 @@ model Payment {
   refunds        Refund[]
 
   fee_rate ApplicationFeeRate? @relation(fields: [fee_rate_id], references: [id], onDelete: SetNull)
-  site Site @relation(fields: [site_id], references: [id], onDelete: NoAction)
-
+  site     Site                @relation(fields: [site_id], references: [id], onDelete: NoAction)
 
   @@index([group_id, collected_at])
   @@index([invoice_id])
@@ -3743,11 +3704,11 @@ model Refund {
   group          Group          @relation(fields: [group_id], references: [id], onDelete: Cascade)
   payment        Payment        @relation(fields: [payment_id], references: [id], onDelete: Cascade)
   payment_method PaymentMethod? @relation(fields: [payment_method_id], references: [id], onDelete: SetNull)
+  credit_notes   CreditNote[]
 
   @@index([group_id, created_at])
   // Period questions ask WHEN THE MONEY MOVED, so they index on that — same as Payment.
   @@index([group_id, collected_at])
-  credit_notes CreditNote[]
 }
 
 model PaymentMethod {
@@ -3768,21 +3729,21 @@ model PaymentMethod {
 }
 
 model InvoiceSequence {
-  group_id              String   @id // one row per tenant
-  last_value            Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
-  warranty_last_value   Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
+  group_id                String   @id // one row per tenant
+  last_value              Int      @default(0) // CHARGEABLE counter — monotonic, never resets, never reused. Seedable in settings ONLY while no chargeable invoice exists.
+  warranty_last_value     Int      @default(0) // WARRANTY counter — same guarantees, fully independent (a comeback never burns a chargeable number).
   // HISTORICAL counter — the third independent series. Recording an invoice raised elsewhere must
   // never advance the chargeable counter; that is the whole reason this column exists.
-  historical_last_value Int      @default(0)
+  historical_last_value   Int      @default(0)
   /// CREDIT NOTE counter — the FOURTH, and independent for the same reason the historical one is:
   /// a VAT correction is its own document with its own series, and issuing one must never advance
   /// the chargeable counter. HMRC VATREC13040 requires a credit note to carry its own identifying
   /// number; sharing the invoice sequence would make the two indistinguishable in the series.
-  credit_note_last_value Int     @default(0)
+  credit_note_last_value  Int      @default(0)
   /// VEHICLE SALE counter — the fourth independent series. Same guarantees as the other three:
   /// selling a car must never advance the garage's chargeable number.
-  vehicle_sale_last_value Int    @default(0)
-  updated_at            DateTime @default(now())
+  vehicle_sale_last_value Int      @default(0)
+  updated_at              DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
@@ -3831,9 +3792,9 @@ model CatalogueItem {
   promo_targets PromoTarget[]
   aliases       CatalogueAlias[]
 
-  invoice_lines InvoiceLine[]
-  staged_lines StagedLine[]
-
+  invoice_lines   InvoiceLine[]
+  staged_lines    StagedLine[]
+  set_memberships CatalogueSetMember[]
 
   @@unique([group_id, code])
   @@index([group_id])
@@ -3869,13 +3830,40 @@ model CatalogueComponent {
   @@index([catalogue_item_id])
 }
 
-// Per-tier published price override. Three states: no row → inherit base_price; value → that price;
-// null price_ex_vat → OFFERED at this tier but price set per-job (manual on the card picker).
+/// WHAT A TIER ROW IS SAYING, when a row exists at all.
+///
+/// Row-presence was already carrying one bit ("inherit the base price, or do not") and the nullable
+/// price a second ("a figure, or decide on the card"). A fourth state was needed — NOT APPLICABLE,
+/// an electric car and an oil service — and there was no way to say it: 0 prints as free and no row
+/// falls through to the base price, so the catalogue could only lie in one of two directions.
+///
+/// A boolean beside the price would have made `price = 0 AND offered = false` a legible nonsense.
+/// An enum makes each state name itself, and a CHECK ties it to the price column so the pair cannot
+/// contradict each other:
+///
+///   no row                    inherit base_price_ex_vat
+///   priced          + price   that price at this tier
+///   per_job         + NULL    offered, priced on the card
+///   not_applicable  + NULL    NOT OFFERED to this tier at all
+///
+/// `not_applicable` REMOVES the rung rather than greying it (owner, 2026-10-17): "an EV cannot have
+/// an oil service, so a greyed rung explains my catalogue rather than telling the customer anything
+/// useful. Greying out is for things they could have and cannot right now."
+enum TierAvailability {
+  priced
+  per_job
+  not_applicable
+}
+
+// Per-tier published price override. FOUR states — see TierAvailability, which names each one.
 model CatalogueItemTierPrice {
-  id                String   @id @default(uuid())
+  id                String           @id @default(uuid())
   catalogue_item_id String
   tier_id           String
-  price_ex_vat      Decimal? @db.Decimal(12, 2)
+  price_ex_vat      Decimal?         @db.Decimal(12, 2)
+  /// Backfilled from what each existing row already meant: a price is `priced`, a NULL is `per_job`.
+  /// Nothing moves — the two pre-existing states keep their meaning and gain a name.
+  availability      TierAvailability @default(priced)
 
   item CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
   tier ServiceTier   @relation(fields: [tier_id], references: [id], onDelete: Cascade)
@@ -3883,6 +3871,84 @@ model CatalogueItemTierPrice {
   @@unique([catalogue_item_id, tier_id])
   @@index([catalogue_item_id])
   @@index([tier_id])
+}
+
+/// ── A NAMED SET OF CATALOGUE ITEMS, AND THE SET KNOWS ITS OWN SHAPE ────────────────────────────
+///
+/// Owner, 2026-10-17, correcting an earlier ruling that "the shape lives in the quote": for these
+/// sets the shape is a property of the SET. Oil Services is Bronze/Silver/Gold/Platinum — ordered,
+/// and taking one means not taking the others. The other service items — MOT, brake fluid flush,
+/// aircon regas, major inspection, vehicle check, valet — are one set where any number can be
+/// taken. Those are not two new concepts; they are the two the quote already has.
+///
+/// ── WHY `shape` REUSES GROUP_SHAPES AND IS NOT A NEW VOCABULARY ────────────────────────────────
+/// lib/quote-options already answers "does choosing one exclude the others" with `pick_one` and
+/// `base_plus_extras`, and the builder's whole job is to turn a set into a group. A second pair of
+/// words for the same question would be two spellings kept in step by hand, and the day they drift
+/// the set and the group it produces disagree about what the customer was offered. Stored as a
+/// String for the same reason QuoteOptionGroupDraft.shape is: one vocabulary, one validator
+/// (isGroupShape), no translation at the boundary.
+///
+/// WHAT THIS MAKES POSSIBLE, and did not exist before: an option can only hold lines already on the
+/// estimate, so "offer alternatives" on Bronze could only ever offer Bronze again. Silver, Gold and
+/// Platinum are catalogue rows the builder could not reach. Sets do not make the ladder faster —
+/// they make it possible.
+model CatalogueSet {
+  id       String  @id @default(uuid())
+  group_id String
+  /// What the garage calls it: "Oil Services", "Service items".
+  name     String
+  /// GROUP_SHAPES — `pick_one` | `base_plus_extras`. See the note above.
+  shape    String
+  /// Display order among sets. Archive (false) over delete, as everywhere else in the catalogue.
+  position Int     @default(0)
+  active   Boolean @default(true)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  group   Group                @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  members CatalogueSetMember[]
+
+  @@unique([group_id, name])
+  @@index([group_id])
+}
+
+/// One catalogue item's place in one set.
+///
+/// `position` is a plain Int and is ALWAYS meaningful, including in a `base_plus_extras` set.
+/// "Unordered" describes whether choosing one excludes the others — which `shape` decides — not
+/// whether the screen has a sensible sequence. A nullable position would be one column answering
+/// two questions, and its second answer would be wrong the first time somebody wants MOT at the top
+/// of the menu.
+///
+/// AN ITEM MAY SIT IN ANY NUMBER OF `base_plus_extras` SETS — MOT belongs in more than one menu —
+/// BUT IN AT MOST ONE `pick_one` SET. The builder's move is "drop the ladder icon on Bronze and it
+/// offers the rest of Bronze's ladder"; if Bronze is in two ladders that question has no answer.
+/// Enforced in the DATABASE, not by a rule somebody has to remember — but NOT, as first designed,
+/// by a partial unique index: the predicate needs the set's shape, which lives in another table,
+/// and Postgres forbids a subquery in an index predicate. It is a deferred constraint trigger
+/// instead, and there are two of them for one function, because there are two ways to break the
+/// rule: adding a member to a second ladder, and RE-SHAPING a menu the item is already in into a
+/// ladder. The second writes no member row at all.
+model CatalogueSetMember {
+  id                String @id @default(uuid())
+  group_id          String
+  set_id            String
+  catalogue_item_id String
+  position          Int    @default(0)
+
+  created_at DateTime @default(now())
+
+  group Group         @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  set   CatalogueSet  @relation(fields: [set_id], references: [id], onDelete: Cascade)
+  /// Cascade: an item removed from the catalogue leaves the sets it was in. A retired item is a
+  /// different thing and keeps its membership — see lib/catalogue-retire.
+  item  CatalogueItem @relation(fields: [catalogue_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([set_id, catalogue_item_id])
+  @@index([group_id, set_id])
+  @@index([catalogue_item_id])
 }
 
 // Reusable discount codes ("promotions"). VAT-aware: `amount` is entered/advertised INC-VAT for a
@@ -4137,34 +4203,33 @@ model EmploymentEvent {
 /// disagrees with the column cannot either, and an event can never be edited. Prisma cannot model a
 /// trigger and migrate diff cannot see one; contact-preferences-gate asserts all four are installed.
 model ContactPreferenceEvent {
-  id          String @id @default(uuid())
+  id                  String   @id @default(uuid())
   /// THE ORDER. created_at can tie within a millisecond; seq cannot. "Latest" always means highest seq.
-  seq         BigInt @unique @default(autoincrement())
+  seq                 BigInt   @unique @default(autoincrement())
   /// Taken from the CUSTOMER row by the writer, never from a caller — it cannot name another tenant.
-  group_id    String
-  customer_id String
-  channel     String // 'email' | 'sms'
-  scope       String // 'all' (nothing on this channel) | 'marketing' (no reminders or offers)
+  group_id            String
+  customer_id         String
+  channel             String // 'email' | 'sms'
+  scope               String // 'all' (nothing on this channel) | 'marketing' (no reminders or offers)
   /// The value before and after. NULL = no record, true = opted out, false = opted in. Never equal
   /// (an event is a change); `opted_out` is never null for marketing.
-  previous    Boolean?
-  opted_out   Boolean? // null = returned to no record (the staff untick of an `all` box)
-  via         String // 'staff' | 'customer_link' | 'carrier_stop'
+  previous            Boolean?
+  opted_out           Boolean? // null = returned to no record (the staff untick of an `all` box)
+  via                 String // 'staff' | 'customer_link' | 'carrier_stop'
   /// null = none given. Required (non-blank) on every staff opt-in to marketing.
-  reason      String?
+  reason              String?
   /// The staff member — null exactly when the change did not come from staff (via ≠ 'staff').
   /// A plain id, no FK, as EmploymentEvent.changed_by: the record outlives the user.
-  actor_user_id String?
+  actor_user_id       String?
   /// The message a link or a carrier STOP came from — null exactly when via = 'staff'.
   notification_log_id String?
-  created_at  DateTime @default(now())
+  created_at          DateTime @default(now())
 
   group            Group            @relation(fields: [group_id], references: [id], onDelete: Cascade)
   customer         Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   notification_log NotificationLog? @relation(fields: [notification_log_id], references: [id], onDelete: NoAction)
 
   actor_user User? @relation(fields: [actor_user_id], references: [id], onDelete: SetNull)
-
 
   @@index([customer_id, channel, scope, created_at])
   @@index([group_id, created_at])
@@ -4247,7 +4312,6 @@ model ImportBatch {
 
   job_cards JobCard[]
 
-
   @@index([group_id, status])
 }
 
@@ -4301,11 +4365,10 @@ model StagedInvoice {
   batch ImportBatch  @relation(fields: [batch_id], references: [id], onDelete: Cascade)
   lines StagedLine[]
 
-  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  invoice Invoice? @relation(fields: [invoice_id], references: [id], onDelete: SetNull)
-  job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
+  group            Group     @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  invoice          Invoice?  @relation(fields: [invoice_id], references: [id], onDelete: SetNull)
+  job_card         JobCard?  @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
   planned_resource Resource? @relation(fields: [planned_resource_id], references: [id], onDelete: SetNull)
-
 
   @@unique([group_id, external_number])
   @@index([batch_id, status])
@@ -4346,7 +4409,6 @@ model StagedLine {
   staged_invoice StagedInvoice @relation(fields: [staged_invoice_id], references: [id], onDelete: Cascade)
 
   catalogue_item CatalogueItem? @relation(fields: [catalogue_item_id], references: [id], onDelete: SetNull)
-
 
   @@index([staged_invoice_id, position])
   @@index([parent_line_id])
@@ -4565,12 +4627,10 @@ enum NotificationChannel {
 
 /**
  * WHOSE MESSAGE IS THIS? Stated, never inferred from an absent group_id.
- *
  * `group_id IS NULL` used to mean four things at once: a deliberate platform send, an unresolved
  * inbound, a fixture, or A CALLER FORGOT. Nothing told them apart, and three tenant-scoped guards
  * inside sendNotification fail OPEN without a tenant — the demo block, the opt-out check and the
  * SMS allowance — so a forgotten tenant could contact someone who had asked not to be contacted.
- *
  * THREE values, not two: "unresolved" is genuinely different from "platform" — the message was
  * meant for some tenant and we could not work out which. That is the one place honest-null still
  * applies, and it is why this is not a boolean.
@@ -4680,10 +4740,10 @@ model NotificationLog {
   // provider_message_id, which say nothing about their null (2026-09-11; THE LIST item 1).
   /// THE UNSUBSCRIBE LINK THIS MESSAGE CARRIED — marketing emails only (step 4, 2026-09-11). null = no
   /// link was sent: every service message, every text, every row before 20260911120000_unsubscribe_token.
-  unsubscribe_token   String?  @unique
+  unsubscribe_token String? @unique
 
-  group  Group?         @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  thread MessageThread? @relation(fields: [thread_id], references: [id], onDelete: SetNull)
+  group                   Group?                   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  thread                  MessageThread?           @relation(fields: [thread_id], references: [id], onDelete: SetNull)
   contactPreferenceEvents ContactPreferenceEvent[]
   // NO (direction, thread_id) INDEX. It existed from 20260731220000_inbound_email until
   // 20260816094000_drop_dead_notification_index removed it on evidence: zero scans, ever.
@@ -4814,7 +4874,6 @@ model CustomerMagicLink {
 
   quote_versions QuoteVersion[]
 
-
   @@index([group_id, job_card_id])
   @@index([invoice_id])
   @@index([expires_at])
@@ -4873,8 +4932,8 @@ model QuoteVersion {
   // customer-attested. Never fake an ip/user-agent for that path; the absence is the honest signal.
   responded_by_user    String?
 
-  group    Group              @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  job_card JobCard            @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
+  group                 Group   @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  job_card              JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade)
   ///
   /// @nulls: narrative, resolved_from_version, selection_json
   /// `narrative` is the garage's explanation in its own words, FROZEN with the version — what a
@@ -4890,12 +4949,11 @@ model QuoteVersion {
   resolved_from_version Int?
   selection_json        Json?
 
-  options  QuoteOption[]
+  options       QuoteOption[]
   option_groups QuoteOptionGroup[]
-  lines    QuoteVersionLine[]
+  lines         QuoteVersionLine[]
 
   magic_link CustomerMagicLink? @relation(fields: [magic_link_id], references: [id], onDelete: SetNull)
-
 
   @@unique([job_card_id, version])
   @@index([group_id, job_card_id])
@@ -4934,7 +4992,6 @@ model QuoteVersionLine {
 
   option QuoteOption? @relation(fields: [option_id], references: [id], onDelete: SetNull)
 
-
   @@index([quote_version_id, position])
   @@index([option_id])
 }
@@ -4957,38 +5014,34 @@ model CountryWaitlist {
 
 /**
  * A CREDIT NOTE: an immutable VAT correction against an immutable invoice.
- *
  * ── WHY IT IS NOT A FLAG, A STATUS, OR A FOURTH InvoiceSeries ───────────────────────────────────
  * The tempting shape is `series: 'credit_note'` on Invoice. It is wrong: every reader of an Invoice
  * row treats it as something PAYABLE. `refuseIfVoid`, `offersPayLink`, the debtors list,
  * `receivedInPeriod`, `amendmentRequirement` and the pay-link mint would each need "…unless it is a
  * credit note", which is eight chances to forget. A credit note is never paid; it is issued.
- *
  * ── WHAT IT DOES AND DOES NOT DO ────────────────────────────────────────────────────────────────
  * It reverses OUTPUT VAT. It does not move money — a Refund does that, and the two are deliberately
  * separate because they answer different questions on different clocks: the refund lands in the
  * month the money left (the CASH clock, lib/payments::receivedInPeriod) and the credit note lands
  * in the VAT period of its own date (the VAT clock). Both are correct. They are allowed to differ,
  * and the accountant's ruling (2026-08-16) is that they SHOULD be allowed to.
- *
  * ── THE DATE IS CONFIRMED, NEVER ADOPTED SILENTLY ───────────────────────────────────────────────
  * `date_issued` defaults to the refund's date at the surface and is confirmed by a person before
  * the document exists. An automatically-issued document silently picks a TAX POINT, and the whole
  * reason the two clocks are allowed to differ is that the choice must be visible.
- *
  * ── IT DOES NOT MOVE THE JOB CARD ───────────────────────────────────────────────────────────────
  * Same rule as a refund: a credit note is a fact about a document, not about the work.
  */
 model CreditNote {
-  id       String @id @default(uuid())
-  group_id String
-  site_id  String
+  id         String @id @default(uuid())
+  group_id   String
+  site_id    String
   /// The invoice being corrected. REQUIRED — a credit note that names no invoice corrects nothing,
   /// and this is the structural limit that stops it becoming a way to invent negative output tax.
   invoice_id String
 
   /// Its OWN number, from its OWN counter (InvoiceSequence.credit_note_last_value).
-  sequence_value Int
+  sequence_value     Int
   credit_note_number String
 
   /// THE VAT-CLOCK DATE. Confirmed by a person; defaults to the refund date at the surface.
@@ -4998,19 +5051,19 @@ model CreditNote {
   issued_at   DateTime @default(now())
 
   /// Why. Mandatory at the surface — a correction nobody can explain is a correction nobody can audit.
-  reason   String
+  reason    String
   /// Which refund occasioned it, when one did. NULL for a correction with no money movement (a
   /// figure corrected before anything was paid) — a MEANINGFUL absence, not a forgotten one.
   refund_id String?
 
   /// Frozen at issue, exactly as InvoiceLine is. Never recomputed.
-  vat_registered_at_issue    Boolean
-  company_name_snapshot      String
+  vat_registered_at_issue       Boolean
+  company_name_snapshot         String
   /// NULL when the invoice carried none — the tenant was not registered at issue. Copied from the
   /// invoice, never re-resolved: a credit note must show the same particulars as what it corrects.
-  company_vat_number_snapshot String?
+  company_vat_number_snapshot   String?
   /// NULL when the invoice had none. Same copy-not-resolve rule as the VAT number above.
-  company_address_snapshot   String?
+  company_address_snapshot      String?
   /// The TRADING name as it stood at issue. Frozen for the same reason every other snapshot here is:
   /// a garage that rebrands must not have every historical document reprint under the new name — an
   /// invoice is a record of what the customer received, not a view of who the garage is today. Same
@@ -5020,16 +5073,16 @@ model CreditNote {
   /// trading name, and the renderer falls back to company_name_snapshot for them rather than
   /// pretending. It is not "a caller forgot" — the mint always writes it now.
   company_trading_name_snapshot String?
-  customer_name_snapshot     String
+  customer_name_snapshot        String
   /// NULL when the customer had no address on the invoice. A meaningful absence: plenty of
   /// counter jobs never collect one, and inventing one on the correction would differ from the
   /// document being corrected.
-  customer_address_snapshot  String?
+  customer_address_snapshot     String?
   /// COPIED FROM THE INVOICE, like every other particular here. A credit note that reverted to the
   /// employee's name while the invoice it corrects is addressed to their employer would not read as
   /// a pair — which is the one thing this whole block of columns exists to guarantee.
-  account_name_snapshot      String?
-  account_address_snapshot   String?
+  account_name_snapshot         String?
+  account_address_snapshot      String?
 
   /// NULL when the system issued it rather than a person — the same convention Payment uses.
   /// The `refund.requested` audit row carries WHO for the person-initiated case.
@@ -5043,7 +5096,6 @@ model CreditNote {
 
   site Site @relation(fields: [site_id], references: [id], onDelete: NoAction)
 
-
   @@unique([group_id, sequence_value])
   @@index([group_id, date_issued])
   @@index([invoice_id])
@@ -5053,16 +5105,16 @@ model CreditNote {
 /// its type, not by negative numbers on the rows — a negative qty on a line is how a reader ends up
 /// double-negating. lib/vat-summary SUBTRACTS these.
 model CreditNoteLine {
-  id             String  @id @default(uuid())
+  id             String   @id @default(uuid())
   credit_note_id String
   position       Int
   description    String
   item_type      ItemType
-  qty            Decimal @db.Decimal(12, 2)
-  unit_price     Decimal @db.Decimal(12, 2)
-  vat_rate       Decimal @db.Decimal(5, 2)
-  line_total     Decimal @db.Decimal(12, 2)
-  line_vat       Decimal @db.Decimal(12, 2)
+  qty            Decimal  @db.Decimal(12, 2)
+  unit_price     Decimal  @db.Decimal(12, 2)
+  vat_rate       Decimal  @db.Decimal(5, 2)
+  line_total     Decimal  @db.Decimal(12, 2)
+  line_vat       Decimal  @db.Decimal(12, 2)
 
   credit_note CreditNote @relation(fields: [credit_note_id], references: [id], onDelete: Cascade)
 
@@ -5080,10 +5132,10 @@ model CreditNoteLine {
 
 /// A garage a rep has visited that is not (yet) a GreaseDesk customer.
 model Prospect {
-  id          String @id @default(uuid())
-  garage_name String
+  id               String  @id @default(uuid())
+  garage_name      String
   /// Normalised garage name for PRESENTING a likely duplicate — never for merging. See lib/prospects.
-  name_key    String
+  name_key         String
   /// NULL = not recorded. A rep on a forecourt may have only the name.
   address_line1    String?
   /// NULL = not recorded.
@@ -5097,14 +5149,14 @@ model Prospect {
 
   /// PERSONAL DATA. Normalised lower-case (Prospect_email_normalised_chk). NULL = never given, OR
   /// stripped — personal_stripped_at says which, so an absence is never ambiguous.
-  email             String?
+  email                    String?
   /// 'not_asked' | 'agreed' | 'declined' — the rep ASKED and the owner ANSWERED. Never implied by
   /// an address. No email ⇒ not_asked, held by Prospect_no_email_no_consent_chk.
-  consent           String   @default("not_asked")
+  consent                  String    @default("not_asked")
   /// NULL exactly when consent is not_asked — an answer has a time (Prospect_consent_pair_chk).
-  consent_at        DateTime?
+  consent_at               DateTime?
   /// The rep who recorded the answer. NULL exactly when consent is not_asked.
-  consent_by_rep_id String?
+  consent_by_rep_id        String?
   /// NULL = the person's data is still held. Set when stripped; email and every visit's spoke_to are
   /// NULL from then on (Prospect_strip_chk). The consent history is kept: it is the evidence.
   personal_stripped_at     DateTime?
@@ -5126,14 +5178,13 @@ model Prospect {
   created_at        DateTime @default(now())
   updated_at        DateTime @default(now()) @updatedAt
 
-  visits   ProspectVisit[]
-  sequence ProspectSequence?
+  visits       ProspectVisit[]
+  sequence     ProspectSequence?
   sendingLease ProspectSendingLease?
 
-  consent_by_rep Rep? @relation("Prospect_consent_by_rep_id", fields: [consent_by_rep_id], references: [id], onDelete: SetNull)
-  created_by_rep Rep @relation("Prospect_created_by_rep_id", fields: [created_by_rep_id], references: [id], onDelete: NoAction)
+  consent_by_rep  Rep?   @relation("Prospect_consent_by_rep_id", fields: [consent_by_rep_id], references: [id], onDelete: SetNull)
+  created_by_rep  Rep    @relation("Prospect_created_by_rep_id", fields: [created_by_rep_id], references: [id], onDelete: NoAction)
   signed_up_group Group? @relation(fields: [signed_up_group_id], references: [id], onDelete: SetNull)
-
 
   @@index([name_key, postcode_key], map: "Prospect_match_idx")
   @@index([email], map: "Prospect_email_idx")
@@ -5157,29 +5208,28 @@ model ProspectVisit {
 
   rep Rep @relation(fields: [rep_id], references: [id], onDelete: NoAction)
 
-
   @@index([prospect_id, visited_on], map: "ProspectVisit_prospect_visited_idx")
   @@index([rep_id], map: "ProspectVisit_rep_idx")
 }
 
 /// The follow-up sequence. A stopped one STAYS, saying when and why (ProspectSequence_stop_chk).
 model ProspectSequence {
-  id          String    @id @default(uuid())
-  prospect_id String    @unique
+  id             String    @id @default(uuid())
+  prospect_id    String    @unique
   /// 'active' | 'stopped'.
-  state       String
+  state          String
   /// The step to send next, 1-based.
-  next_step   Int
+  next_step      Int
   /// NULL exactly when stopped — an active sequence is always due at some time.
-  next_due_at DateTime?
-  started_at  DateTime
+  next_due_at    DateTime?
+  started_at     DateTime
   /// NULL = nothing has been sent yet.
-  last_sent_at DateTime?
+  last_sent_at   DateTime?
   /// NULL exactly while active.
-  stopped_at   DateTime?
+  stopped_at     DateTime?
   /// WHY it stopped — never merely that it did. NULL exactly while active.
   stopped_reason String?
-  created_at   DateTime @default(now())
+  created_at     DateTime  @default(now())
 
   prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
 
@@ -5238,7 +5288,7 @@ model ResellerEnquiry {
   id         String   @id @default(uuid())
   created_at DateTime @default(now())
 
-  name String
+  name  String
   /// PERSONAL DATA. Required at the form, so a NULL here could only arrive by stripping — which
   /// clears it, and stamps personal_stripped_at to say so. An enquiry with no route back is not one.
   email String?
@@ -5303,7 +5353,7 @@ model ResellerEnquiry {
 /// ContactPreferenceEvent shape). A correction after the fact is a NEW ROW pointing at the original,
 /// which stays visible.
 model JobClockSession {
-  id          String   @id @default(uuid())
+  id          String @id @default(uuid())
   group_id    String
   job_card_id String
   /// The tech. A User, not a CostPerson: CostPerson.user_id is nullable, so a tech may have no cost
@@ -5364,8 +5414,8 @@ model JobClockSession {
   /// and therefore useless for finding the next real drift. These ids are UUIDs that never change, so
   /// ON UPDATE is a no-op either way; the datamodel simply says what is true. corrects_id below
   /// already said it, which is why that one key was never in the diff.
-  group    Group   @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  jobCard  JobCard @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  group       Group             @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  jobCard     JobCard           @relation(fields: [job_card_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   /// A correction points at the session it corrects. RESTRICT, not Cascade: deleting a session that
   /// something corrected would destroy the record of the correction, and the original staying
   /// visible is the whole point.
@@ -5373,8 +5423,7 @@ model JobClockSession {
   corrections JobClockSession[] @relation("JobClockCorrection")
 
   corrected_by_user User? @relation("JobClockSession_corrected_by_user_id", fields: [corrected_by_user_id], references: [id], onDelete: SetNull)
-  user User @relation("JobClockSession_user_id", fields: [user_id], references: [id], onDelete: NoAction)
-
+  user              User  @relation("JobClockSession_user_id", fields: [user_id], references: [id], onDelete: NoAction)
 
   @@index([job_card_id])
   @@index([group_id, user_id])
@@ -5396,21 +5445,21 @@ model JobClockSession {
 /// carried now because they are cheap now and awkward later, plus a nullable vehicle_id with NO
 /// foreign key — so the only thing a stock slice has to add is the constraint itself.
 model PurchaseModel {
-  id                  String   @id @default(uuid())
-  group_id            String
-  created_by_user_id  String
+  id                 String @id @default(uuid())
+  group_id           String
+  created_by_user_id String
   /// What the car is, in the owner's words — "57-plate Focus, red". Free text and required: a list
   /// of untitled models is a list nobody returns to.
-  label               String
+  label              String
 
   /// THE CAR, AS TEXT. A registration or VIN typed at an auction, where the garage does not own the
   /// car and no Vehicle row exists or should. NULL = they did not say which car yet, which is the
   /// ordinary case when someone is modelling a shape rather than a specific lot.
-  vehicle_ident       String?
+  vehicle_ident String?
   /// THE FUTURE LINK, deliberately with NO foreign key. When stock exists this points at a Vehicle,
   /// and adding the constraint is then the ONLY migration that slice needs — a constraining one, by
   /// itself, rather than tangled into a feature. NULL = not linked, which is every row today.
-  vehicle_id          String?
+  vehicle_id    String?
 
   /// lib/purchase-model MODEL_STATUSES. 'modelled' today; the field exists to have room.
   ///
@@ -5419,29 +5468,28 @@ model PurchaseModel {
   /// ALTER TABLE DROP/ADD CONSTRAINT — a CONSTRAINING migration and a two-push cycle — which is
   /// precisely the room the field was added to have. The vocabulary is in the leaf module and
   /// purchase-model-gate asserts the writer only ever writes from it.
-  status              String   @default("modelled")
+  status String @default("modelled")
 
   /// THE WHOLE INPUT SET, kept as given rather than only the answer it produced. A model reopened in
   /// six months has to show what was ASSUMED, not just what was concluded — and a later stock record
   /// wanting "what did we think at purchase" needs the assumptions, not the total.
-  inputs              Json
+  inputs Json
 
   /// Denormalised from `inputs` so the list renders without parsing every row's JSON. They are a
   /// COPY: `inputs` is the source, and lib/purchase-model-store writes both from one computation.
-  purchase_pence      Int
-  sale_pence          Int
-  vat_status          String
+  purchase_pence Int
+  sale_pence     Int
+  vat_status     String
   /// The profit this model produced WHEN IT WAS SAVED. Recomputed on open — a figure on a list is a
   /// signpost, never the answer.
-  profit_pence        Int
+  profit_pence   Int
 
-  created_at          DateTime @default(now())
-  updated_at          DateTime @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   vehicle Vehicle? @relation(fields: [vehicle_id], references: [id], onDelete: SetNull)
-
 
   @@index([group_id, updated_at])
 }
@@ -5462,25 +5510,25 @@ model PurchaseModel {
 /// marketing lists and MOT reminders and the garage would start texting itself. THIS ROW is the
 /// assertion of ownership, and the absence of a disposal is the assertion that it still holds.
 model StockItem {
-  id         String   @id @default(uuid())
-  group_id   String
+  id                          String    @id @default(uuid())
+  group_id                    String
   /// The car's identity. Vehicle is identity-only since the weld was retired, which is exactly what
   /// makes it safe to point at from here without implying a customer.
-  vehicle_id String
+  vehicle_id                  String
   /// WHEN YOU BOUGHT IT — when it became YOURS. The book's period boundary reads this and must go on
   /// reading it: ownership starts at purchase whether or not the car is on your premises, so a car
   /// bought 30 March and collected 2 April belongs in the March book. A date the garage states rather
   /// than a created_at they cannot correct.
   ///
   /// NOT RENAMED when arrived_at arrived (2026-09-16). A rename would have moved the book.
-  acquired_at DateTime
+  acquired_at                 DateTime
   /// WHEN IT TURNED UP. NULL = not yet — bought at auction Tuesday, arriving Friday, possibly not yet
   /// paid for. DAYS IN STOCK COUNTS FROM HERE, because a car sitting at Manheim for a week has not
   /// been on the forecourt for a week.
   ///
   /// Nullable and NOT backfilled: existing rows fall back to acquired_at through one reader
   /// (lib/stock::stockClock), so nothing already recorded changes its days-in-stock by a single day.
-  arrived_at  DateTime? @db.Date
+  arrived_at                  DateTime? @db.Date
   /// WHERE THE CAR IS IN ITS LIFE — due_in | in_prep | advertised | reserved. EXPLICIT, never derived:
   /// "this is advertised now" is a fact a dealer states, and inferring it from a projected price being
   /// set would mean typing an estimate silently advertises a car. A car that moves state because
@@ -5493,23 +5541,23 @@ model StockItem {
   /// Defaulted to in_prep so the five rows that existed when this column landed read as what they
   /// were: arrived, not yet advertised. A DEFAULT on ADD COLUMN needs no UPDATE, which is what keeps
   /// the migration additive.
-  status      String   @default("in_prep")
+  status                      String    @default("in_prep")
   /// WHAT WAS PAID FOR THE CAR ITSELF. The margin is measured from this and nothing else.
-  purchase_pence Int
+  purchase_pence              Int
   /// CAPTURED AT PURCHASE AND NEVER RE-READ. A car bought under the margin scheme stays a margin car
   /// whatever the tenant's own status does later; reading it live would re-rate history.
-  vat_status String
+  vat_status                  String
   /// lib/purchase-model SOURCES — auction, trade, private, part-exchange. Decides what a fee did.
-  source           String
+  source                      String
   /// The buyer's premium, VAT inside by definition, part of the price of the goods.
-  premium_pence    Int @default(0)
+  premium_pence               Int       @default(0)
   /// Standard-rated services on the purchase invoice, GROSS like every money field.
-  services_pence   Int @default(0)
+  services_pence              Int       @default(0)
   /// WAS THE MILEAGE WARRANTED — a term of THIS purchase, not a property of the car. The seller
   /// standing behind the reading is a promise made to us by them; the next owner of the car does not
   /// inherit it, which is why it lives on the stock item and the reading itself lives on the vehicle.
   /// TRI-STATE: NULL = not stated (a private purchase has no such term), TRUE/FALSE = the sale said.
-  mileage_warranted Boolean?
+  mileage_warranted           Boolean?
   /// ── THIS CAR HAS BEEN HERE BEFORE ─────────────────────────────────────────────────────────────
   /// The StockDisposal of the EARLIER sale, when this acquisition is a return or a buyback of a car
   /// we sold. NULL = an ordinary acquisition, which is nearly all of them.
@@ -5531,7 +5579,7 @@ model StockItem {
   ///
   /// Editable for as long as the car is in stock, and meaningless afterwards: once disposed, the real
   /// sale price on StockDisposal is the answer and this is only what we used to think.
-  projected_sale_pence Int?
+  projected_sale_pence        Int?
   /// ── THE STOCK BOOK'S OWN FIELDS ───────────────────────────────────────────────────────────────
   /// THE STOCK NUMBER — per tenant, in sequence, from StockNumberSequence, assigned in the same
   /// transaction that creates the row, so a rolled-back intake spends no number.
@@ -5539,7 +5587,7 @@ model StockItem {
   /// prints that as not recorded; it never invents one.
   /// Not UNIQUE in the database yet: CREATE UNIQUE INDEX classifies constraining. The counter is the
   /// guarantee until the index follows in a migration of its own.
-  stock_number Int?
+  stock_number                Int?
   /// WHO SOLD IT TO US and THEIR invoice or receipt number — both on the purchase paperwork.
   /// Each has THREE states, not two, read through lib/stock-paperwork:
   ///   a value                                  → recorded
@@ -5547,24 +5595,23 @@ model StockItem {
   ///   NULL and its key NOT in not_on_paperwork → "not recorded": nobody was asked (every car taken in
   ///                                               before these columns, LC09XFU included)
   /// @nulls: seller_name, purchase_ref
-  seller_name  String?
-  purchase_ref String?
+  seller_name                 String?
+  purchase_ref                String?
   /// THE PURCHASE-SIDE FIELDS A PERSON LOOKED FOR AND DID NOT FIND. A statement, written once at entry
   /// — never a way of leaving a field blank. Keys from lib/stock-paperwork PURCHASE_PAPERWORK_KEYS.
-  not_on_paperwork String[] @default([])
-  created_by_user_id String
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  not_on_paperwork            String[]  @default([])
+  created_by_user_id          String
+  created_at                  DateTime  @default(now())
+  updated_at                  DateTime  @updatedAt
 
-  group    Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  vehicle  Vehicle   @relation(fields: [vehicle_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  disposal StockDisposal? @relation("StockDisposal_stock_item_id")
-  costs    StockCostSnapshot[]
+  group     Group               @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vehicle   Vehicle             @relation(fields: [vehicle_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  disposal  StockDisposal?      @relation("StockDisposal_stock_item_id")
+  costs     StockCostSnapshot[]
   liveCosts StockCost[]
 
   reacquired_from_disposal StockDisposal? @relation("StockItem_reacquired_from_disposal_id", fields: [reacquired_from_disposal_id], references: [id], onDelete: SetNull)
-  job_cards JobCard[]
-
+  job_cards                JobCard[]
 
   @@index([group_id, acquired_at])
 }
@@ -5574,21 +5621,21 @@ model StockItem {
 /// item: a car can leave without one (traded out, scrapped, returned, taken into own use) and an
 /// invoice may be raised before handover. The invoice REFERENCES this row, never the other way about.
 model StockDisposal {
-  id            String   @id @default(uuid())
-  group_id      String
+  id                    String   @id @default(uuid())
+  group_id              String
   /// ONE DISPOSAL PER ITEM, enforced by @unique INSIDE the table. Deliberately not a separate
   /// CREATE UNIQUE INDEX: that statement classifies CONSTRAINING even on a brand-new table, and would
   /// have cost this slice a second push for a rule the table can state itself.
-  stock_item_id String   @unique
+  stock_item_id         String   @unique
   /// WHEN IT LEFT — its own date, independent of any invoice.
-  disposed_at   DateTime
+  disposed_at           DateTime
   /// lib/stock DISPOSAL_KINDS.
-  kind          String
+  kind                  String
   /// NULL for the three kinds that are not sales. An honest null, never a zero.
-  sale_pence    Int?
+  sale_pence            Int?
   /// NULL = nothing was written down, which is the ordinary case. A free-text aside for the awkward
   /// disposals — who it went to, why it came back — never a field anything reads or totals.
-  note          String?
+  note                  String?
   /// ── RECORDED, NOT INVOICED ─────────────────────────────────────────────────────────────────────
   /// TRUE = a sale made BEFORE this tenant invoiced car sales through GreaseDesk, entered afterwards by
   /// lib/stock-historical and nothing else. The buyer holds the garage's own receipt from the time
@@ -5596,31 +5643,30 @@ model StockDisposal {
   /// marker is what lets a reader tell no-invoice-by-design from a sale whose invoice is missing, and a
   /// marker cannot be recovered after the fact (lib/historical-invoice learned that on 177 rows).
   /// FALSE on every sale made through lib/stock-sale, which always mints.
-  recorded_not_invoiced Boolean @default(false)
+  recorded_not_invoiced Boolean  @default(false)
   /// The receipt the buyer was given at the time. NULL: see not_on_paperwork for which NULL it is.
-  receipt_ref   String?
+  receipt_ref           String?
   /// THE BUYER AS THEY WERE AT THE SALE — frozen here, because a customer's name and address move on
   /// and the stock book must say who the car went to THEN. NULL on a disposal that is not a sale, and on
   /// a sale where the paperwork did not carry it (see not_on_paperwork).
   /// buyer_customer_id has NO foreign key, like stock_disposal_id: ADD CONSTRAINT would cost a push.
   /// @nulls: buyer_customer_id, buyer_name, buyer_address — NULL name = no buyer on the paperwork, or not a
   /// sale; NULL customer id = no named buyer (both writers make a named buyer a customer, today).
-  buyer_customer_id String?
-  buyer_name        String?
-  buyer_address     String?
+  buyer_customer_id     String?
+  buyer_name            String?
+  buyer_address         String?
   /// THE SALE-SIDE FIELDS A PERSON LOOKED FOR AND DID NOT FIND. Keys from lib/stock-paperwork
   /// SALE_PAPERWORK_KEYS. Same rule as StockItem.not_on_paperwork: a fact about the record, not a blank.
-  not_on_paperwork String[] @default([])
-  created_by_user_id String
-  created_at DateTime @default(now())
+  not_on_paperwork      String[] @default([])
+  created_by_user_id    String
+  created_at            DateTime @default(now())
 
   group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   stock_item StockItem @relation("StockDisposal_stock_item_id", fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  buyer_customer Customer? @relation(fields: [buyer_customer_id], references: [id], onDelete: SetNull)
-  invoices Invoice[]
-  stock_items StockItem[] @relation("StockItem_reacquired_from_disposal_id")
-
+  buyer_customer Customer?   @relation(fields: [buyer_customer_id], references: [id], onDelete: SetNull)
+  invoices       Invoice[]
+  stock_items    StockItem[] @relation("StockItem_reacquired_from_disposal_id")
 
   @@index([group_id, disposed_at])
 }
@@ -5651,7 +5697,6 @@ model StockNumberSequence {
   updated_at DateTime @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
-
 }
 
 model StockCost {
@@ -5684,7 +5729,7 @@ model StockCost {
   /// No foreign key to itself: self-referencing ADD CONSTRAINT buys nothing here, and the writer
   /// already refuses a credit that names a row on another car, a credit of a credit, or credits
   /// totalling more than was paid.
-  reverses_id   String?
+  reverses_id String?
 
   created_by_user_id String
   created_at         DateTime @default(now())
@@ -5692,15 +5737,14 @@ model StockCost {
   group      Group     @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  reverses StockCost? @relation("StockCost_reverses_id", fields: [reverses_id], references: [id], onDelete: SetNull)
+  reverses             StockCost?  @relation("StockCost_reverses_id", fields: [reverses_id], references: [id], onDelete: SetNull)
   stock_costs_reverses StockCost[] @relation("StockCost_reverses_id")
-
 
   @@index([group_id, stock_item_id])
 }
 
 model StockCostSnapshot {
-  id            String @id @default(uuid())
+  id            String   @id @default(uuid())
   group_id      String
   stock_item_id String
   /// 'parts' | 'labour' | 'delivery' | 'other' — a vocabulary in lib/stock, not a database CHECK, so
@@ -5723,7 +5767,6 @@ model StockCostSnapshot {
   stock_item StockItem @relation(fields: [stock_item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   job_card JobCard? @relation(fields: [job_card_id], references: [id], onDelete: SetNull)
-
 
   @@index([group_id, stock_item_id])
 }
@@ -5759,28 +5802,28 @@ model PurchaseModelDefaults {
 /// `outcome` is the only field that decides anything; lib/backup-runs states every value it can
 /// take. The rest are evidence.
 model BackupRun {
-  id String @id @default(uuid())
-    /// @nulls: finished_at, failed_step, object_key, bytes, sha256, database_name, table_count, total_rows, migrations, pg_version, golden_json
-    /// ONE MEANING FOR ALL OF THEM: a null is a measurement the run never reached, and nothing else.
-    /// A dump that died has no byte count, no object in the bucket and no manifest to count tables
-    /// from, so those are null rather than zero — recording a zero would read as a successful backup of
-    /// an empty database, which is a different and much worse thing to believe. `failed_step` inverts
-    /// it: null means the run did not fail, and a failed run without one is refused before it is
-    /// written (lib/backup-runs::submissionRefusal), because "something went wrong" is not evidence.
+  id            String    @id @default(uuid())
+  /// @nulls: finished_at, failed_step, object_key, bytes, sha256, database_name, table_count, total_rows, migrations, pg_version, golden_json
+  /// ONE MEANING FOR ALL OF THEM: a null is a measurement the run never reached, and nothing else.
+  /// A dump that died has no byte count, no object in the bucket and no manifest to count tables
+  /// from, so those are null rather than zero — recording a zero would read as a successful backup of
+  /// an empty database, which is a different and much worse thing to believe. `failed_step` inverts
+  /// it: null means the run did not fail, and a failed run without one is refused before it is
+  /// written (lib/backup-runs::submissionRefusal), because "something went wrong" is not evidence.
   /// The run's own stamp (db-<STAMP>.dump.gpg). UNIQUE so a retried workflow step records the same
   /// attempt once; declared inside the table, which keeps the migration non-constraining.
-  stamp       String   @unique
-  started_at  DateTime
-  finished_at DateTime?
+  stamp         String    @unique
+  started_at    DateTime
+  finished_at   DateTime?
   /// lib/backup-runs BACKUP_OUTCOMES. 'verified' means a real pg_restore of the file PULLED BACK
   /// FROM R2 reproduced the source exactly — not that an upload returned 200.
-  outcome     String
+  outcome       String
   /// Which step gave up, on a run that did not finish. NULL on a verified run.
-  failed_step String?
+  failed_step   String?
   /// What the bucket holds: the key, the size, and the digest of the encrypted object.
-  object_key  String?
-  bytes       BigInt?
-  sha256      String?
+  object_key    String?
+  bytes         BigInt?
+  sha256        String?
   /// What the dump contained, as backup-manifest.mjs measured it at the source.
   database_name String?
   table_count   Int?
@@ -5789,8 +5832,8 @@ model BackupRun {
   pg_version    String?
   /// The golden-slice comparison, source against restored: a fixed historical month's invoice
   /// count, line count, gross and hash. This is what makes 'verified' a measurement.
-  golden_json Json?
-  recorded_at DateTime @default(now())
+  golden_json   Json?
+  recorded_at   DateTime  @default(now())
 
   @@index([started_at])
 }
@@ -5804,12 +5847,12 @@ model BackupRun {
 /// The previous exports stay listed: a second request must not silently replace the first, because
 /// the first may be the one somebody has already sent to their accountant.
 model ExportJob {
-  id       String @id @default(uuid())
-  group_id String
+  id                   String    @id @default(uuid())
+  group_id             String
   /// Who asked. Kept even if they later leave — the audit question is who took the data.
   requested_by_user_id String
   /// lib/tenant-export-job EXPORT_STATUSES.
-  status   String @default("queued")
+  status               String    @default("queued")
   ///
   /// @nulls: started_at, finished_at, expires_at, object_key, bytes, row_total, file_count, blob_count, blob_missing, manifest_json, failed_reason, downloaded_at
   /// ONE MEANING: a null is a stage this job has not reached. A queued job has no start time, a
@@ -5818,23 +5861,23 @@ model ExportJob {
   /// offered"). `blob_missing` is the exception worth reading twice: 0 means every photo was found
   /// and copied, NULL means nobody counted, and those must not be confused when somebody asks
   /// whether their photos are in the file.
-  started_at   DateTime?
-  finished_at  DateTime?
+  started_at           DateTime?
+  finished_at          DateTime?
   /// When the download link stops working. Stated to the garage rather than left to be discovered.
-  expires_at   DateTime?
-  object_key   String?
-  bytes        BigInt?
-  row_total    Int?
-  file_count   Int?
-  blob_count   Int?
-  blob_missing Int?
+  expires_at           DateTime?
+  object_key           String?
+  bytes                BigInt?
+  row_total            Int?
+  file_count           Int?
+  blob_count           Int?
+  blob_missing         Int?
   /// Per-file row counts and the omissions, as written into the zip's own manifest.json. Stored so
   /// the audit question "what was in it" is answerable without fetching the file.
-  manifest_json Json?
-  failed_reason String?
-  downloaded_at DateTime?
-  download_count Int @default(0)
-  requested_at  DateTime @default(now())
+  manifest_json        Json?
+  failed_reason        String?
+  downloaded_at        DateTime?
+  download_count       Int       @default(0)
+  requested_at         DateTime  @default(now())
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -5860,22 +5903,19 @@ model ExportJob {
 /// `is_default` column and nothing derives one.
 /**
  * A GROUP OF OPTIONS, AND THE SHAPE THAT SAYS WHAT CHOOSING MEANS.
- *
  * `base_plus_extras` — one base job plus tickable extras that exist BECAUSE the base is happening.
- *                      No base member means the base is the MAIN QUOTE (always happening), which is
- *                      the unification of what used to be a standalone `addition`.
+ * No base member means the base is the MAIN QUOTE (always happening), which is
+ * the unification of what used to be a standalone `addition`.
  * `pick_one`        — alternatives: one, or none. Nothing underneath them.
- *
  * Groups are INDEPENDENT: all, some or none, and none is a valid answer to each. The shape lives
  * here rather than on every member because it is one decision about the whole group, and repeating
  * it per row is how two members of one group come to disagree about what they are.
- *
  * NO INCENTIVE COLUMNS HERE YET, deliberately — see lib/quote-options for why, and for what will
  * reopen it ("10% off any service" authored four times across a ladder). The reader takes a SOURCE,
  * so adding them later is a column and a second argument, not a second implementation.
  */
 model QuoteOptionGroup {
-  id               String @id @default(uuid())
+  id               String   @id @default(uuid())
   quote_version_id String
   shape            String // lib/quote-options GROUP_SHAPES
   position         Int
@@ -5888,9 +5928,11 @@ model QuoteOptionGroup {
   @@index([quote_version_id, position])
 }
 
-/** The draft half, on the card. Same shape; mirrors QuoteOptionDraft's relationship to QuoteOption. */
+/**
+ * The draft half, on the card. Same shape; mirrors QuoteOptionDraft's relationship to QuoteOption.
+ */
 model QuoteOptionGroupDraft {
-  id          String @id @default(uuid())
+  id          String   @id @default(uuid())
   job_card_id String
   shape       String
   position    Int
@@ -5904,17 +5946,17 @@ model QuoteOptionGroupDraft {
 }
 
 model QuoteOption {
-  id               String @id @default(uuid())
-  quote_version_id String
+  id                          String   @id @default(uuid())
+  quote_version_id            String
   /// lib/quote-options OPTION_KINDS: 'addition' | 'variation'.
-  kind             String
-  position         Int
-  title            String
+  kind                        String
+  position                    Int
+  title                       String
   /// FROZEN AT SEND, like the version's own totals. lib/quote-options does display arithmetic on
   /// these and never recomputes them.
-  net_pennies   Int
-  vat_pennies   Int
-  gross_pennies Int
+  net_pennies                 Int
+  vat_pennies                 Int
+  gross_pennies               Int
   ///
   /// @nulls: group_key, incentive_kind, incentive_label, incentive_ex_pennies, incentive_vatable, incentive_gross_off_pennies
   /// `group_key` is NULL on an addition and required on a variation — the null IS the kind's
@@ -5941,7 +5983,7 @@ model QuoteOption {
   /// of sent versions is proved. `kind`/`group_key` above are the retiring flat shape.
   group_id                    String?
   /// base_plus_extras only: exactly one member may be the base. None = the base is the main quote.
-  is_base                     Boolean @default(false)
+  is_base                     Boolean  @default(false)
 
   created_at DateTime @default(now())
 
@@ -5950,7 +5992,6 @@ model QuoteOption {
   quote_version_lines QuoteVersionLine[]
 
   group QuoteOptionGroup? @relation(fields: [group_id], references: [id], onDelete: Cascade)
-
 
   @@index([quote_version_id, position])
 }
@@ -5965,12 +6006,12 @@ model QuoteOption {
 /// live estimate lines and recomputing it in two places is how the two drift. The frozen totals are
 /// computed once, at freeze, onto QuoteOption.
 model QuoteOptionDraft {
-  id          String @id @default(uuid())
-  job_card_id String
+  id                          String   @id @default(uuid())
+  job_card_id                 String
   /// lib/quote-options OPTION_KINDS: 'addition' | 'variation'.
-  kind      String
-  position  Int
-  title     String
+  kind                        String
+  position                    Int
+  title                       String
   ///
   /// @nulls: group_key, incentive_kind, incentive_label, incentive_ex_pennies, incentive_vatable, incentive_gross_off_pennies
   /// Same meanings as QuoteOption's, because this is the same thing before it is frozen:
@@ -5991,7 +6032,7 @@ model QuoteOptionDraft {
   /// option with no group cannot be rendered or chosen, and lib/quote-options names it rather than
   /// dropping it, so the absence is a visible fault instead of a silent omission.
   group_id                    String?
-  is_base                     Boolean @default(false)
+  is_base                     Boolean  @default(false)
 
   created_at DateTime @default(now())
 
@@ -6000,7 +6041,6 @@ model QuoteOptionDraft {
   job_card_items JobCardItem[]
 
   group QuoteOptionGroupDraft? @relation(fields: [group_id], references: [id], onDelete: Cascade)
-
 
   @@index([job_card_id, position])
 }

@@ -165,6 +165,14 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   CatalogueAlias: TENANT(),
   CatalogueComponent: VIA('CatalogueItem'),
   CatalogueItemTierPrice: VIA('CatalogueItem'),
+  CatalogueSet: TENANT(),
+  // TENANT, not VIA('CatalogueSet'), and the invariant is what settled it. I wrote VIA first on the
+  // reasoning that a membership has no life without its set — true, and not what this axis asks.
+  // `reach` asks whether a query can FIND this tenant's rows, and this table carries its own
+  // group_id, so it can. The invariant refused the claim outright (NO_PATH_TO_PARENT: no relation
+  // named for the parent and no catalogue_set_id column), which is the check doing its job on a
+  // story rather than on the schema.
+  CatalogueSetMember: TENANT(),
   ServiceCatalogue: TENANT(),
   ServiceTier: TENANT(),
   PartCatalogue: TENANT(),
