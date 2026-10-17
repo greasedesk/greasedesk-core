@@ -7,7 +7,7 @@
  * FIXTURES ON ZZ ONLY, never TMBS. Every row this creates is removed in the finally, by its own id.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, ZZ_GROUP } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, ZZ_GROUP, onTeardown } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const S = await import('../lib/stock.ts');
 const ST = await import('../lib/stock-store.ts');
@@ -46,6 +46,114 @@ const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 let prisma;
 let browser = null;
 let made = { items: [], vehicles: [], cards: [], customers: [] };
+
+/**
+ * ── TWO SWEEPS, AND WHY IT IS TWO ───────────────────────────────────────────────────────────────
+ * The mechanism's rule is one sweep with two callers, never two sweeps — and this gate genuinely
+ * needs both, because they answer different questions:
+ *
+ *   sweepMade      — everything this run RECORDED making, by id. Precise, and it is what the
+ *                    `finally` has always run.
+ *   sweepFixtures  — anything WEARING THIS GATE'S NAMING (ZZSTK, ZZYARD, ZZNODATE, ZZNOSUCH),
+ *                    whatever made it. It exists because a run that dies before recording a row
+ *                    leaves something `made` never learned about, and a red-proof that breaks a
+ *                    refusal creates exactly that. It already ran at START for the previous run's
+ *                    residue; registering it makes it run at the END of THIS one too.
+ *
+ * WHY THIS GATE AND NOT ANOTHER: on 14 October it hit the runner's 300s cap, was killed, and left
+ * 15 stock items, 8 disposals and a prep card carrying £2,100 of lines on ZZ. Three later gates
+ * then went red for reasons that had nothing to do with them — after-sale-gate's "ZZ holds no other
+ * disposal" premise found 8, wip-derivation-gate's independent sum counted the prep card the
+ * library correctly excludes, and quote-invoice-sms-gate picked the orphan as its own fixture and
+ * timed out on a selector a stock card never renders. Four reds from one abandoned sweep.
+ *
+ * ONLY THE RUN ASSERTS. Every statement below is a deleteMany, so running it twice is safe — but
+ * the `check` calls are not, and that is not hypothetical: registrations run NEWEST FIRST, so on a
+ * signal `sweepFixtures` removes the prefixed cars and everything hanging off them, and this
+ * function then finds nothing and would report "0 of 11" as a FAILED teardown. It had succeeded.
+ * Measured, not imagined — this is what the first version of this refactor printed under a real
+ * SIGTERM.
+ *
+ * So the `finally` asks for the assertions and the signal path does not. Cleaning up is the signal
+ * path's whole job; reporting on the clean-up belongs to a run that is still going to print a
+ * summary, and a killed gate never prints one.
+ */
+const sweepMade = async ({ asserting = false } = {}) => {
+  if (!prisma) return;
+  const assert = asserting ? check : () => {};
+  try {
+      if (made.customers?.length) {
+        // The fixture customer, by its OWN id. Cards first (SetNull would orphan the name otherwise).
+        await prisma.customer.deleteMany({ where: { id: { in: made.customers }, group_id: ZZ_GROUP } })
+          .catch(() => {});
+      }
+      if (made.cards?.length) {
+        await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: made.cards } } });
+        await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: made.cards } } })
+          .catch(() => {});  // AuditLog is append-only by standing rule; these are the run's OWN rows
+        await prisma.jobCard.deleteMany({ where: { id: { in: made.cards }, group_id: ZZ_GROUP } });
+      }
+      // BY THEIR OWN IDS, on ZZ only. Disposals and cost snapshots cascade from the item.
+      if (made.items.length) {
+        const d = await prisma.stockItem.deleteMany({ where: { id: { in: made.items.filter(Boolean) }, group_id: ZZ_GROUP } });
+        assert('teardown removed the stock fixtures', d.count === made.items.filter(Boolean).length, `${d.count} of ${made.items.filter(Boolean).length}`);
+      }
+      if (made.vehicles.length) {
+        // BACKSTOP, SCOPED TO THIS RUN'S OWN VEHICLES. A red-proof once left an untracked StockItem
+        // behind — a refusal that stopped refusing created a second row this list never learned about —
+        // and the vehicle delete then failed on the RESTRICT, leaving both. Anything still pointing at
+        // a fixture vehicle goes, which cannot reach a real car because the ids came from this run.
+        // SCOPED TO THIS GATE'S OWN NAMING, not to what the run remembered making. A red-proof that
+        // breaks a refusal makes rows nothing tracked — a defaulted date once created ZZNODATE1 and
+        // left it behind. Every registration this gate can produce starts with one of these, and no
+        // real car does.
+        const fixtures = await prisma.vehicle.findMany({
+          /**
+           * THE PREFIXES THIS RUN CAN PRODUCE — including one it produces only when something is
+           * BROKEN. 'ZZNOSUCH' is the plate the find-only clause asks about and expects not to exist;
+           * a lookup that wrongly creates it leaves a car this teardown never learned about, which is
+           * exactly what happened when that clause was first red-proved. A backstop scoped to what the
+           * run REMEMBERED cannot remove what a broken path created — so it is scoped to the shapes
+           * the run can produce instead.
+           */
+          where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE', 'ZZNOSUCH'].map((x) => ({ registration: { startsWith: x } })) },
+          select: { id: true },
+        });
+        made.vehicles = [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])];
+        const orphans = await prisma.stockItem.deleteMany({
+          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } },
+        });
+        if (orphans.count) assert('  …including a stock row the run did not track', true, `${orphans.count} swept`);
+
+        /**
+         * AND THE JOB CARDS, which the backstop did not sweep until 2026-09-15 and which are the other
+         * thing that can hold a fixture vehicle: JobCard.vehicle is onDelete NoAction, so ONE untracked
+         * card makes the vehicle delete throw P2003 and the whole teardown abandons — leaving every
+         * fixture behind for the next run to collide with. That is exactly what happened: an aborted
+         * run left 15 cars and 2 cards, and the next run failed on a VIN the previous one still owned.
+         *
+         * Scoped to the fixture vehicles, so it cannot reach a real card: those ids came from the
+         * prefix match above, and no real registration starts with them.
+         */
+        const strayCards = await prisma.jobCard.findMany({
+          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } }, select: { id: true },
+        });
+        if (strayCards.length) {
+          const ids = strayCards.map((c) => c.id);
+          await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: ids } } });
+          await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: ids } } }).catch(() => {});
+          const gone = await prisma.jobCard.deleteMany({ where: { id: { in: ids }, group_id: ZZ_GROUP } });
+          assert('  …and a job card the run did not track', gone.count === ids.length, `${gone.count} swept`);
+        }
+        await prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: { in: made.vehicles } } });
+        const v = await prisma.vehicle.deleteMany({ where: { id: { in: made.vehicles }, group_id: ZZ_GROUP } });
+        assert('  …and the fixture vehicles', v.count === made.vehicles.length, `${v.count} of ${made.vehicles.length}`);
+      }
+      const left = await prisma.stockItem.count({ where: { group_id: ZZ_GROUP } });
+      assert('ZZ holds no stock rows again', left === 0, `${left}`);
+  } catch (e) { assert('teardown completed', false, describeError(e).slice(0, 200)); }
+};
+onTeardown(sweepMade);
 try {
   prisma = await gatePrisma();
 
@@ -79,6 +187,11 @@ try {
     await prisma.vehicle.deleteMany({ where: { id: { in: ids }, group_id: ZZ_GROUP } });
     return ids.length;
   };
+  // REGISTERED AS WELL AS CALLED AT START. The start call clears a PREVIOUS run's residue; this
+  // registration makes the same function run at the end of THIS one, including on the SIGTERM the
+  // runner sends when a gate exceeds its cap. On 14 October every abandoned row was wearing one of
+  // these prefixes, so this line alone would have prevented the whole cascade.
+  onTeardown(sweepFixtures);
   const sweptBefore = await sweepFixtures();
   if (sweptBefore) console.log(`  (swept ${sweptBefore} fixture car(s) left by an earlier run)`);
 
@@ -500,7 +613,11 @@ try {
   check('warranted follows the same three states',
     SI.parseWarranted('unknown') === null && SI.parseWarranted('no') === false && SI.parseWarranted('yes') === true);
   check('the schema column is NULLABLE, so the third state can be stored at all',
-    /mileage_warranted Boolean\?/.test(readFileSync('prisma/schema.prisma', 'utf8'))
+    // \s+ ON BOTH, not just the second. `mileage_warranted Boolean?` with a literal single space
+    // went red the first time `prisma format` realigned that model — a schema that had not changed
+    // in any way this clause cares about. Its sibling on the next line already had \s+ and was
+    // unaffected, which is how a half-applied convention hides. Pin the RULE, never the spacing.
+    /mileage_warranted\s+Boolean\?/.test(readFileSync('prisma/schema.prisma', 'utf8'))
       && /is_import\s+Boolean\?/.test(readFileSync('prisma/schema.prisma', 'utf8')),
     'a NOT NULL column with a default would make every unasked car claim to be UK-supplied');
 
@@ -1881,81 +1998,10 @@ try {
 
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
+
 } finally {
   await browser?.close().catch(() => {});
-  if (prisma) {
-    try {
-      if (made.customers?.length) {
-        // The fixture customer, by its OWN id. Cards first (SetNull would orphan the name otherwise).
-        await prisma.customer.deleteMany({ where: { id: { in: made.customers }, group_id: ZZ_GROUP } })
-          .catch(() => {});
-      }
-      if (made.cards?.length) {
-        await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: made.cards } } });
-        await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: made.cards } } })
-          .catch(() => {});  // AuditLog is append-only by standing rule; these are the run's OWN rows
-        await prisma.jobCard.deleteMany({ where: { id: { in: made.cards }, group_id: ZZ_GROUP } });
-      }
-      // BY THEIR OWN IDS, on ZZ only. Disposals and cost snapshots cascade from the item.
-      if (made.items.length) {
-        const d = await prisma.stockItem.deleteMany({ where: { id: { in: made.items.filter(Boolean) }, group_id: ZZ_GROUP } });
-        check('teardown removed the stock fixtures', d.count === made.items.filter(Boolean).length, `${d.count} of ${made.items.filter(Boolean).length}`);
-      }
-      if (made.vehicles.length) {
-        // BACKSTOP, SCOPED TO THIS RUN'S OWN VEHICLES. A red-proof once left an untracked StockItem
-        // behind — a refusal that stopped refusing created a second row this list never learned about —
-        // and the vehicle delete then failed on the RESTRICT, leaving both. Anything still pointing at
-        // a fixture vehicle goes, which cannot reach a real car because the ids came from this run.
-        // SCOPED TO THIS GATE'S OWN NAMING, not to what the run remembered making. A red-proof that
-        // breaks a refusal makes rows nothing tracked — a defaulted date once created ZZNODATE1 and
-        // left it behind. Every registration this gate can produce starts with one of these, and no
-        // real car does.
-        const fixtures = await prisma.vehicle.findMany({
-          /**
-           * THE PREFIXES THIS RUN CAN PRODUCE — including one it produces only when something is
-           * BROKEN. 'ZZNOSUCH' is the plate the find-only clause asks about and expects not to exist;
-           * a lookup that wrongly creates it leaves a car this teardown never learned about, which is
-           * exactly what happened when that clause was first red-proved. A backstop scoped to what the
-           * run REMEMBERED cannot remove what a broken path created — so it is scoped to the shapes
-           * the run can produce instead.
-           */
-          where: { group_id: ZZ_GROUP, OR: ['ZZSTK', 'ZZYARD', 'ZZNODATE', 'ZZNOSUCH'].map((x) => ({ registration: { startsWith: x } })) },
-          select: { id: true },
-        });
-        made.vehicles = [...new Set([...made.vehicles, ...fixtures.map((f) => f.id)])];
-        const orphans = await prisma.stockItem.deleteMany({
-          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } },
-        });
-        if (orphans.count) check('  …including a stock row the run did not track', true, `${orphans.count} swept`);
-
-        /**
-         * AND THE JOB CARDS, which the backstop did not sweep until 2026-09-15 and which are the other
-         * thing that can hold a fixture vehicle: JobCard.vehicle is onDelete NoAction, so ONE untracked
-         * card makes the vehicle delete throw P2003 and the whole teardown abandons — leaving every
-         * fixture behind for the next run to collide with. That is exactly what happened: an aborted
-         * run left 15 cars and 2 cards, and the next run failed on a VIN the previous one still owned.
-         *
-         * Scoped to the fixture vehicles, so it cannot reach a real card: those ids came from the
-         * prefix match above, and no real registration starts with them.
-         */
-        const strayCards = await prisma.jobCard.findMany({
-          where: { group_id: ZZ_GROUP, vehicle_id: { in: made.vehicles } }, select: { id: true },
-        });
-        if (strayCards.length) {
-          const ids = strayCards.map((c) => c.id);
-          await prisma.jobCardItem.deleteMany({ where: { job_card_id: { in: ids } } });
-          await prisma.auditLog.deleteMany({ where: { entity: 'job_card', entity_id: { in: ids } } }).catch(() => {});
-          const gone = await prisma.jobCard.deleteMany({ where: { id: { in: ids }, group_id: ZZ_GROUP } });
-          check('  …and a job card the run did not track', gone.count === ids.length, `${gone.count} swept`);
-        }
-        await prisma.vehicleOdometerReading.deleteMany({ where: { vehicle_id: { in: made.vehicles } } });
-        const v = await prisma.vehicle.deleteMany({ where: { id: { in: made.vehicles }, group_id: ZZ_GROUP } });
-        check('  …and the fixture vehicles', v.count === made.vehicles.length, `${v.count} of ${made.vehicles.length}`);
-      }
-      const left = await prisma.stockItem.count({ where: { group_id: ZZ_GROUP } });
-      check('ZZ holds no stock rows again', left === 0, `${left}`);
-    } catch (e) { check('teardown completed', false, describeError(e).slice(0, 200)); }
-  }
+  await sweepMade({ asserting: true });
   console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
   await prisma?.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);
