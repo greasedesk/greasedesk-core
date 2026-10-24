@@ -5,15 +5,13 @@
  * wording change happens in exactly one place. No other copy belongs here.
  */
 /**
- * ── THE ≠ IS A REAL CHARACTER, NOT A LIGATURE OR AN IMAGE ───────────────────────────────────────
- * U+2260 NOT EQUAL TO. It stays a text character so it inherits the weight, colour and size of the
- * lockup, stays selectable and searchable, and reads to a screen reader as "not equal to" rather
- * than as nothing. Verified before shipping (2026-08-10) by drawing it to a canvas and comparing
- * the pixels against '=' and against a private-use codepoint no font can have: distinct, non-empty
- * glyph in every family the site actually resolves to. There is NO webfont on this site — the stack
- * is system fonts only — so there is no brand font to fail to load.
+ * The strapline was 'Busy ≠ Profitable' until 2026-10-24, and the note that stood here explained
+ * at length why the ≠ was a real U+2260 character rather than an image — a decision proved by
+ * canvas pixel-comparison on 2026-08-10. It is deleted rather than kept as history because the
+ * strapline no longer contains that character, and a note whose premise has expired reads as a
+ * live constraint on whoever edits this next.
  */
-export const STRAPLINE = 'Busy ≠ Profitable';
+export const STRAPLINE = 'Less drag, more drive';
 export const SUBLINE = 'Manage your profit, not just your diary.';
 
 /**
