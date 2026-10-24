@@ -543,6 +543,56 @@ try {
     await staff.close();
   }
 
+  // ── A QUOTE WHOSE WORK IS ALL INSIDE OPTIONS ────────────────────────────────────────────────
+  // THE CASE THIS GATE DID NOT HAVE. Every fixture above carries a £1,200 main quote, so the
+  // totals block always had a real figure to print. A ladder dropped on the only line puts ALL the
+  // work inside options and leaves the main quote EMPTY — and the page printed `d.totals`
+  // regardless, so a real customer was sent a document reading "Subtotal £0.00 / Total £0.00"
+  // above a list of choices (TMBS, 19 Oct 2026, three versions of one card).
+  //
+  // The rule was never wrong: lib/quote-options returns `grandTotalPennies: null` for exactly this
+  // state. The PAGE did not read it. Built, correct, and unread.
+  console.log('\n— a quote with nothing in the main quote —');
+  const vehB = await prisma.vehicle.create({ data: { group_id: ZZ_GROUP, registration: `${XQ}02`, registration_normalized: `${XQ}02`, make: 'MINI', model: 'Cooper' }, select: { id: true } });
+  const cardB = await prisma.jobCard.create({ data: { group_id: ZZ_GROUP, site_id: site.id, customer_id: cust.id, vehicle_id: vehB.id, status: 'quoted' }, select: { id: true } });
+  const vB = await prisma.quoteVersion.create({ data: {
+    group_id: ZZ_GROUP, job_card_id: cardB.id, version: 1, status: 'sent',
+    // ZERO, because there is no main work. This is the shape, not a mistake in the fixture.
+    net_pennies: 0, vat_pennies: 0, gross_pennies: 0,
+    vat_registered: true, tax_label: 'VAT', created_by_user: user.id }, select: { id: true } });
+  const gB = await prisma.quoteOptionGroup.create({ data: { quote_version_id: vB.id, title: 'Oil Services', shape: 'pick_one', position: 0 }, select: { id: true } });
+  const oBronze = await mkOpt({ quote_version_id: vB.id, kind: 'addition', group_id: gB.id, position: 0, title: 'Bronze', net_pennies: 9900, vat_pennies: 1980, gross_pennies: 11880 });
+  const oSilver = await mkOpt({ quote_version_id: vB.id, kind: 'addition', group_id: gB.id, position: 1, title: 'Silver', net_pennies: 13900, vat_pennies: 2780, gross_pennies: 16680 });
+  await prisma.quoteVersionLine.createMany({ data: [
+    L({ quote_version_id: vB.id, option_id: oBronze.id, position: 0, description: 'Bronze', unit_price: 99, line_vat: 19.8, line_total: 99 }),
+    L({ quote_version_id: vB.id, option_id: oSilver.id, position: 1, description: 'Silver', unit_price: 139, line_vat: 27.8, line_total: 139 }),
+  ] });
+  const linkB = await createMagicLink({ groupId: ZZ_GROUP, jobCardId: cardB.id, purpose: 'quote_view', recipient: 'zzqo@example.invalid', baseUrl: origin });
+  await prisma.quoteVersion.update({ where: { id: vB.id }, data: { magic_link_id: linkB.id } });
+
+  const pB = await (await browser.newContext()).newPage();
+  await pB.goto(`${origin}/c/${linkB.rawToken}`, { waitUntil: 'domcontentloaded' });
+  await pB.waitForSelector('[data-testid="quote-options"]', { timeout: 60000 });
+  const bodyB = ((await pB.textContent('body')) ?? '').replace(/\s+/g, ' ');
+  check('THE CUSTOMER IS NEVER SHOWN A £0.00 TOTAL while a choice is open', !bodyB.includes('£0.00'),
+    bodyB.includes('£0.00') ? `the page prints £0.00: …${bodyB.slice(Math.max(0, bodyB.indexOf('£0.00') - 70), bodyB.indexOf('£0.00') + 20)}…` : 'no zero total anywhere');
+  check('  …the document says the total depends on the choice',
+    /Total depends on the option you choose/.test((await pB.textContent('[data-testid="total-unknown"]').catch(() => '')) ?? ''),
+    ((await pB.textContent('[data-testid="total-unknown"]').catch(() => 'ABSENT')) ?? 'ABSENT').trim());
+  check('  …and so does the running total beside the choices',
+    !!(await pB.locator('[data-testid="live-total-pending"]').count()),
+    `${await pB.locator('[data-testid="live-total"]').count()} figure(s) shown before a choice — expected 0`);
+  check('  …and the choices themselves ARE offered', (await pB.locator('[data-testid="option-row"] input[type=radio]').count()) === 2,
+    'suppressing the total must not suppress the options');
+
+  // THE DISCRIMINATOR. Without it every clause above passes against a page that simply never shows
+  // a total — which is a different wrong answer, and a worse one for a garage trying to sell.
+  await pB.locator(`[data-option="${oSilver.id}"] input`).check();
+  await pB.waitForFunction(() => !document.querySelector('[data-testid="live-total-pending"]'), { timeout: 10000 }).catch(() => {});
+  check('CHOOSING ONE BRINGS THE FIGURE BACK', (await pB.textContent('[data-testid="live-total"]').catch(() => null)) === '£166.80',
+    `${await pB.textContent('[data-testid="live-total"]').catch(() => '(still hidden)')} — Silver at £139 + VAT`);
+  await pB.context().close();
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {

@@ -56,9 +56,24 @@ type Props = {
   labels: DocumentLabels;
   /** Extra rows under the totals (e.g. the invoice's "less amount paid"). */
   children?: React.ReactNode;
+  /**
+   * ── THE TOTAL IS NOT YET KNOWABLE ──────────────────────────────────────────────────────────
+   * A quote whose choices are still open has NO single total — lib/quote-options returns
+   * `grandTotalPennies: null` for exactly that state. When this is set the whole totals block is
+   * replaced by this sentence.
+   *
+   * It exists because the page printed the main quote's figures instead, and a quote whose work
+   * all sits inside options has an EMPTY main quote: real customers were sent documents reading
+   * "Subtotal £0.00 / Total £0.00" above a list of choices. Zero is not "undecided", and of the
+   * two it is the one a customer will believe.
+   *
+   * NEVER pass this together with a figure. A number beside the word "depends" is the
+   * contradiction this prop exists to prevent.
+   */
+  totalsUnknown?: string;
 };
 
-export default function DocumentLines({ lines, totals, showVat, vatPresentation, currency, locale, labels, children }: Props) {
+export default function DocumentLines({ lines, totals, showVat, vatPresentation, currency, locale, labels, children, totalsUnknown }: Props) {
   // The VAT COLUMN goes with the totals. A row reading "20%" beside a margin total would be the
   // same false statement in a smaller font.
   const showVatCols = showVat && vatPresentation !== 'margin_scheme';
@@ -92,7 +107,9 @@ export default function DocumentLines({ lines, totals, showVat, vatPresentation,
 
       <div className="pt-4 border-t border-line flex justify-end">
         <div className="w-full sm:w-72 text-sm space-y-1">
-          {vatPresentation === 'margin_scheme' ? (
+          {totalsUnknown ? (
+            <p className="text-sm text-ink font-medium" data-testid="total-unknown">{totalsUnknown}</p>
+          ) : vatPresentation === 'margin_scheme' ? (
             /* ── A MARGIN SALE SHOWS ONE FIGURE AND NO VAT (lib/margin-scheme) ────────────────
                This is the page a customer opens from their link. The VAT exists inside the price
                and was accounted for on the MARGIN; showing it would state a figure never charged.

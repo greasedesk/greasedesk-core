@@ -219,6 +219,22 @@ export default function CustomerLinkPage(props: Props) {
   }
 
   const d = props.doc;
+  /**
+   * ── IS THERE A SINGLE TOTAL YET? ASK THE RULE, DO NOT RE-DERIVE IT ─────────────────────────
+   * lib/quote-options::printedQuote already answers this — `grandTotalPennies` is null exactly
+   * when a choice is open. Reading it here, rather than testing `options.length` locally, means
+   * the document and the chooser below cannot disagree about whether the price is settled.
+   *
+   * This page used to print `d.totals` regardless, and a quote whose work all sits inside options
+   * has an EMPTY main quote — so real customers were sent "Subtotal £0.00 / Total £0.00".
+   */
+  const docOptions = (d as { options?: unknown[] }).options ?? [];
+  const docGroups = (d as { optionGroups?: unknown[] }).optionGroups ?? [];
+  const totalIsOpen = docOptions.length > 0
+    && printedQuote(
+      { netPennies: d.totals.netPennies, vatPennies: d.totals.vatPennies, grossPennies: d.totals.grossPennies },
+      docGroups as never, docOptions as never,
+    ).grandTotalPennies === null;
   const expiry = new Date(d.expiresAt).toLocaleDateString(d.locale, { day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
@@ -299,6 +315,7 @@ export default function CustomerLinkPage(props: Props) {
               vatAt: (rate) => `${d.taxLabel} at ${rate}%`,
               totalVat: `Total ${d.taxLabel}`, grandTotal: 'Total', total: 'Total',
             }}
+            totalsUnknown={totalIsOpen ? 'Total depends on the option you choose.' : undefined}
           />
 
           <p className="mt-6 text-sm text-muted">
@@ -388,6 +405,15 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
     ? resolveSelection(main, optionGroups as any, opts as any, { byGroup })
     : null;
   const liveTotal = chosen?.ok ? chosen.resolution.displayGrossPennies : main.grossPennies;
+  /**
+   * ── £0.00 IS NOT "UNDECIDED" ────────────────────────────────────────────────────────────────
+   * With work still on the main quote, the running figure is useful before any choice is made: it
+   * is what they owe so far. With EVERY line inside an option the main quote is empty, so that
+   * same figure is £0.00 — and of "zero" and "not yet decided", zero is the one a customer
+   * believes. Show the sentence until they have chosen something.
+   */
+  const nothingChosenYet = !Object.values(byGroup).some((a) => Array.isArray(a) && a.length > 0);
+  const totalNotYetKnown = nothingChosenYet && (doc.lines?.length ?? 0) === 0;
   const printed = hasOptions ? printedQuote(main, optionGroups as any, opts as any) : null;
 
   if (outcome === 'accepted') {
@@ -504,7 +530,11 @@ function Respond({ token, doc }: { token: string; doc: SerializedDoc }) {
 
           <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
             <span className="text-sm font-semibold text-ink">Total with your choices</span>
-            <span className="text-lg font-semibold text-ink tabular-nums" data-testid="live-total">{money(liveTotal)}</span>
+            {totalNotYetKnown ? (
+              <span className="text-sm text-muted" data-testid="live-total-pending">Depends on the option you choose</span>
+            ) : (
+              <span className="text-lg font-semibold text-ink tabular-nums" data-testid="live-total">{money(liveTotal)}</span>
+            )}
           </div>
         </div>
       )}
