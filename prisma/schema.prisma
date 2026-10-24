@@ -405,6 +405,9 @@ model Group {
    * /**
    * /**
    * /**
+   * /**
+   * /**
+   * /**
    * WRITTEN THE WAY POSTGRES STORES IT, not the way it is nicest to type. Postgres normalises the
    * literal in a DEFAULT expression and adds the cast, so `'GB-GD'` comes back as `'GB-GD'::text`.
    * Prisma compares these as strings, so the tidier spelling made `migrate diff` propose re-setting
@@ -630,6 +633,8 @@ model Group {
   stock_number_sequences StockNumberSequence[]
   upload_telemetries     UploadTelemetry[]
   vin_read_shadows       VinReadShadow[]
+  tenantPlanTerms        TenantPlanTerms?
+  tenantAffiliateTerms   TenantAffiliateTerms?
 }
 
 /**
@@ -928,44 +933,74 @@ model Operator {
   updated_at           DateTime     @updatedAt
 }
 
+/// WHAT KIND OF PARTNER A `Rep` ROW IS.
+///
+/// LOWERCASE ON PURPOSE. CommissionEntry.party_type and TenantAttribution.party_type are `text`
+/// columns already carrying 'rep' (lib/attribution::PARTY_REP), so uppercase values here would be
+/// a second spelling of one concept — the enum saying REP while the ledger says rep. Those two
+/// columns are empty today and could be converted to this enum cheaply; that is a separate change
+/// and affiliate-gate pins the values agreeing until it happens.
+enum PartyType {
+  rep
+  affiliate
+  /// DESIGNED, NOT YET WRITTEN. docs/rep-system.md §2: a garage can attribute to a rep AND a
+  /// regional manager at once, with share_bp splitting one payment between them — and a regional
+  /// manager is an operator. Nothing writes it today, which is precisely why it has to be here:
+  /// the three columns converted to this enum were commented 'rep' | 'operator' while holding no
+  /// rows, so a two-value enum would have deleted the capability with nothing to notice.
+  operator
+}
+
 model Rep {
-  id               String  @id @default(uuid())
+  id                String    @id @default(uuid())
+  /// REP or AFFILIATE. One partner record, one set of ref codes, one ledger, one pay run — an
+  /// affiliate is a partner who introduces garages without the visit, the territory or the
+  /// invoice. Every invoice-shaped column below was ALREADY nullable, so an affiliate row needs
+  /// nothing relaxed.
+  party_type        PartyType @default(rep)
+  /// THE FACT, NOT THE DATE. 18+ is checked at join from a date of birth that is never stored:
+  /// we need to know they are old enough, not when they were born. NULL = not yet verified.
+  age_verified_at   DateTime?
+  find_method       String? // the join form's "how will you find garages" — NULL on a rep, who did not join that way
+  social_handle     String? // optional, affiliate only. NULL = not given, which is most of them
+  terms_accepted_at DateTime? // NULL = a rep, who signs no affiliate terms
+  suspended_at      DateTime? // NULL = not suspended. Suspension stops NEW attribution, never earned rewards
   /// THE CREDENTIAL ITSELF. There is no password: a rep signs in with a single-use magic link sent
   /// to this address, so whoever controls the mailbox controls the account. That is why a rep can
   /// NEVER change it — the change is operator-only, in the Engine Room, and audited.
-  email            String  @unique
-  name             String
-  ref_code         String  @unique // the `?ref=<code>` marketing token that attributes a signup
-  country_code     String  @default("GB")
+  email             String    @unique
+  name              String
+  ref_code          String    @unique // the `?ref=<code>` marketing token that attributes a signup
+  country_code      String    @default("GB")
   /// THE PUBLISHED CONTACT NUMBER, and deliberately not the login email's neighbour.
   /// NULL = this rep has not published a number, which is an ordinary state and not a missing
   /// field: a garage sees the line omitted rather than a placeholder, and no `tel:` is rendered.
   /// Written ONLY through lib/tenant-rep::repPhoneFields, which derives the dialable form the same
   /// way customerPhoneFields does — a number that is published is a number that gets dialled, so it
   /// is stored dialable rather than reformatted at every render.
-  phone            String? // NULL = no published number; the support page omits the line
+  phone             String? // NULL = no published number; the support page omits the line
   /// The dialable form of `phone`. NULL when there is no number, or when what was typed could not
   /// be resolved to E.164 — honest-null, in step with Customer.phone_e164: an unresolvable number
   /// is still shown to a human, it just cannot be made into a link.
-  phone_e164       String?
+  phone_e164        String?
   // ── THE PROFILE. Captured once, and it GATES THE FIRST INVOICE — except the UTR. ─────────────
   // Every column here is nullable and NULL MEANS "NOT YET GIVEN". That is the honest state for a
   // rep an operator created five minutes ago, and it is what makes "profile incomplete" DERIVABLE
   // rather than tracked by a second boolean somebody forgets to clear.
   /// The rep's full legal trading name, which heads their invoice. NULL = not yet given.
-  trading_name     String?
+  trading_name      String?
   /// NULL = not yet given. The address country is country_code above, not repeated here.
-  address_line1    String?
-  address_line2    String? // NULL = not given, and for most addresses that is simply true
-  address_locality String? // NULL = not yet given
-  address_region   String? // NULL = not yet given
-  address_postcode String? // NULL = not yet given
+  address_line1     String?
+  address_line2     String? // NULL = not given, and for most addresses that is simply true
+  address_locality  String? // NULL = not yet given
+  address_region    String? // NULL = not yet given
+  address_postcode  String? // NULL = not yet given
   /// THE ADDRESS THE REP PUBLISHES ON THEIR INVOICE, and deliberately not the login 'email' above.
   /// That address is the whole credential now that passwords are gone, and printing it on a document is
   /// publishing the credential — the exact mistake support-route-gate already catches one surface
   /// over, where a mailto: to Rep.email shipped on a garage's support card.
   /// NULL = none published; the invoice omits the line rather than printing a placeholder.
-  contact_email    String?
+  contact_email     String?
 
   // ── VAT: THREE STATES, BECAUSE "NOT ASKED" IS NOT "NO" ────────────────────────────────────────
   /// NULL = the rep has not answered, and the first invoice is REFUSED until they do.
@@ -1010,9 +1045,10 @@ model Rep {
   magic_links RepMagicLink[]
   invoices    RepInvoice[]
 
-  prospects_consent_by_rep Prospect[]      @relation("Prospect_consent_by_rep_id")
-  prospects_created_by_rep Prospect[]      @relation("Prospect_created_by_rep_id")
+  prospects_consent_by_rep Prospect[]             @relation("Prospect_consent_by_rep_id")
+  prospects_created_by_rep Prospect[]             @relation("Prospect_created_by_rep_id")
   prospect_visits          ProspectVisit[]
+  tenantAffiliateTerms     TenantAffiliateTerms[]
 }
 
 /**
@@ -1067,6 +1103,76 @@ model RepMagicLink {
 // effective_from ≤ T (the EmploymentEvent "value-at-T" rule). An amendment is a NEW forward row;
 // existing rows are NEVER updated, so historical commission is frozen at the rate in force when the
 // payment was collected. Amendable by Platform Owner in the SAP.
+/// WHAT EVERY GARAGE BOUGHT, FROZEN AT SIGNUP.
+///
+/// Written ONCE when the tenant is created and never updated: a settings change applies to new
+/// signups from that moment, and a garage keeps the terms it signed up under. Separate from
+/// TenantAffiliateTerms (owner, 2026-10-24) because NOT every garage is referred, and reward
+/// columns with a NOT NULL £0 on an unreferred garage would be a fake number at capture.
+///
+/// ── TRIAL OR PAY NOW, NEVER BOTH ──────────────────────────────────────────────────────────────
+/// Monthly carries a trial and pays nothing today; every annual shape pays immediately and has no
+/// trial — the trial IS the discount, taken once at the front. The CHECK makes that physical, so
+/// the next plan anyone adds has to answer the question rather than inherit a default.
+///
+/// RENEWAL IS NOT GOVERNED BY THIS ROW. It covers the term the garage bought; renewing is a fresh
+/// choice at the renewal setting in force then, which is why the reminders quote it live.
+model TenantPlanTerms {
+  id               String   @id @default(uuid())
+  group_id         String   @unique
+  /// 'monthly' | 'annual_new' | 'annual_offer' — the shape, not the price.
+  plan             String
+  months_paid      Int? // NULL on monthly: there is no "months paid for" on a rolling plan
+  months_given     Int? // NULL on monthly, for the same reason
+  paid_now_pennies Int? // NULL on monthly: nothing is taken at signup. NOT zero — zero is a payment of nothing
+  trial_days       Int? // NULL on every annual shape: there is no trial. NOT 0, which would read as a trial that ended instantly
+  signed_up_at     DateTime
+
+  group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+}
+
+/// ONLY A REFERRED GARAGE HAS ONE. No row = never referred, which is the honest absence and the
+/// reason this is not four more nullable columns on TenantPlanTerms.
+///
+/// The reward is frozen here and NOT read from a CommissionRate: a rate is effective-dated and
+/// resolved at COLLECTION, which is right for a rep, and wrong here — the owner's rule is that a
+/// garage keeps the terms it signed up under, and the affiliate is owed on those.
+model TenantAffiliateTerms {
+  id                   String   @id @default(uuid())
+  group_id             String   @unique
+  affiliate_id         String
+  total_reward_pennies Int
+  instalment_pennies   Int
+  signed_up_at         DateTime
+
+  group     Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  /// RESTRICT, not Cascade: deleting an affiliate must not silently erase what a garage was
+  /// referred under, which is the evidence behind every entry already in the ledger.
+  affiliate Rep   @relation(fields: [affiliate_id], references: [id], onDelete: Restrict)
+
+  @@index([affiliate_id])
+}
+
+/// THE ADMIN KNOBS, one row. Changing any of these affects signups FROM THAT MOMENT; every garage
+/// already signed up is protected by its own frozen TenantPlanTerms / TenantAffiliateTerms, not by
+/// anything here. The prices are DERIVED from these and the standard monthly price at the moment
+/// of signup, so changing a number never means creating a Stripe Price by hand.
+model ProgrammeSettings {
+  id                         String   @id @default("singleton")
+  /// THE one trial length, read by Checkout, by Group.trial_ends_at and by /llms.txt. It lived in
+  /// two hard-coded 60s kept in step by a comment saying one mirrored the other.
+  trial_days                 Int      @default(30)
+  new_annual_months_paid     Int      @default(9)
+  renewal_annual_months_paid Int      @default(10)
+  offer_months_paid          Int      @default(6)
+  months_given               Int      @default(12)
+  total_reward_pennies       Int      @default(12000)
+  instalment_pennies         Int      @default(3000)
+  minimum_payout_pennies     Int      @default(10000)
+  affiliate_signups_open     Boolean  @default(true)
+  updated_at                 DateTime @updatedAt
+}
+
 model CommissionRate {
   id             String   @id @default(uuid())
   country_code   String // ISO-2 (the tenant's tax_country_code)
@@ -1111,7 +1217,7 @@ model CommissionRate {
 model TenantAttribution {
   id             String    @id @default(uuid())
   group_id       String
-  party_type     String // 'rep' | 'operator'
+  party_type     PartyType
   party_id       String
   role           String // 'referrer' | 'regional'
   share_bp       Int
@@ -1162,7 +1268,7 @@ model CommissionRefusal {
 model CommissionEntry {
   id                      String                @id @default(uuid())
   group_id                String
-  party_type              String
+  party_type              PartyType
   party_id                String
   period                  String // 'YYYY-MM' — accrual: the payment's month; clawback: the refund's month
   kind                    String // 'accrual' | 'clawback'
@@ -1171,7 +1277,10 @@ model CommissionEntry {
    * Which revenue produced this entry — see CommissionRate.revenue_stream. 'subscription' today.
    */
   revenue_stream          String                @default("subscription")
-  rate_id                 String // FROZEN link to the CommissionRate applied
+  /// FROZEN link to the CommissionRate applied. NULL ONLY on an affiliate entry, whose amount is
+  /// frozen in TenantAffiliateTerms instead — a rate is resolved at collection, and an affiliate
+  /// is owed on the terms the garage signed up under. A CHECK keeps the rep invariant physical.
+  rate_id                 String?
   share_bp                Int
   amount_pennies          Int // + accrual, − clawback
   currency                String
@@ -1465,13 +1574,13 @@ model CommissionEntryNote {
  * shapes. NOT BUILT — no column on this model holds an answer, and none is implied by one.
  */
 model RepVisit {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   group_id         String // the garage. The commission is per tenant, so this is the axis that counts
   site_id          String // the screen that displayed the code — a scan always comes from somewhere
   /// PARTY, not rep_id. TenantAttribution already lets a garage attribute to a rep AND a regional
   /// manager at once, and a rep_id column would make the regional manager's visit unrecordable —
   /// a migration over evidence rather than over config. Same two columns, same spelling.
-  party_type       String // 'rep' | 'operator'
+  party_type       PartyType
   party_id         String
   scanned_at       DateTime // server time, never the phone's
   /// THE MONTH THIS VISIT PAYS FOR, frozen at write from the SITE's timezone. NULL = a genuine
@@ -1500,7 +1609,7 @@ model RepVisit {
   /// The operator who recorded it. NULL = it was scanned, so no operator acted — the same honest
   /// sentinel SuperAdminAudit.operator_user_id uses for actions the platform took by itself.
   recorded_by      String?
-  created_at       DateTime @default(now())
+  created_at       DateTime  @default(now())
 
   answer RepVisitAnswer?
   lead   RepLead?
