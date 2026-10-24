@@ -19,13 +19,14 @@ export type TenantPermissions = {
   standardEditPricing: boolean;    // STANDARD may edit estimates/pricing on job cards
   standardDiaryEntries: boolean;   // STANDARD may add/edit diary notes + create entries from the diary
   standardViewInvoices: boolean;   // STANDARD may open the Invoices (AR) view — amounts included, binary
+  standardNoCharge: boolean;       // STANDARD may close a job card as NO CHARGE (and reopen one)
   // Diary financial visibility, per role (ADMIN/owner always sees both — see financeVisibility).
   managerSeeValues: boolean; managerSeeMargin: boolean;
   standardSeeValues: boolean; standardSeeMargin: boolean;
 };
 
 const OFF: TenantPermissions = {
-  standardEditPricing: false, standardDiaryEntries: false, standardViewInvoices: false,
+  standardEditPricing: false, standardDiaryEntries: false, standardViewInvoices: false, standardNoCharge: false,
   managerSeeValues: false, managerSeeMargin: false, standardSeeValues: false, standardSeeMargin: false,
 };
 
@@ -35,6 +36,7 @@ export async function getTenantPermissions(groupId: string | null | undefined): 
     where: { id: groupId },
     select: {
       perm_standard_edit_pricing: true, perm_standard_diary_entries: true, perm_standard_view_invoices: true,
+      perm_standard_no_charge: true,
       perm_manager_see_values: true, perm_manager_see_margin: true,
       perm_standard_see_values: true, perm_standard_see_margin: true,
     },
@@ -42,7 +44,7 @@ export async function getTenantPermissions(groupId: string | null | undefined): 
   if (!g) return OFF;
   return {
     standardEditPricing: !!g.perm_standard_edit_pricing, standardDiaryEntries: !!g.perm_standard_diary_entries,
-    standardViewInvoices: !!g.perm_standard_view_invoices,
+    standardViewInvoices: !!g.perm_standard_view_invoices, standardNoCharge: !!g.perm_standard_no_charge,
     managerSeeValues: !!g.perm_manager_see_values, managerSeeMargin: !!g.perm_manager_see_margin,
     standardSeeValues: !!g.perm_standard_see_values, standardSeeMargin: !!g.perm_standard_see_margin,
   };
@@ -86,4 +88,19 @@ export function canViewInvoices(vis: Visibility, perms: TenantPermissions): bool
 // tenant toggle is on AND they're assigned to that site.
 export function canCreateDiaryEntry(vis: Visibility, siteId: string | null | undefined, perms: TenantPermissions): boolean {
   return canManageSite(vis, siteId) || (perms.standardDiaryEntries && canAccessSite(vis, siteId));
+}
+
+/**
+ * Close a card as NO CHARGE (or reopen one) at `siteId`.
+ *
+ * Same shape as canEditEstimate, and deliberately so: managers and admins have it from the ROLE
+ * model, and the tenant toggle only relaxes the STANDARD boundary. Composed with canAccessSite, so
+ * a toggle can never hand anybody a site they are not on — closing someone else's card without
+ * billing it is precisely the thing a cross-site leak should not enable.
+ *
+ * REOPEN TAKES THE SAME PERMISSION, by the owner's ruling: whoever may decide not to charge may
+ * also decide that was wrong.
+ */
+export function canCloseNoCharge(vis: Visibility, siteId: string | null | undefined, perms: TenantPermissions): boolean {
+  return canManageSite(vis, siteId) || (perms.standardNoCharge && canAccessSite(vis, siteId));
 }

@@ -114,7 +114,15 @@ try {
   console.log('\n— and never inside the transaction —');
   const src = readFileSync('pages/api/jobcard-status.ts', 'utf8');
   const refreshAt = src.indexOf('refreshMotForMint(');
-  const txAt = src.indexOf('prisma.$transaction(');
+  // THE MINT'S TRANSACTION, not the first one in the file. `indexOf('prisma.$transaction(')` meant
+  // "whichever transaction appears earliest", and on 2026-10-24 a no-charge closure added one
+  // ABOVE the mint — a transaction with no HTTP call in it, which this clause then measured and
+  // failed on. One string, two subjects. The subject is the tx that CONTAINS the mint, so it is
+  // found from the mint backwards.
+  const mintAt = src.indexOf('issueInvoiceForCard(');
+  const txAt = src.lastIndexOf('prisma.$transaction(', mintAt);
+  check('premise: the mint and its transaction are both still in this file', mintAt > 0 && txAt > 0,
+    `mint at ${mintAt}, its tx at ${txAt} — if either is -1 the clause below compares nothing`);
   check('the caller refreshes BEFORE opening the transaction', refreshAt > 0 && refreshAt < txAt,
     `refresh at ${refreshAt}, transaction at ${txAt} — a lookup inside the tx holds a pooled connection across DVSA`);
   check('  …and the mint module itself makes no network call',

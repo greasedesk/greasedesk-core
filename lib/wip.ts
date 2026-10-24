@@ -16,6 +16,9 @@ export const WIP_STATUSES = statusSubset({
   draft: false, quoted: false, declined: false,
   accepted: true, in_progress: true,
   invoiced: false, paid: false, done: false, cancelled: false, no_show: false,
+  // NOT work in progress: it is finished, and it will never be billed. Counting it would put
+  // money in the tile that nobody is ever going to collect.
+  no_charge: false,
 });
 export const WIP_AGE_DAYS = 14; // a card open longer than this is the actual problem — surfaced, not hidden
 

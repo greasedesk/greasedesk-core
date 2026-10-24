@@ -38,6 +38,7 @@ import { statusSubset, type JobStatus } from '@/lib/jobcard-status';
 export const OPEN_FOR_DUPLICATE: JobStatus[] = statusSubset({
   draft: true, quoted: true, accepted: true, in_progress: true,
   invoiced: false, paid: false, done: false,
+  no_charge: false, // closed — duplicate it the same way you would duplicate a finished job
   declined: false, cancelled: false,
   no_show: false, // rebooking a no-show is the commonest legitimate second card
 });

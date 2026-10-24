@@ -61,11 +61,14 @@ export const SPINE_PROVES_ACCEPTANCE = statusSubset({
   draft: false, quoted: false, declined: false,
   accepted: true, in_progress: true, invoiced: true, paid: true, done: true,
   cancelled: false, no_show: false,
+  // Reachable from `declined` as well as from `in_progress`, so the status alone proves nothing.
+  no_charge: false,
 });
 export const SPINE_AMBIGUOUS_ACCEPTANCE = statusSubset({
   draft: false, quoted: false, declined: false,
   accepted: false, in_progress: false, invoiced: false, paid: false, done: false,
   cancelled: true, no_show: true,
+  no_charge: true,  // the prior status knows; the spine does not
 });
 
 /**

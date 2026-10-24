@@ -19,7 +19,7 @@ import { prisma } from '@/lib/db';
 import { jobTotals, sessionState, sessionMinutes, type ClockSessionRow } from '@/lib/job-clock';
 import { getVisibility } from '@/lib/site-visibility';
 import { canManageSite, canAccessSite } from '@/lib/admin-guard';
-import { getTenantPermissions, canEditEstimate, canIssueInvoice, financeVisibility } from '@/lib/permissions';
+import { getTenantPermissions, canEditEstimate, canIssueInvoice, canCloseNoCharge, financeVisibility } from '@/lib/permissions';
 import { canEditInvoice, invoiceTotals } from '@/lib/invoice';
 import { offersPayLink } from '@/lib/invoice-pay-link';
 import { refundState } from '@/lib/invoice-refund-state';
@@ -300,6 +300,9 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
   const canOperate = canAccessSite(vis, row.site_id);
   const canEditPricing = canEditEstimate(vis, row.site_id, perms);
   const canIssue = canIssueInvoice(vis, row.site_id); // canManage OR the per-user can_invoice grant
+  // Re-derived here from role + tenant toggle, and again in pages/api/jobcard-status. The prop
+  // only decides whether the control is OFFERED; the endpoint decides whether it is allowed.
+  const canNoCharge = canCloseNoCharge(vis, row.site_id, perms);
 
   // QUOTE FROZEN — the state the browser never had. canEditPricing is a PERMISSION; this is the
   // freeze-at-issue lock, and without it the client could not tell the difference: the autosave, the
@@ -709,7 +712,7 @@ export async function buildJobCardPageProps(userId: string, groupId: string, car
     createdAt: row.created_at.toISOString(),
     status: row.status,
     jobCardId: row.id,
-    canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, quoteFrozen,
+    canEdit, canEditPricing, canOperate, canIssueInvoice: canIssue, canCloseNoCharge: canNoCharge, quoteFrozen,
     quoteSendBlockedReason,
     acceptanceNote, acceptanceLabel, agreedVersionFix,
     quoteSupersededNoLink,

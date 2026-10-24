@@ -82,7 +82,8 @@
     "paid": "Paid",
     "done": "Done",
     "cancelled": "Cancelled",
-    "no_show": "No-show"
+    "no_show": "No-show",
+    "no_charge": "No charge"
   },
   "action": {
     "quoted": "Mark as quoted",
@@ -513,6 +514,27 @@
       "above_max": "Over max",
       "prompt": "Where is it on the dipstick?",
       "recorded": "Recorded: {{level}}"
+    }
+  },
+  "noCharge": {
+    "title": "Close without charging",
+    "hint": "Finishes the card and keeps everything on it — intake, instructions, photos, hours and parts. No invoice number is used and nothing is billed.",
+    "chooseReason": "Choose a reason",
+    "close": "Close as no charge",
+    "closed": "Closed — no charge",
+    "closedAs": "Closed as no charge — {{reason}}",
+    "reopen": "Reopen this card",
+    "reopenHint": "Returns the card to {{status}}, where it was before it was closed.",
+    "blockedByInvoice": "This card has invoice {{number}}, so it cannot be closed as no charge.",
+    "noPermission": "You do not have permission to close a card without charging for it.",
+    "suggested": "Suggested because the quote was declined.",
+    "reason": {
+      "comeback_rework": "Comeback / rework",
+      "warranty": "Warranty",
+      "goodwill": "Goodwill",
+      "internal": "Internal (own vehicle, courtesy car, sales prep)",
+      "inspection_only": "Inspection only",
+      "inspection_for_quote": "Inspection for a quote (declined)"
     }
   }
 }

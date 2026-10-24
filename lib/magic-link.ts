@@ -280,7 +280,10 @@ export async function resolveMagicLink(
  * operator can pass it on by hand, and revoking there would remove value the product promises. The
  * two invoice paths hand back nothing, so there the link is litter.
  */
-export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | 'no_show' | 'unsent' | null;
+// `no_charge` joins the terminal reasons (2026-10-24): a card finished without being billed is
+// finished, and a finished card still serving a live quote is how a declined job kept an
+// acceptable link. quote-closure-gate refuses to let any terminal status go unaccounted for.
+export type RevokeReason = 'superseded' | 'invoiced' | 'declined' | 'cancelled' | 'no_show' | 'no_charge' | 'unsent' | null;
 
 /** Kill one link (sent to the wrong address). Idempotent. */
 export async function revokeMagicLink(id: string, reason: RevokeReason): Promise<void> {

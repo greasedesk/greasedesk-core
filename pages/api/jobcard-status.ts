@@ -15,6 +15,8 @@ import { canAccessSite, canManageSite, requireCanWrite, requireTenantApi } from 
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus, isBookedCard, stagesRemaining } from '@/lib/jobcard-status';
+import { refuseNoCharge, refuseReopen } from '@/lib/no-charge';
+import { getTenantPermissions, canCloseNoCharge } from '@/lib/permissions';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
 import { refreshMotForMint } from '@/lib/mot-mint-refresh';
 import { revokeMagicLinksForCard } from '@/lib/magic-link';
@@ -36,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!scope) return;
   const user = { id: scope.userId, group_id: scope.groupId };
 
-  const { jobCardId, to, paymentMethodId, datePaid } = (req.body || {}) as { jobCardId?: string; to?: JobStatus; paymentMethodId?: string; datePaid?: string };
+  const { jobCardId, to, paymentMethodId, datePaid, noChargeReason } = (req.body || {}) as { jobCardId?: string; to?: JobStatus | 'reopen_no_charge'; paymentMethodId?: string; datePaid?: string; noChargeReason?: unknown };
   if (!jobCardId || !to) return res.status(400).json({ message: 'Missing jobCardId or target status.' });
 
   const card = (await prisma.jobCard.findFirst({
@@ -49,6 +51,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // The booking fact, for the booking_exists gate — the same three fields isBookedCard reads.
       resource_id: true, start_at: true, end_at: true,
       _count: { select: { items: true } },
+      no_charge_prior_status: true, no_charge_reason: true,
+      // ANY invoice, in ANY state. A void retires the number and RETAINS the document, so a card
+      // whose invoice was voided is not an uninvoiced card — see lib/no-charge::refuseNoCharge.
+      invoice: { select: { invoice_number: true, status: true } },
     },
   })) as any;
   if (!card) return res.status(404).json({ message: 'Job card not found.' });
@@ -56,7 +62,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Comebacks stay ON the linear spine (ruling 2026-07-06 — supersedes the earlier invoiced-block +
   // the comeback-only in_progress→done bypass): they reach `invoiced` like any card, but never mint
   // from the CHARGEABLE sequence (see the numbering guard below).
-  const tr = findTransition(card.status as JobStatus, to);
+  /**
+   * ── THE TWO NO-CHARGE DOORS ─────────────────────────────────────────────────────────────────
+   * Handled BEFORE findTransition, because `reopen_no_charge` is not a status and the way back
+   * from `no_charge` is "to whatever it was", which a from→to table cannot express.
+   *
+   * Both are enforced HERE rather than in the UI. A hidden button is not a guard, and the gate
+   * drives this endpoint directly as a STANDARD user to say so.
+   */
+  if (to === 'no_charge' || to === 'reopen_no_charge') {
+    const visNC = await getVisibility(scope.userId);
+    const permsNC = await getTenantPermissions(user.group_id);
+    const may = canCloseNoCharge(visNC, card.site_id, permsNC);
+    const refusal = to === 'no_charge'
+      ? refuseNoCharge({ status: card.status, reason: noChargeReason, invoice: card.invoice ?? null, permitted: may })
+      : refuseReopen({ status: card.status, priorStatus: card.no_charge_prior_status, permitted: may });
+    if (refusal) {
+      const code = refusal.code === 'not_permitted' ? 403 : refusal.code === 'already_invoiced' ? 409 : 400;
+      return res.status(code).json({ code: refusal.code, message: refusal.message });
+    }
+    const restoredTo = card.no_charge_prior_status as JobStatus | null;
+    await prisma.$transaction(async (tx) => {
+      if (to === 'no_charge') {
+        await tx.jobCard.update({ where: { id: jobCardId }, data: {
+          status: 'no_charge', no_charge_reason: noChargeReason as never,
+          no_charge_at: new Date(), no_charge_by: scope.userId,
+          // The status it HELD. Reopen restores this rather than a fixed destination: a card
+          // closed out of `declined` must not come back as live work.
+          no_charge_prior_status: card.status,
+        } });
+        /**
+         * AND THE CUSTOMER'S LINK DIES WITH IT — the same thing `cancelled` and `no_show` do.
+         * A card closed as no charge is finished, and a finished card still serving a live quote
+         * is how MJ71ZNU ended up with a declined job whose customer could still accept. Caught
+         * by quote-closure-gate, which refuses to let any terminal status go UNACCOUNTED.
+         */
+        await revokeMagicLinksForCard(jobCardId, 'no_charge', tx);
+        await writeAudit(tx, { groupId: user.group_id, userId: scope.userId, jobCardId,
+          action: 'jobcard.no_charge_closed', diff: { reason: noChargeReason, priorStatus: card.status } });
+      } else {
+        await tx.jobCard.update({ where: { id: jobCardId }, data: {
+          status: restoredTo as never,
+          // The closure is OVER, so its columns are cleared — the AuditLog keeps every cycle, and
+          // leaving a stale reason on a reopened card would have it counted as free work twice.
+          no_charge_reason: null, no_charge_at: null, no_charge_by: null, no_charge_prior_status: null,
+        } });
+        await writeAudit(tx, { groupId: user.group_id, userId: scope.userId, jobCardId,
+          action: 'jobcard.no_charge_reopened', diff: { restoredTo, reason: card.no_charge_reason } });
+      }
+    });
+    return res.status(200).json({ ok: true, status: to === 'no_charge' ? 'no_charge' : restoredTo });
+  }
+
+  const tr = findTransition(card.status as JobStatus, to as JobStatus);
   if (!tr) return res.status(400).json({ message: `Cannot move from ${card.status} to ${to}.` });
 
   const vis = await getVisibility(scope.userId);

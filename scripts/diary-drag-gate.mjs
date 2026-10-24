@@ -91,7 +91,7 @@ try {
 
   // ── WHICH SLOTS ARE RECORDS ───────────────────────────────────────────────────────────────────
   console.log('\n— a finished or abandoned slot is a record, not a plan —');
-  const WANT_MOVABLE = { draft: true, quoted: true, accepted: true, in_progress: true, invoiced: false, paid: false, done: false, declined: false, cancelled: false, no_show: false };
+  const WANT_MOVABLE = { draft: true, quoted: true, accepted: true, in_progress: true, invoiced: false, paid: false, done: false, declined: false, cancelled: false, no_show: false, no_charge: false };
   for (const s of ST.JOB_STATUSES) {
     check(`${s} ${WANT_MOVABLE[s] ? 'CAN' : 'cannot'} be moved`, ST.canMoveBooking(s) === WANT_MOVABLE[s]);
   }
@@ -101,7 +101,10 @@ try {
   check('a car ON THE LIFT can still be moved to another lift', ST.canMoveBooking('in_progress'),
     'it happens physically, so it must happen on the board');
   console.log('\n— and the refusal names the door that works —');
-  const WANT_DOOR = { invoiced: null, paid: null, done: null, declined: 'accept', cancelled: 'reopen', no_show: 'reopen' };
+  // no_charge's door is NOT derived from the transition table — reopen_no_charge restores the
+  // status the card held, which a from→to table cannot say. lib/jobcard-status states it, and
+  // this is the clause that would catch it being quietly dropped back to null.
+  const WANT_DOOR = { invoiced: null, paid: null, done: null, declined: 'accept', cancelled: 'reopen', no_show: 'reopen', no_charge: 'reopen' };
   for (const [st, want] of Object.entries(WANT_DOOR)) {
     check(`${st} → ${want ?? 'no door: the work is finished'}`, ST.reBookingDoor(st) === want, String(ST.reBookingDoor(st)));
   }

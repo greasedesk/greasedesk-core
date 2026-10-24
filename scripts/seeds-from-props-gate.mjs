@@ -53,6 +53,8 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 // Key is file:stateName — never a line number, which moves for reasons that have nothing to do
 // with the rule. The reason has to say which KIND of seed it is.
 const DECLARED = {
+  'components/jobcard/JobCardWorkspace.tsx:ncReason':
+    'the SUGGESTED no-charge reason for an action not yet taken, not a seed of a saved value — nothing on the card holds a reason until the close happens, and once it does the control is gone (the panel only renders while status !== no_charge). A declined card suggests inspection_for_quote; everything else suggests nothing, because a default here would be a reason nobody chose',
   'components/jobcard/BatteryCapture.tsx:ratedCca':
     'carried-forward HINT for a new reading (last known rating), not this card’s saved value — the saved one is displayed by BatterySummary and is never re-edited here',
   'components/jobcard/BatteryCapture.tsx:std':

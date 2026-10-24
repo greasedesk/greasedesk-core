@@ -7,7 +7,7 @@
  */
 export type JobStatus =
   | 'draft' | 'quoted' | 'accepted' | 'declined'
-  | 'in_progress' | 'invoiced' | 'paid' | 'done' | 'cancelled' | 'no_show';
+  | 'in_progress' | 'invoiced' | 'paid' | 'done' | 'cancelled' | 'no_show' | 'no_charge';
 
 // operational = any site-assigned user (incl. STANDARD mechanics); commercial = manager/admin only.
 export type TransitionKind = 'operational' | 'commercial';
@@ -17,7 +17,7 @@ export type TransitionGate = 'estimate_exists' | 'all_stages_done' | 'booking_ex
 export type Transition = { to: JobStatus; kind: TransitionKind; gate?: TransitionGate };
 
 export const JOB_STATUSES: JobStatus[] = [
-  'draft', 'quoted', 'accepted', 'declined', 'in_progress', 'invoiced', 'paid', 'done', 'cancelled', 'no_show',
+  'draft', 'quoted', 'accepted', 'declined', 'in_progress', 'invoiced', 'paid', 'done', 'cancelled', 'no_show', 'no_charge',
 ];
 
 /**
@@ -62,6 +62,10 @@ export const FREES_THE_SLOT: JobStatus[] = statusSubset({
   invoiced: false, paid: false, done: false,
   declined: true, cancelled: true,
   no_show: true, // the customer is not coming; a walk-in should take the lift
+  // The car came in and the work was done; nobody was billed for it. The lift was OCCUPIED,
+  // and a free inspection that freed its own slot would make the day look emptier than it was —
+  // which is the opposite of what counting unpaid time is for.
+  no_charge: false,
 });
 
 /** Statuses whose card does not RENDER on the board — the DISPLAY question (lib/diary-day; also
@@ -73,6 +77,9 @@ export const HIDDEN_FROM_DIARY: JobStatus[] = statusSubset({
   invoiced: false, paid: false, done: false,
   declined: true, cancelled: true,
   no_show: false,
+  // RENDERS, for the same reason no_show does: that time genuinely happened. A free
+  // inspection vanishing from the board would hide the hours it actually cost.
+  no_charge: false,
 });
 
 // FAIL AT BOOT, not at the first un-bookable slot. (Both lists are statusSubset-total, so a new
@@ -104,6 +111,7 @@ export const SLOT_IS_HISTORY: JobStatus[] = statusSubset({
   invoiced: true, paid: true, done: true,        // the work is finished; when it happened is a fact
   declined: true, cancelled: true,               // the slot is kept as the record of what was booked
   no_show: true,                                 // that hour died at that hour
+  no_charge: true,  // finished, and when it happened is a fact like any other
 });
 
 // FAIL AT BOOT, not at the first card that moves when it should not. A status that no longer
@@ -139,6 +147,18 @@ export type ReBookingDoor = 'accept' | 'reopen' | null;
 
 export function reBookingDoor(status: JobStatus | string): ReBookingDoor {
   if (canMoveBooking(status)) return null;  // already movable — there is nothing to reopen
+  /**
+   * THE ONE STATUS NOT DERIVED FROM THE TABLE, and it is an exception worth naming rather than
+   * hiding. `no_charge` exits through `reopen_no_charge`, which restores
+   * JobCard.no_charge_prior_status — a from→to table cannot express "back to wherever it came
+   * from", so there is deliberately no transition to read and the derivation returns nothing.
+   *
+   * Returning null here would be a LIE: the card has a Reopen button. So the one word is stated,
+   * and the two-step nature — reopen, then whatever door the restored status has — is left to the
+   * screen. If `reopen_no_charge` ever becomes a real transition, delete this and the derivation
+   * will answer on its own again.
+   */
+  if (status === 'no_charge') return 'reopen';
   const exits = nextTransitions(status as JobStatus).map((tr) => tr.to);
   if (exits.includes('accepted')) return 'accept';
   if (exits.includes('draft')) return 'reopen';
@@ -169,12 +189,20 @@ export function isBookedCard(card: { resource_id: string | null; start_at: Date 
 // no-show, and the table refuses it rather than anyone remembering it — and only on a card that
 // actually held a slot (the booking_exists gate). One exit, like cancelled: reopen to draft, for
 // the customer who turns up an hour late or the mis-click.
+/**
+ * `no_charge` is reachable from every status that has not been invoiced, and leads NOWHERE: the
+ * way back is `reopen_no_charge`, which restores JobCard.no_charge_prior_status rather than
+ * picking a fixed destination. It is deliberately not a transition — a from→to table cannot
+ * express "back to wherever it came from", and faking it with a default would reopen a declined
+ * card into live work.
+ */
 const TRANSITIONS: Record<JobStatus, Transition[]> = {
-  draft: [{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
-  quoted: [{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
-  declined: [{ to: 'accepted', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }], // declined → accepted = reopen
-  accepted: [{ to: 'in_progress', kind: 'operational' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
-  in_progress: [{ to: 'invoiced', kind: 'commercial', gate: 'all_stages_done' }, { to: 'cancelled', kind: 'commercial' }],
+  no_charge: [],
+  draft: [ { to: 'no_charge', kind: 'commercial' },{ to: 'quoted', kind: 'commercial', gate: 'estimate_exists' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
+  quoted: [ { to: 'no_charge', kind: 'commercial' },{ to: 'accepted', kind: 'commercial' }, { to: 'declined', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
+  declined: [ { to: 'no_charge', kind: 'commercial' },{ to: 'accepted', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }], // declined → accepted = reopen
+  accepted: [ { to: 'no_charge', kind: 'commercial' },{ to: 'in_progress', kind: 'operational' }, { to: 'cancelled', kind: 'commercial' }, { to: 'no_show', kind: 'commercial', gate: 'booking_exists' }],
+  in_progress: [ { to: 'no_charge', kind: 'commercial' },{ to: 'invoiced', kind: 'commercial', gate: 'all_stages_done' }, { to: 'cancelled', kind: 'commercial' }],
   invoiced: [{ to: 'paid', kind: 'commercial' }, { to: 'cancelled', kind: 'commercial' }],
   paid: [{ to: 'done', kind: 'commercial' }],
   done: [],
@@ -211,6 +239,9 @@ const PAY_STATE_BY_STATUS: Record<JobStatus, PaymentState> = {
   in_progress: 'unpaid', cancelled: 'unpaid', no_show: 'unpaid',
   invoiced: 'invoiced',
   paid: 'paid', done: 'paid',
+  // `settled` already means exactly this elsewhere: £0, closed, never collects, never AR —
+  // the warranty terminal. A no-charge card is not `unpaid`, because nothing is owed.
+  no_charge: 'settled',
 };
 
 export function paymentState(status: JobStatus | string, isComeback = false): PaymentState {

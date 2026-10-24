@@ -76,6 +76,7 @@ type Props = {
   tabsState: Record<TabKey, TabState>;
   canManage: boolean;     // commercial (status/accept/booking/invoice)
   canIssueInvoice: boolean; // may RAISE the invoice (in_progress→invoiced) — canManage OR the per-user grant
+  canCloseNoCharge: boolean; // may finish a card WITHOUT billing it — role, or the tenant's STANDARD toggle
   canOperate: boolean;    // operational (stage ticks, notes, mileage, start work)
   canEditPricing: boolean;
   quoteFrozen: boolean; // freeze-at-issue: the invoice's lines exist, so the estimate is locked
@@ -403,6 +404,9 @@ export default function JobCardWorkspace(p: Props) {
   // costed parts line exists; null-cost lines are excluded (unknown ≠ zero) and flagged incomplete.
   type PreIssue = { flags: Array<{ i: number; l: EstimateLine; flags: ReturnType<typeof lineFlags> }>; pp: ReturnType<typeof partsProfit>; loss: boolean };
   const [preIssue, setPreIssue] = useState<PreIssue | null>(null);
+  // Seeded from the card's own state: a declined card suggests inspection_for_quote and nothing
+  // else suggests anything. lib/no-charge::suggestedReason is the same rule, server-side.
+  const [ncReason, setNcReason] = useState<string>(p.status === 'declined' ? 'inspection_for_quote' : '');
   const startMint = () => {
     const live = estimateRef.current?.lines() ?? p.lines;
     const flags = live.map((l, i) => ({ i, l, flags: lineFlags(toPlausible(l), { postedLabourRate: p.labourRate ?? null }) })).filter((x) => x.flags.length > 0);
@@ -722,6 +726,40 @@ export default function JobCardWorkspace(p: Props) {
         <button disabled={busy !== null} onClick={() => setStatus('in_progress')} className="w-full sm:w-auto text-sm rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">{t('action.in_progress')}</button>
       </>
     );
+    /**
+     * ── CLOSE WITHOUT CHARGING ──────────────────────────────────────────────────────────────
+     * Offered only where it is actually possible: no invoice on the card, the user has the
+     * permission, and the card is not already closed this way. The SERVER refuses all three
+     * again — a hidden control is not a guard, and no-charge-gate drives the endpoint directly
+     * as a STANDARD user to prove it.
+     *
+     * The reason is NOT pre-selected except on a declined card, where the quote coming back no
+     * makes inspection_for_quote the case by construction. Everywhere else a default would be a
+     * reason nobody chose, and these are the numbers the free-inspection report gets built from.
+     */
+    const ncReasons = ['comeback_rework', 'warranty', 'goodwill', 'internal', 'inspection_only', 'inspection_for_quote'] as const;
+    const ncSuggested = eff.status === 'declined' ? 'inspection_for_quote' : '';
+    const noChargePanel = !eff.invoice && p.canCloseNoCharge && !inactive && eff.status !== 'no_charge' && (
+      <div className="border-t border-line pt-4 mt-4" data-testid="no-charge">
+        <p className="text-sm font-medium text-ink">{t('noCharge.title')}</p>
+        <p className="text-xs text-muted mt-0.5">{t('noCharge.hint')}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select value={ncReason} data-testid="no-charge-reason"
+            onChange={(e) => setNcReason(e.target.value)}
+            className="bg-surface border border-line rounded-lg px-2 py-2 text-sm text-ink">
+            <option value="">{t('noCharge.chooseReason')}</option>
+            {ncReasons.map((r) => <option key={r} value={r}>{t(`noCharge.reason.${r}`)}</option>)}
+          </select>
+          <button type="button" data-testid="no-charge-close" disabled={busy !== null || !ncReason}
+            onClick={() => run('no-charge', postJSON('/api/jobcard-status', { jobCardId: p.jobCardId, to: 'no_charge', noChargeReason: ncReason }), { status: 'no_charge' })}
+            className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-surface border border-line text-ink disabled:opacity-50">
+            {t('noCharge.close')}
+          </button>
+          {ncSuggested && ncReason === ncSuggested && <span className="text-xs text-muted basis-full">{t('noCharge.suggested')}</span>}
+        </div>
+      </div>
+    );
+
     const stagesRemainingMsg = !allAdvanced && preInvoice && !inactive && (
       <p className="text-sm text-muted">{t('invoiceTab.stagesRemaining', { list: remaining.map((k) => t(`tab.${tabForStage(k)}`)).join(', ') })}</p>
     );
@@ -899,6 +937,7 @@ export default function JobCardWorkspace(p: Props) {
               <button disabled={busy !== null} onClick={openPay} data-testid="invoice-mark-paid" className="w-full sm:w-auto text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">{t('action.paid')}</button>
             )}
             {payPanel}
+            {noChargePanel}
             {stagesRemainingMsg}
           </>
         ) : eff.invoice ? (

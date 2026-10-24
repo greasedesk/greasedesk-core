@@ -197,6 +197,7 @@ export function quotePriceUnconfirmed(
 export const QUOTE_CLOSED_CARD_STATUSES = statusSubset({
   draft: false, quoted: false, accepted: false, declined: false, in_progress: false,
   invoiced: true, paid: true, done: true, cancelled: true,
+  no_charge: true, // the card is finished; the quote is not waiting on anyone
   no_show: true, // a no-show ends the conversation the same way a cancellation does
 });
 

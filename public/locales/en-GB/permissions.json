@@ -38,5 +38,9 @@
   "viewInvoices": {
     "label": "Standard users can view Invoices",
     "desc": "Opens the Invoices list (numbers, customers and amounts — the accounts view) to standard users at their assigned locations. Managers and admins always see it."
+  },
+  "noCharge": {
+    "label": "Mechanics can close a job as no charge",
+    "desc": "Lets a standard user finish a job card without billing it — a comeback, warranty work, a courtesy car or an inspection that did not convert. No invoice number is used. Managers and admins can always do this."
   }
 }

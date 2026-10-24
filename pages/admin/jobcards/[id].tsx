@@ -75,6 +75,7 @@ type PageProps = {
   quoteHasAcceptedVersion: boolean;
   priceUnconfirmed: { agreedVersion: number; agreedPennies: number; sentVersion: number; sentPennies: number; differencePennies: number } | null;
   canIssueInvoice: boolean;
+  canCloseNoCharge: boolean;
   priceVisible: boolean;
   costVisible: boolean;
   canOperate: boolean;
@@ -167,6 +168,7 @@ export default function JobCardDetailPage(props: PageProps) {
         tabsState={props.tabsState}
         canManage={props.canEdit}
         canIssueInvoice={props.canIssueInvoice}
+        canCloseNoCharge={props.canCloseNoCharge}
         priceVisible={props.priceVisible}
         costVisible={props.costVisible}
         canOperate={props.canOperate}

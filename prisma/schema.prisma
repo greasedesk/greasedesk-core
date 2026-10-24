@@ -73,6 +73,32 @@ enum JobCardStatus {
   done
   cancelled
   no_show
+  /// CLOSED, FINISHED, AND NEVER BILLED. Some cards exist only to direct a mechanic and hold
+  /// intake — a comeback, a courtesy car, an inspection that did not convert. Until this existed
+  /// the only way to FINISH a card was to invoice it, and TMBS spent chargeable number 100003331
+  /// on a £0 document with no lines: a number out of a gapless statutory series, consumed to
+  /// close a card nobody was ever going to bill.
+  ///
+  /// NOT `cancelled`: the work happened and the grain is kept — intake, instructions, photos,
+  /// hours, parts. NOT `done` either, which sits downstream of an invoice. The reason, the actor
+  /// and the status it is reopened to live on JobCard; every close and reopen is an AuditLog row.
+  no_charge
+}
+
+/// WHY A CARD WAS CLOSED WITHOUT A BILL. A KEY, never English: these are counted, translated and
+/// occasionally renamed, and a display string in this column makes all three a migration.
+enum NoChargeReason {
+  comeback_rework
+  warranty
+  goodwill
+  /// Own vehicle, courtesy car, car-sales prep — the garage's own cost, not a gift to a customer.
+  internal
+  inspection_only
+  /// THE ONE WITH A CONVERSION RATE. Inspection, findings and quote live on ONE card: if the quote
+  /// is accepted the work continues here and is invoiced with the inspection time included, and if
+  /// it is declined the card closes under this reason. There is no inspection fee — free is free —
+  /// so this key is the only record that the inspection cost anything at all.
+  inspection_for_quote
 }
 
 enum TenantStatus {
@@ -375,6 +401,10 @@ model Group {
   /**
    * /**
    * /**
+   * /**
+   * /**
+   * /**
+   * /**
    * WRITTEN THE WAY POSTGRES STORES IT, not the way it is nicest to type. Postgres normalises the
    * literal in a DEFAULT expression and adds the cast, so `'GB-GD'` comes back as `'GB-GD'::text`.
    * Prisma compares these as strings, so the tidier spelling made `migrate diff` propose re-setting
@@ -475,6 +505,10 @@ model Group {
   // Invoices view (AR/debtors surface, amounts included — the permission is binary by design).
   // Managers/admins always; this extends it to STANDARD.
   perm_standard_view_invoices Boolean   @default(false)
+  /// Eighth toggle, same shape as the seven above: ADMIN and SITE_MANAGER may close a card as NO
+  /// CHARGE from the role model, and this RELAXES that boundary for STANDARD. Composed with
+  /// canAccessSite in lib/permissions, so it can never grant cross-site reach.
+  perm_standard_no_charge     Boolean   @default(false)
   // ── PHONE-STEP BREAK-GLASS. Set by an OPERATOR when a tenant genuinely cannot complete the step:
   // no mobile at all, a number no carrier will deliver to, or both channels failing. It EXEMPTS the
   // tenant from the gate and writes nothing about a phone — faking phone_verified_at would put a
@@ -2963,22 +2997,38 @@ model Booking {
 model JobCard {
   // PROVENANCE: created by the Invoice Import wizard rather than lived through the workshop.
   // Imported cards are excluded from the unpaid-invoice chaser and marked on dashboard periods.
-  is_imported            Boolean       @default(false)
-  import_batch_id        String?
-  id                     String        @id @default(uuid())
-  group_id               String
-  site_id                String
-  profit_centre_id       String? // reporting tag (optional); operational link is site_id (+ resource, later)
-  customer_id            String?
-  vehicle_id             String
-  status                 JobCardStatus @default(draft)
-  mechanic_assigned_id   String?
-  odometer_in            Int?
+  is_imported          Boolean       @default(false)
+  import_batch_id      String?
+  id                   String        @id @default(uuid())
+  group_id             String
+  site_id              String
+  profit_centre_id     String? // reporting tag (optional); operational link is site_id (+ resource, later)
+  customer_id          String?
+  vehicle_id           String
+  status               JobCardStatus @default(draft)
+  mechanic_assigned_id String?
+  odometer_in          Int?
+
+  /// ── CLOSED AS NO CHARGE ────────────────────────────────────────────────────────────────────
+  /// All four are NULL on a card that was never closed this way — the honest absence, and the
+  /// reason none of them is NOT NULL with a default: 385 existing cards would have had to claim a
+  /// reason nobody gave. The REQUIREMENT lives in the writer (lib/no-charge::refuseNoCharge), so
+  /// "a reason is required" is true of the act rather than of the column.
+  no_charge_reason       NoChargeReason? // NULL = never closed as no charge. NOT "no reason given" — the writer refuses a closure without one.
+  no_charge_at           DateTime? // NULL = never closed as no charge. Only the CURRENT closure; AuditLog holds every cycle.
+  no_charge_by           String? // NULL = never closed as no charge. A closure always has an actor, taken from the session and never the body.
+  /// WHAT REOPENING RESTORES. A card closed out of `declined` must not reopen into `in_progress`.
+  ///
+  /// A COLUMN AND NOT THE AUDIT LOG, deliberately, while every close and reopen IS logged there:
+  /// the log is the history and the column is the live fact this closure needs. Driving a write
+  /// path by parsing the newest append-only diff would make the log load-bearing for a
+  /// transition, and the single reopened_at/by pair it replaces could only remember one cycle.
+  no_charge_prior_status JobCardStatus? // NULL = not closed this way, OR closed before this column existed — reopen REFUSES rather than guess a destination.
   odometer_out           Int?
-  vat_rate               Decimal       @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
+  vat_rate               Decimal         @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?
   archived_at            DateTime?
-  signed_off_by_customer Boolean       @default(false)
+  signed_off_by_customer Boolean         @default(false)
   signed_off_at          DateTime?
   // WHEN THE CUSTOMER SAID YES. Written ONLY by lib/quote-acceptance, by every acceptance path,
   // whether or not a QuoteVersion exists — 96% of real quoting is verbal and mints no version, so
@@ -2987,7 +3037,7 @@ model JobCard {
   // makes the invoice a column copy of its FROZEN lines. Minting one on a verbal acceptance would
   // silently bill the estimate as it stood at the handshake and drop anything found afterwards.
   accepted_at            DateTime?
-  created_at             DateTime      @default(now())
+  created_at             DateTime        @default(now())
 
   // --- SLICE 1: flags (main tab) ---
   flag_urgent           Boolean @default(false) // Urgent / Priority

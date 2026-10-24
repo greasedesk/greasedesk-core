@@ -226,6 +226,13 @@ export type AuditAction =
                              // write did not touch membership at all (absent ≠ emptied)
   | 'catalogue_set.deleted'  // { name } — SELF-DESCRIBING: the set is gone and the memberships
                              // went with it; the products themselves are untouched
+  // ── CLOSED WITHOUT A BILL ───────────────────────────────────────────────────────────────────
+  // EVERY cycle, not just the last: a card can be closed, reopened and closed again, and what will
+  // be counted later is the cycles. This is why JobCard carries no reopened_at/by pair — a single
+  // column would have remembered one closure and silently overwritten the rest.
+  | 'jobcard.no_charge_closed'    // { reason, priorStatus } — SELF-DESCRIBING, so the row still
+                                  // explains itself after the card is reopened and the columns move
+  | 'jobcard.no_charge_reopened'  // { restoredTo, reason } — the reason it HAD been closed under
   | 'card.duplicated'    // created by copying a source card's estimate — SELF-DESCRIBING: the diff
                          // carries { source_card_id, source_registration, ... } so the row stays
                          // searchable even after the duplicated_from edge is SetNull'd by a purge

@@ -1555,7 +1555,7 @@ export default function DiaryPage(props: PageProps) {
         agreedVersionFix={pane.data.agreedVersionFix}
                     quoteHasAcceptedVersion={pane.data.quoteHasAcceptedVersion}
                     priceUnconfirmed={pane.data.priceUnconfirmed}
-                    canIssueInvoice={pane.data.canIssueInvoice}
+                    canIssueInvoice={pane.data.canIssueInvoice} canCloseNoCharge={pane.data.canCloseNoCharge}
                     isAdmin={pane.data.isAdmin}
                     priceVisible={pane.data.priceVisible} costVisible={pane.data.costVisible}
                     labourRate={pane.data.labourRate}
