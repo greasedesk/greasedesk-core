@@ -229,12 +229,20 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   UploadTelemetry: OURS_PER_TENANT('platform diagnostics about upload behaviour'),
   VinReadShadow: OURS_PER_TENANT('shadow comparisons we run to evaluate a lookup provider'),
   CountryWaitlist: OURS_PER_TENANT('an address that asked us about a country we do not serve yet — our waitlist, not their customer'),
+  // The commercial terms a garage signed up under. Same classification as ApplicationFeeRate, and
+  // for the same reason: it is OUR side of the agreement with them, recorded so a later change to
+  // what we offer cannot rewrite what they were given. They already hold these terms in writing.
+  TenantPlanTerms: OURS_PER_TENANT('our commercial terms with this tenant — the plan and trial they signed up under'),
+  TenantAffiliateTerms: OURS_PER_TENANT('our reward terms with the affiliate who introduced them; the money is ours to the affiliate, not theirs'),
 
   // ── OURS ENTIRELY: platform, reseller tier, sales pipeline, public site ───────────────────────
   Operator: OURS('a platform operator account'),
   PlatformOperator: OURS('a platform operator account'),
   SuperAdminAudit: OURS('our trail of operator actions; its target_group_id is a snapshot, not ownership'),
   SetupStepDef: OURS('operator-editable onboarding step definitions — our configuration'),
+  // ONE ROW, NO GROUP COLUMN. The trial length and the affiliate reward figures we offer the next
+  // garage to sign up — platform policy, reachable from no tenant at all.
+  ProgrammeSettings: OURS('the programme-wide terms we offer: trial length, affiliate rewards. A single global row, not a tenant\u2019s'),
   NavLink: OURS('navigation on our own marketing site'),
   Document: OURS('our legal and policy content, versioned for the public site'),
   StripeEvent: OURS('our billing webhook log'),

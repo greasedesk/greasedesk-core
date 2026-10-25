@@ -123,8 +123,15 @@ try {
   const model = schema.split('model RepVisit {')[1]?.split('\n}')[0] ?? '';
   check('RepVisit exists', model.length > 0);
   check('  …and records the garage and the site', /group_id\s+String/.test(model) && /site_id\s+String/.test(model));
-  check('  …the party, in the shape TenantAttribution already uses', /party_type\s+String/.test(model) && /party_id\s+String/.test(model),
-    'a rep_id column would make a regional manager’s visit unrecordable, and that is a migration over evidence');
+  // THE ENUM, NOT TEXT, since 2026-10-24. The column was `String` when this clause was written and
+  // the conversion to PartyType turned a correct assertion into a stale one — it went red about a
+  // change that strengthened exactly what it was guarding. The pair is still the point; the type
+  // is now checked by the database as well. And the NEGATIVE is asserted beside it: "party_id
+  // exists" stays true the day somebody adds rep_id back next to it.
+  check('  …the party, in the shape TenantAttribution already uses', /party_type\s+PartyType/.test(model) && /party_id\s+String/.test(model),
+    `a rep_id column would make a regional manager’s visit unrecordable, and that is a migration over evidence — party_type is ${model.match(/party_type\s+\S+/)?.[0] ?? 'absent'}`);
+  check('  …and NOT a rep_id beside it', !/^\s*rep_id\s/m.test(model),
+    'the pair stops meaning anything the moment a second way to name the party exists');
   check('  …the instant, and the month it FREEZES', /scanned_at\s+DateTime/.test(model) && /satisfies_period\s+String\?/.test(model));
   check('  …and how it was recorded', /source\s+String/.test(model));
   check('the consumed code step cannot be spent twice',
