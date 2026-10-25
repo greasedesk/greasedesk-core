@@ -126,14 +126,31 @@ export function refuseTrialLength(v: unknown): string | null {
   return null;
 }
 
+/**
+ * ── A SETTINGS ID, AND WHO MAY NAME ONE ────────────────────────────────────────────────────────
+ * The row is a singleton in production and nothing there ever names a different one. The option
+ * exists so a GATE can own its own row and sweep it, instead of writing the live settings on the
+ * shared production database — which is how a gate's own value for the trial length reached the
+ * public site as a real offer on 2026-10-25.
+ *
+ * THE CONDITION (owner, 2026-10-25): no production code path accepts a settings id from request
+ * input; only gates pass one. It is enforced by a scan, not by a promise — billing-plans-gate
+ * fails if the token `settingsId` appears anywhere under pages/. That is why the id lives in an
+ * options object with a distinctive name rather than as a bare second argument: a bare string is
+ * invisible to a scan, and an invariant nothing can check is a comment.
+ */
+export type SettingsOpts = { settingsId?: string };
+const idOf = (o?: SettingsOpts) => o?.settingsId ?? SETTINGS_ID;
+
 /** The settings row, created from the schema's defaults if it has never been written. */
-export async function getProgrammeSettings(db: Db = defaultDb) {
-  return db.programmeSettings.upsert({ where: { id: SETTINGS_ID }, update: {}, create: { id: SETTINGS_ID } });
+export async function getProgrammeSettings(db: Db = defaultDb, opts?: SettingsOpts) {
+  const id = idOf(opts);
+  return db.programmeSettings.upsert({ where: { id }, update: {}, create: { id } });
 }
 
 /** THE trial length. Every surface that prints or seeds a trial reads this. */
-export async function trialDays(db: Db = defaultDb): Promise<number> {
-  return (await getProgrammeSettings(db)).trial_days;
+export async function trialDays(db: Db = defaultDb, opts?: SettingsOpts): Promise<number> {
+  return (await getProgrammeSettings(db, opts)).trial_days;
 }
 
 /**
@@ -141,8 +158,8 @@ export async function trialDays(db: Db = defaultDb): Promise<number> {
  * (lib/stripe-billing-cache mirrors trial_end back onto Group.trial_ends_at); this seeds the date
  * for a garage that has not reached Checkout yet.
  */
-export async function trialEndsAt(db: Db = defaultDb): Promise<Date> {
-  return new Date(Date.now() + (await trialDays(db)) * 24 * 60 * 60 * 1000);
+export async function trialEndsAt(db: Db = defaultDb, opts?: SettingsOpts): Promise<Date> {
+  return new Date(Date.now() + (await trialDays(db, opts)) * 24 * 60 * 60 * 1000);
 }
 
 const describe = (e: unknown): string => (e instanceof Error ? e.message : String(e));

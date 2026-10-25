@@ -19,6 +19,7 @@ import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
 import { trialEndsAt } from '@/lib/programme-settings';
+import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getProfile } from '@/lib/locale-profiles';
 import { isUsStateCode, timezoneForState } from '@/lib/us-states';
@@ -131,6 +132,11 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
         });
 
         groupId = group.id;
+
+        // The upsert CREATES a garage for a user who has none, so this path makes garages too.
+        // ensureStartingPlanTerms writes only when there are no terms, which is what makes it safe
+        // on the update branch as well — the upsert does not say which branch it took.
+        await ensureStartingPlanTerms(tx, groupId);
 
         // Link user to the new group
         await tx.user.update({

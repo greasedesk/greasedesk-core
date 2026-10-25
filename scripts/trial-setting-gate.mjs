@@ -112,7 +112,12 @@ try {
   const COPY = /(\b\d{1,3}\s*[- ]?\s*days?\b[^.\n]{0,24}\btrial\b)|(\btrial\b[^.\n]{0,24}\b\d{1,3}\s*[- ]?\s*days?\b)/i;
   // The identifier must name BOTH a trial and a DAY count. `STRIPE_MIN_TRIAL_HOURS = 48` is a
   // Stripe API floor in hours, not a trial length, and the first draft of this clause flagged it.
-  const CONST = /\b[A-Za-z_]*trial[A-Za-z_]*day[A-Za-z_]*\s*[=:]\s*\{?\s*\d+/i;
+  //
+  // AND THE NUMBER MUST BE POSITIVE. `trialDays: 0` is the ABSENCE of a trial — it is how
+  // lib/billing-plans says "this annual shape has none", which is the trial-or-pay-now rule, not
+  // an offer to anybody. A zero cannot be a wrong trial length: refusePlanSettings rejects one
+  // and the TenantPlanTerms_trial_xor_paynow CHECK rejects the row.
+  const CONST = /\b[A-Za-z_]*trial[A-Za-z_]*day[A-Za-z_]*\s*[=:]\s*\{?\s*[1-9]\d*/i;
   const files = [...walk(`${R}/pages`), ...walk(`${R}/components`), ...walk(`${R}/lib`)];
   const hits = [];
   for (const f of files) {
@@ -126,6 +131,7 @@ try {
     COPY.test('Start your 60-day free trial') && COPY.test('The trial runs 60 days.')
       && CONST.test('export const TRIAL_PERIOD_DAYS = 60;') && CONST.test('trial_period_days: 60,')
       && !CONST.test('export const STRIPE_MIN_TRIAL_HOURS = 48;')
+      && !CONST.test('trialDays: 0, payNowPennies: months * price,')
       && !COPY.test('TRIAL_DAYS * 24 * 60 * 60 * 1000') && !COPY.test('60 days of grace over a 90-day hold')
       && !CONST.test('trial_period_days: await trialDays(),') && !CONST.test('trialEndsAt: g.trial_ends_at'),
     'an unproved scan did not run: it must match the real copy AND the real constants, and leave the real non-trial 60s alone');

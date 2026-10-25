@@ -40,9 +40,10 @@ import './_ts.mjs';
 const { existsSync } = await import('node:fs');
 const MISSING = ['lib/affiliate.ts', 'lib/billing-plans.ts'].filter((f) => !existsSync(`/Users/hugh/Developer/greasedesk-core/${f}`));
 if (MISSING.length) {
-  declineToRun(`the affiliate programme is not built yet — ${MISSING.join(' and ')} do not exist. `
-    + 'The 40 clauses in this file are written and are the specification; none of them has been proved. '
-    + 'This is UNRUN, not green: nothing here has tested anything.');
+  declineToRun(`the affiliate programme is not built yet — ${MISSING.join(' and ')} `
+    + `${MISSING.length === 1 ? 'does' : 'do'} not exist. The 28 clauses in this file are written and are `
+    + 'the specification; none of them has been proved. This is UNRUN, not green: nothing here has '
+    + 'tested anything.');
 }
 
 const out = [];
@@ -56,7 +57,7 @@ const sweep = async () => {
   const reps = (await prisma.rep.findMany({ where: { ref_code: { startsWith: PREFIX } }, select: { id: true } })).map((r) => r.id);
   const groups = (await prisma.group.findMany({ where: { group_name: { startsWith: PREFIX } }, select: { id: true } })).map((g) => g.id);
   if (groups.length) {
-    await prisma.tenantAffiliateTerms?.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
+    await prisma.tenantAffiliateTerms.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.commissionEntry.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.tenantAttribution.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.group.deleteMany({ where: { id: { in: groups } } }).catch(() => {});
@@ -74,51 +75,14 @@ try {
   await sweep();
 
   const AF = await import(`${R}/lib/affiliate.ts`);
-  const BP = await import(`${R}/lib/billing-plans.ts`);
 
-  // ── 1. TRIAL OR PAY NOW, NEVER BOTH ─────────────────────────────────────────────────────────
-  // The owner's rule, and the one a future plan will break first. Asserted over EVERY shape the
-  // factory can produce, enumerated from the module's own list — not from four hand-written cases,
-  // which is the same mistake as a hand-kept status list.
-  console.log('— trial or pay now, never both —');
-  const settings = { monthlyPricePennies: 7500, trialDays: 30, newAnnualMonthsPaid: 9, renewalAnnualMonthsPaid: 10, offerMonthsPaid: 6, monthsGiven: 12 };
-  check('the module names every plan shape it can sell', Array.isArray(BP.PLAN_KINDS) && BP.PLAN_KINDS.length >= 4,
-    JSON.stringify(BP.PLAN_KINDS));
-  for (const kind of BP.PLAN_KINDS ?? []) {
-    const p = BP.planFor(kind, settings);
-    check(`  ${kind}: exactly one of trial / pay-now`,
-      (p.trialDays > 0) !== (p.payNowPennies > 0),
-      `trialDays=${p.trialDays} payNow=${p.payNowPennies} — both or neither is the contradiction this rule exists to stop`);
-  }
-
-  // ── 2. THE PRICES ARE DERIVED, NEVER TYPED ──────────────────────────────────────────────────
-  // Ruling 4: changing months-paid in admin must not need a Stripe Price made by hand. So the
-  // amount is arithmetic over the settings, and these clauses pin the arithmetic — including that
-  // the four shapes DISAGREE, which a single accidental constant would hide.
-  console.log('\n— the amount is arithmetic over the settings —');
-  check('monthly is the monthly price, with the trial',
-    BP.planFor('monthly', settings).payNowPennies === 0 && BP.planFor('monthly', settings).trialDays === 30);
-  check('a new garage on annual pays 9 months for 12', BP.planFor('annual_new', settings).payNowPennies === 9 * 7500,
-    `${BP.planFor('annual_new', settings).payNowPennies}`);
-  check('the affiliate offer pays 6 months for 12', BP.planFor('annual_offer', settings).payNowPennies === 6 * 7500,
-    `${BP.planFor('annual_offer', settings).payNowPennies}`);
-  check('a renewal pays 10 months for 12', BP.planFor('annual_renewal', settings).payNowPennies === 10 * 7500,
-    `${BP.planFor('annual_renewal', settings).payNowPennies}`);
-  check('  …and changing a SETTING moves the price, with no Price to create',
-    BP.planFor('annual_offer', { ...settings, offerMonthsPaid: 5 }).payNowPennies === 5 * 7500,
-    'the whole point of ruling 4 — admin changes a number, Stripe is told an amount');
-
-  // ── 3. ONE SOURCE FOR THE TRIAL LENGTH ──────────────────────────────────────────────────────
-  // It lived in TWO hard-coded constants, both 60, kept in step by a COMMENT saying one mirrors
-  // the other — so changing one gave a garage a Stripe trial of one length and a trial_ends_at of
-  // another, with nothing to notice. A third reader publishes it on /llms.txt.
-  console.log('\n— one trial length, three readers —');
-  const src = (f) => require('node:fs').readFileSync(`${R}/${f}`, 'utf8');
-  check('no hard-coded trial constant survives in lib/stripe or lib/trial',
-    !/TRIAL_PERIOD_DAYS\s*=\s*\d/.test(src('lib/stripe.ts')) && !/TRIAL_DAYS\s*=\s*\d/.test(src('lib/trial.ts')),
-    'a mirror maintained by a comment is not a single source');
-  const t = await BP.trialDays();
-  check('every reader resolves the SAME number', typeof t === 'number' && t > 0, String(t));
+  // ── THE PLAN SHAPES MOVED OUT (2026-10-25) ──────────────────────────────────────────────────
+  // Sections 1–3 — trial-or-pay-now over every shape, the derived prices, and the single trial
+  // length — now live in scripts/billing-plans-gate.mjs, with the per-site and refusal clauses
+  // they grew. The plans are their own subject and shipped a stage earlier than the programme
+  // that sells one of them; leaving a copy here would be two gates agreeing about one rule, and
+  // the one nobody edits goes stale first. This file keeps the affiliate subjects: entitlement,
+  // frozen terms, the reward ledger, who may take the offer, and closing the programme.
 
   // ── 4. ENTITLEMENT FOLLOWS THE PRODUCT, NOT THE PRICE ───────────────────────────────────────
   // An inline price (ruling 4) has a generated id in no map, and the old lookup answered with a
@@ -153,10 +117,10 @@ try {
   console.log('\n— one entry per payment, and never more than the total —');
   const aff = await prisma.rep.create({ data: {
     email: `${PREFIX.toLowerCase()}@example.invalid`, name: `${PREFIX} affiliate`,
-    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'AFFILIATE' }, select: { id: true } });
+    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'affiliate' }, select: { id: true } });
   const g3 = await mkGarage(3);
   await AF.freezeTermsAtSignup(prisma, g3, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
-  await prisma.tenantAttribution.create({ data: { group_id: g3, party_type: 'AFFILIATE', party_id: aff.id, role: 'affiliate', share_bp: 10000, effective_from: new Date() } });
+  await prisma.tenantAttribution.create({ data: { group_id: g3, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
 
   const pay = (invoiceId) => AF.rewardPaidInvoice(prisma, { groupId: g3, invoiceId, paidPennies: 7500 });
   await pay('in_ZZAFF_1');
@@ -174,7 +138,7 @@ try {
   console.log('\n— and nothing at all for a trial —');
   const g4 = await mkGarage(4);
   await AF.freezeTermsAtSignup(prisma, g4, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
-  await prisma.tenantAttribution.create({ data: { group_id: g4, party_type: 'AFFILIATE', party_id: aff.id, role: 'affiliate', share_bp: 10000, effective_from: new Date() } });
+  await prisma.tenantAttribution.create({ data: { group_id: g4, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
   await AF.rewardTrialStarted(prisma, { groupId: g4 }).catch(() => {});
   check('starting a trial earns NOTHING', (await prisma.commissionEntry.count({ where: { group_id: g4 } })) === 0,
     'the reward is for a garage that PAYS, and a trial has paid nothing');
@@ -182,7 +146,7 @@ try {
   console.log('\n— the annual path is one entry, not four —');
   const g5 = await mkGarage(5);
   await AF.freezeTermsAtSignup(prisma, g5, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 6, monthsGiven: 12 });
-  await prisma.tenantAttribution.create({ data: { group_id: g5, party_type: 'AFFILIATE', party_id: aff.id, role: 'affiliate', share_bp: 10000, effective_from: new Date() } });
+  await prisma.tenantAttribution.create({ data: { group_id: g5, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
   await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL', paidPennies: 45000 });
   const annual = await prisma.commissionEntry.findMany({ where: { group_id: g5 }, select: { amount_pennies: true } });
   check('the offer payment earns the FULL reward in one entry',
@@ -230,7 +194,7 @@ try {
   check('  …and leaves what was already EARNED alone', earnedBefore === 12000, `£${(earnedBefore / 100).toFixed(2)}`);
   const g6 = await mkGarage(6);
   await AF.freezeTermsAtSignup(prisma, g6, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
-  await prisma.tenantAttribution.create({ data: { group_id: g6, party_type: 'AFFILIATE', party_id: aff.id, role: 'affiliate', share_bp: 10000, effective_from: new Date() } });
+  await prisma.tenantAttribution.create({ data: { group_id: g6, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
   await AF.rewardPaidInvoice(prisma, { groupId: g6, invoiceId: 'in_ZZAFF_AFTERCLOSE', paidPennies: 7500 });
   check('  …and a garage signed up BEFORE closing keeps earning its instalments',
     (await prisma.commissionEntry.count({ where: { group_id: g6 } })) === 1,

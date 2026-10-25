@@ -10,6 +10,7 @@ import { UserRole, Prisma } from '@prisma/client';
 import { sendNotification } from '@/lib/notify';
 import crypto from 'crypto';
 import { trialEndsAt, trialDays } from '@/lib/programme-settings';
+import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 
 type Payload = { name: string; email: string; password: string; ref?: string };
 
@@ -88,6 +89,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         select: { id: true, email: true, name: true },
       });
+
+      // THE GARAGE'S FIRST TERMS ROW, in the SAME transaction as the garage. Outside it, a failure
+      // between the two would leave a garage with no record of what it was offered — and the whole
+      // point of the backfill was that there is one shape for every garage.
+      await ensureStartingPlanTerms(tx, group.id);
 
       return { user, group };
     });
