@@ -25,6 +25,7 @@ const { gatePrisma, describeError, gateOrigin, serverReady, onTeardown, declineT
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { underPath } = await import('/Users/hugh/Developer/greasedesk-core/lib/anchored-match.ts');
+const { i18n: I18N } = (await import('/Users/hugh/Developer/greasedesk-core/next-i18next.config.js')).default;
 const bcrypt = (await import('bcryptjs')).default;
 const { readFileSync, readdirSync, statSync, existsSync } = await import('node:fs');
 
@@ -41,6 +42,26 @@ const OP_PASS = 'TrialSettingGate!2026';
 const ER = erOrigin();
 
 let prisma; let browser = null; let settingWas = null; let zzTrialWas; let opIds = [];
+/** The last value THIS GATE put in the setting. null = the gate has not written it. */
+let gateWrote = null;
+let sweepVerdict = null; // 'restored' | 'left-alone'
+
+/**
+ * RESTORE ONLY WHAT THIS GATE WROTE.
+ *
+ * ── WHY THIS IS NOT `updateMany({ trial_days: settingWas })` ────────────────────────────────────
+ * It was, and on 2026-10-25 it changed a public offer. trial_days is GLOBAL and a person can edit
+ * it in the Engine Room at any moment, including while this gate runs. The owner nudged the field
+ * to 46 and corrected it to 45 six seconds later; a run that started inside those six seconds
+ * captured 46 as "what it was", and every sweep after that restored 46 over the owner's 45. The
+ * ISR boundary then passed and greasedesk.com advertised a 45→46 typo as a real offer.
+ *
+ * So the rule is not "put back what I found" but "undo what I did": if the value is still the one
+ * this gate last wrote, put the original back; if it is anything else, a PERSON changed it during
+ * the run and their decision outranks this gate's bookkeeping. Leave it, and say so loudly —
+ * silence would be the gate deciding on its own that it had tidied up.
+ */
+const shouldRestoreSetting = (now, written) => written !== null && now === written;
 
 /**
  * ONE SWEEP, TWO CALLERS — registered with onTeardown (which only runs on a signal) AND awaited in
@@ -52,7 +73,20 @@ let prisma; let browser = null; let settingWas = null; let zzTrialWas; let opIds
  */
 const sweep = async () => {
   if (!prisma) return;
-  if (settingWas !== null) await prisma.programmeSettings.updateMany({ data: { trial_days: settingWas } }).catch(() => {});
+  if (settingWas !== null) {
+    const now = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { trial_days: true } }).catch(() => null))?.trial_days ?? null;
+    if (shouldRestoreSetting(now, gateWrote)) {
+      await prisma.programmeSettings.updateMany({ data: { trial_days: settingWas } }).catch(() => {});
+      sweepVerdict = 'restored';
+    } else if (gateWrote !== null) {
+      console.log(`  SWEEP LEFT trial_days AT ${now}. This gate last wrote ${gateWrote}, so somebody`);
+      console.log(`  changed it during the run. Restoring ${settingWas} would overwrite a person's decision,`);
+      console.log(`  which is how a 46-day trial reached the public site on 2026-10-25.`);
+      sweepVerdict = 'left-alone';
+    } else {
+      sweepVerdict = 'restored'; // nothing written, nothing to undo
+    }
+  }
   if (zzTrialWas !== undefined) await prisma.group.update({ where: { id: ZZ }, data: { trial_ends_at: zzTrialWas } }).catch(() => {});
   if (opIds.length) await prisma.operator.deleteMany({ where: { id: { in: opIds } } }).catch(() => {});
 };
@@ -98,6 +132,11 @@ try {
 
   prisma = await gatePrisma();
   onTeardown(sweep);
+  /** THE ONE PLACE THIS GATE WRITES THE SETTING, so the sweep always knows what it put there. */
+  var setSetting = async (n) => {
+    await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: n } });
+    gateWrote = n;
+  };
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
 
@@ -125,10 +164,10 @@ try {
   // would pass the two clauses above and the gate would report a single source that is not one.
   let moved = false;
   if (PS) {
-    await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: 17 } });
+    await setSetting(17);
     moved = (await PS.trialDays()) === 17
       && Math.round(((await PS.trialEndsAt()).getTime() - Date.now()) / 86_400_000) === 17;
-    await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: settingWas } });
+    await setSetting(settingWas);
   }
   check('  …and BOTH follow the setting when it MOVES', moved,
     'a constant that happens to match today passes the two clauses above and fails this one');
@@ -186,19 +225,71 @@ try {
   // revalidate, and REPORTS a failure instead of swallowing it. Confirming the live homepage after
   // deploy is the other half and it is a person's job, every time this ships.
   console.log('\n— saving it in the Engine Room —');
-  const saved = PS ? await PS.saveTrialDays(prisma, { days: 21, actorId: null, revalidate: async (p) => p }) : null;
-  check('the save reports WHICH public paths it revalidated',
-    Array.isArray(saved?.revalidated) && ['/', '/pricing'].every((p) => saved.revalidated.includes(p)),
-    JSON.stringify(saved?.revalidated));
-  const failed = PS ? await PS.saveTrialDays(prisma, { days: 21, actorId: null, revalidate: async () => { throw new Error('edge said no'); } }) : null;
-  check('  …and a failed revalidation is REPORTED, not swallowed', failed?.revalidateError != null,
+  const O = gateOrigin();
+  const save = async (days, revalidate) => {
+    const r = await PS.saveTrialDays(prisma, { days, actorId: null, revalidate, origin: O });
+    gateWrote = days;
+    return r;
+  };
+
+  check('the sweep restores ONLY the value this gate itself wrote',
+    shouldRestoreSetting(23, 23) === true && shouldRestoreSetting(45, 23) === false && shouldRestoreSetting(45, null) === false,
+    'a person editing the setting mid-run outranks the gate\u2019s bookkeeping — restoring over them put a 46-day trial on the public site');
+
+  // ── THE TARGETS ARE THE PRERENDERED ROUTE KEYS, AND THEY ARE DERIVED ───────────────────────
+  // THE EXTRACTOR IS THE ORACLE FOR EVERY VERIFICATION CLAUSE BELOW, so it is proved first, on a
+  // planted case. React's SSR markers split an interpolated number out of its text run, and an
+  // extractor that cannot read through them reports "no number" about a page plainly showing one —
+  // which reads as a failed refresh and would have sent us hunting the wrong defect.
+  check('the extractor reads through React\u2019s SSR comment markers',
+    PS?.renderedTrialDays('<p>Start your <!-- -->45<!-- -->-day free trial</p>') === 45,
+    String(PS?.renderedTrialDays('<p>Start your <!-- -->45<!-- -->-day free trial</p>')));
+  check('  …ignores __NEXT_DATA__ and says nothing when the page names two numbers',
+    PS?.renderedTrialDays('<script>{"trialDays":99}</script><p>a 45-day trial</p>') === 45
+      && PS?.renderedTrialDays('<p>a 45-day trial</p><p>a 30-day trial</p>') === null,
+    'a page carrying two different lengths is not evidence of either');
+
+  const targets = PS ? PS.revalidationTargets() : [];
+  check('every revalidation target is LOCALE-PREFIXED', targets.length > 0 && targets.every((t) => /^\/[a-z]{2}-[A-Z]{2}(\/|$)/.test(t)),
+    `${JSON.stringify(targets)} — production answers x-matched-path: /en-GB, so '/' addresses a page that is not the one in the cache`);
+  check('  …and DERIVED from the i18n config, not written out',
+    targets.length === I18N.locales.length * 2 && I18N.locales.every((l) => targets.includes(`/${l}`) && targets.includes(`/${l}/pricing`)),
+    `${I18N.locales.length} locale(s) → expected ${I18N.locales.length * 2} targets, got ${targets.length}`);
+  // AND EACH ONE IS A PAGE THIS SITE ACTUALLY SERVES. A target that 404s is a refresh of nothing,
+  // which is exactly the shape that passed for an hour.
+  const statuses = await Promise.all(targets.map(async (t) => [t, (await fetch(`${O}${t}`, { method: 'HEAD' })).status]));
+  check('  …and every target is a page the site actually serves',
+    statuses.every(([, st]) => st === 200), JSON.stringify(statuses));
+
+  const saved = PS ? await save(21, async (p) => p) : null;
+  check('the save reports WHICH paths it attempted',
+    Array.isArray(saved?.attempted) && targets.every((t) => saved.attempted.includes(t)),
+    JSON.stringify(saved?.attempted));
+  check('  …and VERIFIES by reading the public pages back', saved?.verified === true,
+    JSON.stringify(saved?.checks));
+  const failed = PS ? await save(21, async () => { throw new Error('edge said no'); }) : null;
+  check('  …and a THROWN revalidation is REPORTED, not swallowed', failed?.revalidateError != null,
     'a save that succeeds while the homepage keeps the old number is the worst outcome of the lot');
-  check('  …and the homepage then shows the NEW number', /\b21[- ]day/i.test(await bodyOf('/')),
-    'in dev this is getStaticProps re-running, not ISR — the live check after deploy is the real one');
+
+  // ── THE CLAUSE THAT WOULD HAVE CAUGHT 2026-10-25 ───────────────────────────────────────────
+  // res.revalidate() RESOLVED for both pages and neither changed, and the screen said "refreshed".
+  // A no-op refresher is indistinguishable from a working one unless the page is read back, so
+  // this is the shape the whole rewrite exists for: the attempt succeeds and nothing happens.
+  const noop = PS ? await PS.saveTrialDays(prisma, {
+    days: 19, actorId: null, revalidate: async (p) => p,
+    origin: `${O}/__a-path-that-serves-no-trial-number`,
+  }) : null;
+  check('a refresh that RESOLVES but changes nothing is NOT reported as refreshed',
+    noop?.verified === false && noop?.note != null && noop?.revalidateError == null,
+    `verified=${noop?.verified} note=${JSON.stringify(noop?.note)} — this is the exact defect: no throw, no change, "refreshed"`);
+  const afterNoop = await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { copy_revalidated_at: true, copy_revalidate_error: true } });
+  check('  …and the ROW records it as unconfirmed, not as a refresh',
+    afterNoop?.copy_revalidate_error != null, JSON.stringify(afterNoop));
+
   check('  …and a nonsense length is REFUSED, not written',
-    PS ? await PS.saveTrialDays(prisma, { days: 0, actorId: null, revalidate: async (p) => p }).then(() => false, () => true) : false,
+    PS ? await save(0, async (p) => p).then(() => false, () => true) : false,
     'the one field here sets what every new garage is offered');
-  if (PS) await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: settingWas } });
+  if (PS) { await save(settingWas, async (p) => p); }
 
   // ── 5. AND NOBODY ALREADY ON A TRIAL MOVES ──────────────────────────────────────────────────
   // There are no garages on a trial today, so this clause has NOTHING TO CHECK and says so — a
@@ -211,7 +302,7 @@ try {
   const after = (await prisma.group.findUnique({ where: { id: ZZ }, select: { trial_ends_at: true } }))?.trial_ends_at ?? null;
   check('a garage already on a trial keeps the date it was given',
     after?.getTime() === planted.getTime(), `${after?.toISOString()} vs ${planted.toISOString()}`);
-  if (PS) await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: settingWas } });
+  if (PS) await setSetting(settingWas);
   await prisma.group.update({ where: { id: ZZ }, data: { trial_ends_at: zzTrialWas } });
 
   // ── 6. AND IT IS A SCREEN AN OWNER CAN ACTUALLY TYPE INTO ───────────────────────────────────
@@ -239,7 +330,8 @@ try {
   };
   await signIn(OWNER_EMAIL);
   await er.goto(`${ER}/superadmin/billing`, { waitUntil: 'domcontentloaded' });
-  await er.waitForTimeout(900); // the screen fetches its own state after mount
+  await er.waitForSelector('input[type="number"]', { timeout: 30000 }).catch(() => {});
+  await er.waitForTimeout(400); // the field is populated by the state fetch, not by SSR
   const field = er.locator('input[type="number"]');
   check('the owner reaches the Billing screen and it shows the current setting',
     (await field.count()) === 1 && (await field.inputValue()) === String(settingWas),
@@ -248,8 +340,14 @@ try {
   // would be the screen agreeing with itself.
   await field.fill('23');
   await er.click('button:has-text("Save")');
-  await er.waitForTimeout(1500);
+  // WAIT FOR THE SAVE TO ANSWER, not for a guessed number of milliseconds. The save now reads the
+  // public pages back before it replies, so it takes seconds rather than one round trip — and a
+  // fixed 1500ms wait asserted against the state BEFORE the save, which read as two failures of
+  // the screen rather than as a gate that had not waited.
+  await er.waitForSelector('[data-testid="save-result"]', { timeout: 60000 }).catch(() => {});
+  await er.waitForTimeout(500);
   const typed = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { trial_days: true } }))?.trial_days;
+  gateWrote = 23; // the SCREEN wrote it, but this gate caused it — the sweep must own it
   check('  …and typing a number into it changes the setting', typed === 23, `trial_days=${typed}`);
   const erText = (await er.textContent('body'))?.replace(/\s+/g, ' ') ?? '';
   check('  …and the screen then names who changed it and when',
@@ -258,13 +356,17 @@ try {
   // THREE branches of that line satisfy — including "have not been refreshed from here yet". It
   // could not be made red, so it was testing nothing. The save above succeeded, so the only
   // acceptable wording is the one that names WHEN, and the time has to be the save just made.
-  const refreshedAt = erText.match(/Public pages \([^)]*\) last refreshed ([^.]+)\./)?.[1] ?? null;
-  const stamped = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { copy_revalidated_at: true } }))?.copy_revalidated_at ?? null;
-  const expected = stamped ? stamped.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : null;
-  check('  …and it says the PUBLIC pages were refreshed, and when',
-    refreshedAt != null && expected != null && refreshedAt.trim() === expected,
-    `screen "${refreshedAt}" vs recorded "${expected}"`);
-  await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { trial_days: settingWas } });
+  // ── WHAT THE SCREEN SAYS ABOUT THE PUBLIC SITE MUST BE A READING OF IT ─────────────────────
+  // The old clause here compared the screen's "last refreshed <time>" against the stored stamp —
+  // the screen agreeing with the row that the same save had just written. Both were wrong together
+  // for an hour. This asserts the screen has gone and LOOKED, and says what it found.
+  await er.waitForSelector('[data-testid="public-copy-agrees"], [data-testid="public-copy-disagrees"]', { timeout: 30000 }).catch(() => {});
+  const agreesEl = await er.locator('[data-testid="public-copy-agrees"]').count();
+  const copyLine = (await er.textContent('body'))?.replace(/\s+/g, ' ') ?? '';
+  check('  …and the screen reports what the public site is ACTUALLY showing',
+    agreesEl === 1 && /The public site agrees/.test(copyLine),
+    copyLine.match(/The public site[^.]*/)?.[0] ?? 'no public-site line at all');
+  await setSetting(settingWas);
 
   // UNDISCOVERABLE, not forbidden: a support operator must get Not Found, never a 403 that would
   // confirm a screen exists for setting commercial terms.
@@ -285,9 +387,10 @@ try {
   const back = await prisma?.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { trial_days: true } }).catch(() => null);
   const opsLeft = await prisma?.operator.count({ where: { id: { in: opIds } } }).catch(() => -1);
   const zzNow = (await prisma?.group.findUnique({ where: { id: ZZ }, select: { trial_ends_at: true } }).catch(() => null))?.trial_ends_at ?? null;
-  check('the sweep put the trial length, ZZ\u2019s trial date and the operators back',
-    back?.trial_days === settingWas && opsLeft === 0 && String(zzNow) === String(zzTrialWas ?? null),
-    `trial_days ${back?.trial_days} vs ${settingWas}; operators left ${opsLeft}; ZZ ${String(zzNow)} vs ${String(zzTrialWas ?? null)}`);
+  check('the sweep undid this gate\u2019s own changes, and left anyone else\u2019s alone',
+    opsLeft === 0 && String(zzNow) === String(zzTrialWas ?? null)
+      && (sweepVerdict === 'left-alone' || back?.trial_days === settingWas),
+    `trial_days ${back?.trial_days} (sweep ${sweepVerdict}, original ${settingWas}); operators left ${opsLeft}; ZZ ${String(zzNow)} vs ${String(zzTrialWas ?? null)}`);
   console.log(`\n${out.filter((x) => x === 'F').length} failures of ${out.length}`);
   await prisma?.$disconnect();
   process.exit(out.includes('F') ? 1 : 0);

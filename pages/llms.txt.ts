@@ -72,10 +72,13 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   // charset=utf-8 matters: the copy carries £ and an em dash, and a client guessing latin-1 would
   // render both as mojibake.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  // Rendered per request, so the trial length here is correct the instant the setting is saved —
-  // which is why /llms.txt is NOT in PUBLIC_COPY_PATHS. The hour of caching is a CDN hint, not a
-  // second copy of the number.
-  res.setHeader('Cache-Control', 'public, max-age=3600');
+  // THE HOUR OF CACHING WAS A SECOND COPY OF THE NUMBER, and the comment here said it was not.
+  // This page is rendered per request, so the ORIGIN is correct the instant the setting is saved —
+  // but it was served `max-age=3600`, so the CDN went on handing out the old trial length for an
+  // hour after a save while the Engine Room said the change was live. A cache in front of a value
+  // that can change is a copy of it, whatever the comment claims.
+  // must-revalidate, matching the marketing pages: the CDN may hold it, and must check first.
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.write(body(await trialDays()));
   res.end();
   return { props: {} };

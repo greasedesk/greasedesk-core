@@ -20,9 +20,11 @@ import type { GetServerSideProps } from 'next';
 import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/operator-auth';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
+type CopyCheck = { url: string; shows: number | null; agrees: boolean };
 type State = {
   trialDays: number;
   publicPaths: string[];
+  revalidationTargets: string[];
   copyRevalidatedAt: string | null;
   copyRevalidateError: string | null;
   lastChange: { at: string; by: string; what: string | null } | null;
@@ -35,12 +37,20 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
   const [days, setDays] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // THREE STATES, not two: null = we have not looked at the public site yet, which is a different
+  // thing from having looked and found it stale.
+  const [pub, setPub] = useState<{ copy: CopyCheck[]; agrees: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
     const r = await fetch('/api/superadmin/programme-settings');
     if (r.ok) { const d: State = await r.json(); setS(d); setDays(String(d.trialDays)); }
   }, []);
-  useEffect(() => { refresh(); }, [refresh]);
+  const checkPublic = useCallback(async () => {
+    setPub(null);
+    const r = await fetch('/api/superadmin/programme-settings?check=1');
+    if (r.ok) { const d = await r.json(); setPub({ copy: d.publicCopy, agrees: d.publicAgrees }); }
+  }, []);
+  useEffect(() => { refresh().then(checkPublic); }, [refresh, checkPublic]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -51,8 +61,8 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
         body: JSON.stringify({ trialDays: Number(days) }),
       });
       const d = await r.json().catch(() => ({}));
-      setMsg({ ok: r.ok && !d.revalidateError, text: d.message || (r.ok ? 'Saved.' : 'Failed.') });
-      if (r.ok) await refresh();
+      setMsg({ ok: r.ok && d.verified === true, text: d.message || (r.ok ? 'Saved.' : 'Failed.') });
+      if (r.ok) { await refresh(); await checkPublic(); }
     } finally {
       // Clear busy in the finally: a thrown fetch must not leave the button dead.
       setBusy(false);
@@ -66,7 +76,7 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
       <Head><title>Engine Room — billing</title><meta name="robots" content="noindex" /></Head>
       <div className="p-6 max-w-2xl space-y-5">
         <h1 className="text-xl font-semibold">Programme billing</h1>
-        {msg && <div className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
+        {msg && <div data-testid="save-result" className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         <div className="rounded-xl border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold mb-1">Free trial length</h2>
@@ -74,7 +84,9 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
             How many days a garage signing up <span className="text-ink">from now on</span> gets before
             their card is charged. This is what Stripe is told at checkout, and it is the number printed
             on the homepage, the pricing page, the checkout step, <code>/llms.txt</code> and the
-            verification email — all of them read this field, so they cannot disagree with it.
+            verification email — all of them read this field. The homepage and pricing page are
+            cached copies, so saving asks them to refresh and then <em>reads them back</em>; the
+            line below is what they are actually showing, not what the refresh claimed.
             {' '}<span className="text-ink">Garages already on a trial keep the date they were given.</span>
           </p>
           <form onSubmit={save} className="flex flex-wrap items-end gap-3">
@@ -94,17 +106,30 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
               {/* ── DOES THE PUBLIC SITE AGREE? ─────────────────────────────────────────────
                   Three states, never collapsed to two: never refreshed, refreshed at a time, or
                   refreshed and FAILED. The third is the dangerous one and it says so. */}
-              {s.copyRevalidateError ? (
-                <p className="text-danger">
-                  <span className="font-semibold">The public pages were not refreshed.</span>{' '}
-                  {s.copyRevalidateError}. {s.publicPaths.join(' and ')} may still show the old number;
-                  they correct themselves within the hour, or save again to retry now.
+              {/* ── WHAT THE PUBLIC SITE IS SHOWING RIGHT NOW ────────────────────────────────
+                  Read back on every load, not reported from the last save. This line used to say
+                  "last refreshed <time>" on the strength of res.revalidate() not throwing, and it
+                  said it for an hour while greasedesk.com served the old number. A claim about
+                  another system has to be a reading of that system. */}
+              {pub === null ? (
+                <p className="text-muted" data-testid="public-copy-checking">Reading the public site…</p>
+              ) : pub.agrees ? (
+                <p className="text-ok" data-testid="public-copy-agrees">
+                  The public site agrees: {pub.copy.map((c) => c.url.replace(/^https?:\/\//, '')).join(' and ')}{' '}
+                  {pub.copy.length === 1 ? 'shows' : 'both show'} {s.trialDays} days.
                 </p>
-              ) : s.copyRevalidatedAt ? (
-                <p className="text-muted">Public pages ({s.publicPaths.join(', ')}) last refreshed {when(s.copyRevalidatedAt)}.</p>
               ) : (
-                <p className="text-muted">Public pages have not been refreshed from here yet — they are generated at build time and on the hour.</p>
+                <p className="text-danger" data-testid="public-copy-disagrees">
+                  <span className="font-semibold">The public site does not agree yet.</span>{' '}
+                  {pub.copy.map((c) => `${c.url.replace(/^https?:\/\//, '')} shows ${c.shows ?? 'no number'}`).join('; ')}.
+                  {' '}These pages refresh themselves within a minute.{' '}
+                  <button type="button" onClick={checkPublic} className="underline">Check again</button>
+                </p>
               )}
+              {s.copyRevalidateError && <p className="text-muted">Last save reported: {s.copyRevalidateError}</p>}
+              {s.copyRevalidatedAt
+                ? <p className="text-muted">Last confirmed in agreement {when(s.copyRevalidatedAt)}.</p>
+                : <p className="text-muted">Never yet confirmed in agreement from this screen.</p>}
               {s.lastChange
                 ? <p className="text-muted">Last changed {when(s.lastChange.at)} by {s.lastChange.by}{s.lastChange.what ? ` (${s.lastChange.what})` : ''}.</p>
                 : <p className="text-muted">Never changed from this screen.</p>}

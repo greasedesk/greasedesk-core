@@ -78,17 +78,21 @@ export default function PricingPage({ trialDays: trial }: { trialDays: number })
   );
 }
 
-// ── STATICALLY GENERATED, REFRESHED ON DEMAND ─────────────────────────────────────────────────
-// The trial length is a setting (lib/programme-settings), and this page prints it. Saving the
-// setting in the Engine Room calls res.revalidate('/pricing') so the public page changes with NO
-// DEPLOY — the whole point of making it a setting. The `revalidate` below is the BACKSTOP, not
-// the mechanism: if that on-demand call ever fails, the page still corrects itself within the
-// hour instead of promising the old number until somebody saves again.
+// ── STATICALLY GENERATED, REFRESHED ON DEMAND, AND SELF-HEALING IN A MINUTE ──────────────────
+// The trial length is a setting (lib/programme-settings), and this page prints it. Saving in the
+// Engine Room calls res.revalidate('/en-GB/pricing') — the LOCALE-PREFIXED path, which is the
+// prerendered route key; `/pricing` addresses a page that is not the one in the cache, and the hour
+// greasedesk.com spent promising the wrong number on 2026-10-25 is what that cost.
+//
+// WAS 3600. An hour is the right backstop only if the on-demand path is trustworthy, and it was
+// not: the save reported success and nothing happened, so the backstop WAS the mechanism and
+// nobody knew. Sixty seconds bounds the worst case to something nobody is harmed by, and the save
+// now reads this page back rather than believing the refresher.
 export const getStaticProps: GetStaticProps<{ trialDays: number }> = async () => {
   // A BLOCK BODY, not `=> ({ … })`. client-bundle-gate models tree-shaking by cutting the BRACED
   // body of each server data function; an expression-bodied arrow has no braced body, so the
   // import stays visible in the page's client half and reads as a leak. The gate is blind to that
   // shape — written up for its own fix — and in the meantime this is the form every other page
   // in the codebase already uses.
-  return { props: { trialDays: await readTrialDays() }, revalidate: 3600 };
+  return { props: { trialDays: await readTrialDays() }, revalidate: 60 };
 };

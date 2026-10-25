@@ -16,7 +16,29 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOperatorApi } from '@/lib/operator-auth';
-import { getProgrammeSettings, saveTrialDays, refuseTrialLength, PUBLIC_COPY_PATHS } from '@/lib/programme-settings';
+import {
+  getProgrammeSettings, saveTrialDays, refuseTrialLength,
+  PUBLIC_COPY_PAGES, revalidationTargets, readPublicCopy, publicOrigin,
+} from '@/lib/programme-settings';
+
+/**
+ * WHICH SITE TO READ BACK — and it is NEVER the host this request came in on.
+ *
+ * That is the whole lesson of 2026-10-25. This screen is served from er.greasedesk.com, which
+ * middleware declares is the Engine Room and nothing else: `/` there is rewritten to /superadmin
+ * and `/pricing` is a 404. A refresh aimed at that host, or a read-back of it, is addressing a
+ * different site that has none of these pages on it.
+ *
+ * Production: the apex, from lib/company-info, which is the one place the site's own address
+ * lives. Development: the SAME dev server, but addressed as the tenant host rather than the
+ * Engine Room one — localhost on this request's port. The first draft used req.headers.host here
+ * and the gate went red exactly as production had, which is the clause earning its keep.
+ */
+const originFor = (req: NextApiRequest): string => {
+  if (process.env.NODE_ENV === 'production') return publicOrigin();
+  const port = (req.headers.host ?? '').split(':')[1] || '3010';
+  return `http://localhost:${port}`;
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -43,9 +65,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const by = last?.operator_user_id
       ? await prisma.operator.findUnique({ where: { id: last.operator_user_id }, select: { name: true, email: true } }).catch(() => null)
       : null;
+    // ── THE LIVE READ IS A SEPARATE CALL ────────────────────────────────────────────────────
+    // ?check=1 goes and reads the public site. It is NOT folded into the main GET: that read is
+    // two HTTP round trips to another host, and putting it in front of the screen makes a settings
+    // page take seconds to appear in exchange for an answer the operator has not asked for yet.
+    // The screen loads, then asks.
+    if (req.query.check) {
+      const checks = await readPublicCopy(originFor(req), s.trial_days);
+      res.status(200).json({
+        trialDays: s.trial_days,
+        publicCopy: checks,
+        publicAgrees: checks.length > 0 && checks.every((c) => c.agrees),
+      });
+      return;
+    }
     res.status(200).json({
       trialDays: s.trial_days,
-      publicPaths: PUBLIC_COPY_PATHS,
+      publicPaths: PUBLIC_COPY_PAGES,
+      revalidationTargets: revalidationTargets(),
       copyRevalidatedAt: s.copy_revalidated_at ? s.copy_revalidated_at.toISOString() : null,
       copyRevalidateError: s.copy_revalidate_error,
       lastChange: last ? {
@@ -67,11 +104,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // res.revalidate is the Next on-demand hook. It is handed in rather than imported because it
       // belongs to this response; the gate hands in its own.
       revalidate: (p) => res.revalidate(p),
+      origin: originFor(req),
     });
+    // THE MESSAGE NO LONGER CLAIMS A REFRESH IT HAS NOT SEEN. "the public pages were refreshed" was
+    // printed on the strength of res.revalidate() not throwing, and it was wrong for an hour.
     res.status(200).json({
-      message: result.revalidateError
-        ? `Saved: new garages now get ${result.days} days. BUT THE PUBLIC SITE WAS NOT REFRESHED — ${result.revalidateError}. It will correct itself within the hour, or save again to retry.`
-        : `Saved. New garages now get ${result.days} days, and the public pages were refreshed.`,
+      message: result.verified
+        ? `Saved, and the public pages now show ${result.days} days.`
+        : result.revalidateError
+          ? `Saved: new garages now get ${result.days} days. THE PUBLIC SITE WAS NOT REFRESHED — ${result.revalidateError}. It corrects itself within the minute, or save again to retry.`
+          : `Saved: new garages now get ${result.days} days. NOT YET CONFIRMED ON THE PUBLIC SITE — ${result.note}. Reload this screen in a moment; it corrects itself within the minute.`,
       ...result,
     });
     return;
