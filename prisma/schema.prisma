@@ -633,7 +633,10 @@ model Group {
   stock_number_sequences StockNumberSequence[]
   upload_telemetries     UploadTelemetry[]
   vin_read_shadows       VinReadShadow[]
-  tenantPlanTerms        TenantPlanTerms?
+  /// A TIMELINE, not a row (2026-10-25). Was TenantPlanTerms? while group_id was unique; the
+  /// terms are append-only now, so a garage has as many rows as it has had sets of terms —
+  /// earliest = what they signed up under, latest = what they are on.
+  tenantPlanTerms        TenantPlanTerms[]
   tenantAffiliateTerms   TenantAffiliateTerms?
 }
 
@@ -1117,18 +1120,30 @@ model RepMagicLink {
 ///
 /// RENEWAL IS NOT GOVERNED BY THIS ROW. It covers the term the garage bought; renewing is a fresh
 /// choice at the renewal setting in force then, which is why the reminders quote it live.
+/// THE TERMS A GARAGE IS ON, AS A TIMELINE — append forward, never edit history, the same
+/// discipline as CommissionRate. One row per garage could not hold: the terms change at least
+/// twice over a garage's life (monthly with a trial at signup, possibly annual at checkout, and a
+/// renewal on the renewal setting in force AT renewal), so a single row forces a choice between
+/// overwriting it — which makes "frozen" untrue — and never updating it, which makes "their
+/// current plan" unanswerable. Both questions are answerable here:
+///   what they signed up under = the EARLIEST row   what they are on now = the LATEST row
 model TenantPlanTerms {
   id               String   @id @default(uuid())
-  group_id         String   @unique
+  group_id         String
   /// 'monthly' | 'annual_new' | 'annual_offer' — the shape, not the price.
   plan             String
   months_paid      Int? // NULL on monthly: there is no "months paid for" on a rolling plan
   months_given     Int? // NULL on monthly, for the same reason
   paid_now_pennies Int? // NULL on monthly: nothing is taken at signup. NOT zero — zero is a payment of nothing
   trial_days       Int? // NULL on every annual shape: there is no trial. NOT 0, which would read as a trial that ended instantly
-  signed_up_at     DateTime
+  /// When THESE terms took effect. Replaced signed_up_at, whose values it carries: on an
+  /// append-only timeline that column would have had to be written on every row, repeating one
+  /// fact down a timeline, and the garage's signup date is already on Group.created_at.
+  effective_from   DateTime
 
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  @@index([group_id, effective_from])
 }
 
 /// ONLY A REFERRED GARAGE HAS ONE. No row = never referred, which is the honest absence and the
