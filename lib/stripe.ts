@@ -87,6 +87,7 @@ export async function platformLivemode(): Promise<boolean | null> {
 
 export const appBaseUrl = (): string => process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'https://greasedesk.com';
 
-/** THE trial length, single source (mirrors lib/trial TRIAL_DAYS). Stripe owns the clock once a
- *  subscription exists; this seeds trial_period_days at Checkout. */
-export const TRIAL_PERIOD_DAYS = 60;
+/* THE TRIAL LENGTH IS NOT HERE. It was `TRIAL_PERIOD_DAYS`, a constant whose docstring said it
+ * mirrored lib/trial's — two numbers and a promise to keep them equal, which is not a single
+ * source. It is a setting now: lib/programme-settings' trialDays(), which Checkout awaits when it
+ * seeds trial_period_days. Stripe still owns the clock once the subscription exists. */

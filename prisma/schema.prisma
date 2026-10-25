@@ -1170,6 +1170,14 @@ model ProgrammeSettings {
   instalment_pennies         Int      @default(3000)
   minimum_payout_pennies     Int      @default(10000)
   affiliate_signups_open     Boolean  @default(true)
+  /// @nulls: copy_revalidated_at, copy_revalidate_error
+  /// Whether the PUBLIC SITE agrees with trial_days. The marketing pages are statically generated
+  /// and refreshed on demand when the setting is saved; a save that succeeds while the refresh
+  /// fails leaves the Engine Room showing one number and greasedesk.com promising another. Three
+  /// states: both null = never attempted; _at set with _error null = refreshed then; _error set =
+  /// the last attempt failed and the live site may still be stale. Cleared on success.
+  copy_revalidated_at        DateTime?
+  copy_revalidate_error      String?
   updated_at                 DateTime @updatedAt
 }
 

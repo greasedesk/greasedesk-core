@@ -81,7 +81,7 @@ You may add and remove Users through the Service. You are responsible for what y
 
 ## 4. The trial period
 
-New accounts include a **60-day free trial**. No charge is made during the trial. You may cancel at any time before it ends and you will not be charged.
+New accounts include a **free trial**. The length of the trial is the one stated at sign-up. No charge is made during the trial. You may cancel at any time before it ends and you will not be charged.
 
 At the end of the trial, your subscription begins automatically and the card you provided is charged, unless you have cancelled. Your dashboard shows a countdown to the trial end date throughout the trial.
 

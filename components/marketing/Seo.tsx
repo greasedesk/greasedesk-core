@@ -7,7 +7,9 @@
 import Head from 'next/head';
 import { COMPANY, absoluteUrl, officeOneLine } from '@/lib/company-info';
 import { MONTHLY_PRICE_POUNDS, garageVatRegistered } from '@/lib/billing-pricing';
-import { TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+// NOT lib/stripe. This file imported TRIAL_PERIOD_DAYS from there, which put a module that
+// constructs the Stripe client on the import graph of every public marketing page. The trial
+// length is a SETTING now and arrives as a prop from the page's own data fetch.
 
 type Props = {
   title: string;         // full <title> (page-specific)
@@ -28,6 +30,14 @@ type Props = {
    * fine, but the asset has to be one THIS host serves, and only /rep-site/* is served there.
    */
   ogImage?: string;
+  /**
+   * THE TRIAL LENGTH, when this page knows it. NO DEFAULT, deliberately: a default here would be
+   * the second source of the number that this whole slice removed, and the one place nobody would
+   * ever look at it — structured data is read by crawlers, not people. Absent, the trial offer is
+   * simply not emitted. An offer we do not state is a page that says less; an offer stated at the
+   * wrong length is a page that misleads, and the schema is a claim to a search engine.
+   */
+  trialDays?: number;
 };
 
 const organizationLd = () => ({
@@ -62,7 +72,7 @@ const organizationLd = () => ({
   },
 });
 
-const softwareAppLd = () => ({
+const softwareAppLd = (trialDays?: number) => ({
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: COMPANY.tradingName,
@@ -111,20 +121,22 @@ const softwareAppLd = () => ({
         ...(garageVatRegistered() ? { valueAddedTaxIncluded: true } : {}),
       },
     },
-    {
-      '@type': 'Offer',
-      name: `${TRIAL_PERIOD_DAYS}-day free trial`,
-      price: '0',
-      priceCurrency: 'GBP',
-      eligibleDuration: { '@type': 'QuantitativeValue', value: TRIAL_PERIOD_DAYS, unitCode: 'DAY' },
-    },
+    ...(trialDays
+      ? [{
+        '@type': 'Offer',
+        name: `${trialDays}-day free trial`,
+        price: '0',
+        priceCurrency: 'GBP',
+        eligibleDuration: { '@type': 'QuantitativeValue', value: trialDays, unitCode: 'DAY' },
+      }]
+      : []),
   ],
   publisher: { '@type': 'Organization', name: COMPANY.legalName },
   // DELIBERATELY ABSENT: aggregateRating and review. There are none. Emitting them would be a
   // fabrication and a structured-data violation, and no amount of SEO benefit buys that back.
 });
 
-export default function Seo({ title, description, path, softwareApp = false, origin, ogImage: ogImageOverride }: Props) {
+export default function Seo({ title, description, path, softwareApp = false, origin, ogImage: ogImageOverride, trialDays }: Props) {
   const url = origin ? `${origin}${path.startsWith('/') ? path : `/${path}`}` : absoluteUrl(path);
   const ogImage = ogImageOverride ?? absoluteUrl(COMPANY.logoPath);
   return (
@@ -147,7 +159,7 @@ export default function Seo({ title, description, path, softwareApp = false, ori
       {/* JSON-LD */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationLd()) }} />
       {softwareApp && (
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareAppLd()) }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareAppLd(trialDays)) }} />
       )}
       {/* aria/meta hint: office address is public (Companies House) */}
       <meta name="business:contact_data:street_address" content={officeOneLine()} />

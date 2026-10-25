@@ -18,7 +18,7 @@ import { prisma } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../auth/[...nextauth]';
-import { trialEndsFromNow } from '@/lib/trial';
+import { trialEndsAt } from '@/lib/programme-settings';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { getProfile } from '@/lib/locale-profiles';
 import { isUsStateCode, timezoneForState } from '@/lib/us-states';
@@ -126,7 +126,7 @@ export default async function handle(req: NextApiRequest, res: NextApiResponse) 
               (dbUser.email ? `${dbUser.email}'s Garage` : 'New Garage'),
             billing_email: dbUser.email,
             // ref auto-assigned by the DB sequence default; status defaults to 'trial'.
-            trial_ends_at: trialEndsFromNow(),
+            trial_ends_at: await trialEndsAt(),
           },
         });
 

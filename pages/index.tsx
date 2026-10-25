@@ -5,10 +5,15 @@
  * the P&L screenshot slot is a LABELLED PLACEHOLDER — real demo data fills it (no fabricated image).
  */
 import Link from 'next/link';
+import type { GetStaticProps } from 'next';
 import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
 import { PAGE_TITLE } from '@/lib/brand';
 import { perLocationLabel } from '@/lib/billing-pricing';
+// ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
+// client half of the file then reads as a use of the server import, and client-bundle-gate
+// correctly cannot tell the difference. The alias is the distinction, not a workaround.
+import { trialDays as readTrialDays } from '@/lib/programme-settings';
 
 const Check = () => (
   <svg className="w-5 h-5 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -61,14 +66,15 @@ const HERO_TILES = [
 const HERO_UNSOLD = (HERO.sellableHours - HERO.hoursSold - HERO.reworkHours).toFixed(2); // 168.40 − 87.25 − 12.00 = 69.15
 const HERO_RATE_GAP = HERO.postedRate - HERO.effRate; // 75.00 − 38.86 = 36.14 (posted − real: the per-hour shortfall)
 
-export default function HomePage() {
+export default function HomePage({ trialDays: trial }: { trialDays: number }) {
   return (
     <>
       <Seo
         title={PAGE_TITLE}
-        description="See what you actually kept: GreaseDesk gives independent garages a live profit-and-loss view alongside job cards, bookings and invoicing. Start a 60-day free trial."
+        description={`See what you actually kept: GreaseDesk gives independent garages a live profit-and-loss view alongside job cards, bookings and invoicing. Start a ${trial}-day free trial.`}
         path="/"
         softwareApp
+        trialDays={trial}
       />
       <SiteChrome>
         {/* Amendment 3 (revised) — CONTAINED descending pyramid (no longer full-bleed): sits in the
@@ -102,7 +108,7 @@ export default function HomePage() {
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link href="/register" className="inline-flex justify-center items-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-                  Start your 60-day free trial
+                  Start your {trial}-day free trial
                 </Link>
                 <Link href="/contact" className="inline-flex justify-center items-center bg-surface border border-line text-ink font-medium rounded-lg px-6 py-3.5 text-base hover:bg-surface-muted transition-colors">
                   Talk to us
@@ -167,7 +173,7 @@ export default function HomePage() {
             <h2 className="text-2xl sm:text-3xl font-bold text-ink">Find out what last month actually made.</h2>
             <div className="mt-8">
               <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-                Start your 60-day free trial
+                Start your {trial}-day free trial
               </Link>
             </div>
           </div>
@@ -176,3 +182,18 @@ export default function HomePage() {
     </>
   );
 }
+
+// ── STATICALLY GENERATED, REFRESHED ON DEMAND ─────────────────────────────────────────────────
+// The trial length is a setting (lib/programme-settings), and this page prints it. Saving the
+// setting in the Engine Room calls res.revalidate('/') so the public page changes with NO
+// DEPLOY — the whole point of making it a setting. The `revalidate` below is the BACKSTOP, not
+// the mechanism: if that on-demand call ever fails, the page still corrects itself within the
+// hour instead of promising the old number until somebody saves again.
+export const getStaticProps: GetStaticProps<{ trialDays: number }> = async () => {
+  // A BLOCK BODY, not `=> ({ … })`. client-bundle-gate models tree-shaking by cutting the BRACED
+  // body of each server data function; an expression-bodied arrow has no braced body, so the
+  // import stays visible in the page's client half and reads as a leak. The gate is blind to that
+  // shape — written up for its own fix — and in the meantime this is the form every other page
+  // in the codebase already uses.
+  return { props: { trialDays: await readTrialDays() }, revalidate: 3600 };
+};

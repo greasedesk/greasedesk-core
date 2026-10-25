@@ -1,7 +1,8 @@
 /**
  * File: pages/onboarding/billing.tsx
  * Onboarding Step 6 — start the subscription (the FINAL, non-skippable step; item-13). A hosted
- * Stripe Checkout launcher: 60-day free trial, card verified today, first charge a flat monthly
+ * Stripe Checkout launcher: a free trial of the length set in the Engine Room, card verified
+ * today, first charge a flat monthly
  * price per site at trial end unless cancelled. Real terms only (ruling 2026-07-13 — no fake card
  * fields, no untrue money strings on a live domain).
  *
@@ -18,10 +19,14 @@ import OnboardingLayout, { primaryButtonClass } from '@/components/layout/Onboar
 import { perLocationLabelFor } from '@/lib/billing-pricing';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
+// ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
+// client half of the file then reads as a use of the server import, and client-bundle-gate
+// correctly cannot tell the difference. The alias is the distinction, not a workaround.
+import { trialDays as readTrialDays } from '@/lib/programme-settings';
 
 type Mode = 'idle' | 'launching' | 'finalising' | 'stuck' | 'unconfigured';
 
-export default function BillingPage({ priceLabel }: { priceLabel: string }) {
+export default function BillingPage({ priceLabel, trialDays }: { priceLabel: string; trialDays: number }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +88,7 @@ export default function BillingPage({ priceLabel }: { priceLabel: string }) {
   }
 
   return (
-    <OnboardingLayout step="checkout" title="Start your subscription" heading="Start your 60-day free trial">
+    <OnboardingLayout step="checkout" title="Start your subscription" heading={`Start your ${trialDays}-day free trial`}>
       {mode === 'finalising' ? (
         <div className="text-center py-6">
           <div className="animate-spin h-8 w-8 border-2 border-line border-t-accent rounded-full mx-auto mb-4" />
@@ -121,7 +126,7 @@ export default function BillingPage({ priceLabel }: { priceLabel: string }) {
         <>
           <div className="bg-surface-muted border border-line p-4 rounded-lg mb-6 text-sm text-muted space-y-2">
             <p><span className="text-ink font-semibold">{priceLabel}</span> per location, per month.</p>
-            <p>Your card is verified today but <span className="text-ink font-semibold">not charged</span>. The trial runs 60 days.</p>
+            <p>Your card is verified today but <span className="text-ink font-semibold">not charged</span>. The trial runs {trialDays} days.</p>
             <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
           </div>
 
@@ -157,5 +162,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   // Country-profile price (ruling 2026-07-28): the figure shown here is the figure checkout
   // verifies against the Stripe Price — both halves or neither.
   const group = await prisma.group.findUnique({ where: { id: gate.vis.groupId as string }, select: { country_code: true, ref: true } });
-  return { props: { priceLabel: perLocationLabelFor(resolveTenantProfile(group)) } };
+  // The trial length is a SETTING. This page is server-rendered on every request, so the number
+  // here is whatever Checkout will actually seed — the two cannot drift.
+  return { props: { priceLabel: perLocationLabelFor(resolveTenantProfile(group)), trialDays: await readTrialDays() } };
 };

@@ -19,7 +19,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { refuseDemoBilling } from '@/lib/demo-tenant';
-import { getStripe, stripePriceId, appBaseUrl, TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { getStripe, stripePriceId, appBaseUrl } from '@/lib/stripe';
+import { trialDays } from '@/lib/programme-settings';
 import { createHash } from 'node:crypto';
 import type Stripe from 'stripe';
 import { writeAudit } from '@/lib/audit';
@@ -170,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // the sub go past_due → (later) lapsed. 'cancel' was the harshest reading of a soft failure —
       // it would drop the tenant into read-only mid-morning with no warning.
       subscription_data: {
-        trial_period_days: TRIAL_PERIOD_DAYS,
+        trial_period_days: await trialDays(),
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
       },
       payment_method_collection: 'always',

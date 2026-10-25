@@ -54,6 +54,19 @@ export type NotificationTemplate = {
 const esc = (v: unknown): string =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
+/**
+ * "your N-day GreaseDesk trial", or just "your GreaseDesk trial" when the caller did not supply a
+ * length. (N spelled out here rather than shown, because a worked example in a comment is a stale
+ * number waiting to be read as the current one.) ABSENT IS A THIRD STATE, not zero: a caller that forgets gets a sentence that is still
+ * true, never "your -day trial" and never a number this file invented. The number is a SETTING
+ * (lib/programme-settings) and the caller reads it — a literal here would be the second source the
+ * whole slice exists to remove, in the one place nobody looks.
+ */
+const trialOffer = (days: unknown): string => {
+  const n = Number(days);
+  return Number.isFinite(n) && n > 0 ? `your ${n}-day GreaseDesk trial` : 'your GreaseDesk trial';
+};
+
 /** Shared shell so every GreaseDesk email looks like one product, not N hand-rolled tables. */
 const shell = (bodyHtml: string): string => `
   <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;line-height:1.6;color:#0f172a;max-width:560px;margin:0 auto;padding:8px">
@@ -472,7 +485,7 @@ export const NOTIFICATION_TEMPLATES = {
       html: shell(`
         <h2 style="margin:0 0 8px">Verify your email address</h2>
         <p>Hi ${esc(d.name ?? 'there')},</p>
-        <p>Thanks for signing up. Verify your email to activate your GreaseDesk trial and finish setting up your garage.</p>
+        <p>Thanks for signing up. Verify your email to activate ${trialOffer(d.trialDays)} and finish setting up your garage.</p>
         ${button(String(d.link ?? ''), 'Verify email address')}
         <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your browser:<br/>${esc(d.link)}</p>`),
     }),

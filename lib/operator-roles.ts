@@ -66,6 +66,9 @@ export const ER_NAV: ErNavItem[] = [
   { href: '/superadmin/content', label: 'Content', minRole: 'country_manager' },
   // Setup-wizard step definitions (wording/order/scope) — Owner only; handler bindings are code.
   { href: '/superadmin/setup-steps', label: 'Setup steps', minRole: 'owner' },
+  // Programme settings — today the TRIAL LENGTH, which every new garage is offered and which the
+  // public site prints. Owner only: it is a commercial term, not an operational one.
+  { href: '/superadmin/billing', label: 'Billing', minRole: 'owner' },
 ];
 export const erNavFor = (role: OperatorRoleName): ErNavItem[] => ER_NAV.filter((i) => roleAtLeast(role, i.minRole));
 /** The minRole a route requires — the SAME value its page passes to requireOperatorPage. */

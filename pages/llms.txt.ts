@@ -16,9 +16,9 @@
 import type { GetServerSideProps } from 'next';
 import { COMPANY } from '@/lib/company-info';
 import { MONTHLY_PRICE_POUNDS } from '@/lib/billing-pricing';
-import { TRIAL_PERIOD_DAYS } from '@/lib/stripe';
+import { trialDays } from '@/lib/programme-settings';
 
-function body(): string {
+function body(trial: number): string {
   const u = (p: string) => `${COMPANY.siteUrl}${p}`;
   return `# ${COMPANY.tradingName}
 
@@ -54,7 +54,7 @@ typically one to five locations. Not currently available outside the UK.
 ## Pricing
 
 £${MONTHLY_PRICE_POUNDS} per location, per month. One price — no tiers, no setup fees.
-${TRIAL_PERIOD_DAYS}-day free trial; a payment card is required to start it. Cancel any time.
+${trial}-day free trial; a payment card is required to start it. Cancel any time.
 
 ## Links
 
@@ -72,8 +72,11 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   // charset=utf-8 matters: the copy carries £ and an em dash, and a client guessing latin-1 would
   // render both as mojibake.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  // Rendered per request, so the trial length here is correct the instant the setting is saved —
+  // which is why /llms.txt is NOT in PUBLIC_COPY_PATHS. The hour of caching is a CDN hint, not a
+  // second copy of the number.
   res.setHeader('Cache-Control', 'public, max-age=3600');
-  res.write(body());
+  res.write(body(await trialDays()));
   res.end();
   return { props: {} };
 };

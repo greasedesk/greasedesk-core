@@ -9,7 +9,7 @@ import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
 import { sendNotification } from '@/lib/notify';
 import crypto from 'crypto';
-import { trialEndsFromNow } from '@/lib/trial';
+import { trialEndsAt, trialDays } from '@/lib/programme-settings';
 
 type Payload = { name: string; email: string; password: string; ref?: string };
 
@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
         // asks the real garage name and it's mandatory there (item-13). "Iain Gunn's Garage" was this
         // personal-name default surviving because setup used to be skippable; it no longer is.
-        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: trialEndsFromNow(), signup_ref: signupRef },
+        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: await trialEndsAt(), signup_ref: signupRef },
       });
 
       const user = await tx.user.create({
@@ -137,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       channel: 'email',
       groupId: group.id,
       subject: { type: 'user', id: user.id },
-      data: { name: user.name || 'there', link: verificationLink },
+      data: { name: user.name || 'there', link: verificationLink, trialDays: await trialDays() },
     });
     if (!notified.ok) console.warn('[register] verification email not sent:', notified.status, notified.reason, verificationLink);
 
