@@ -82,8 +82,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       orderBy: [{ country_code: 'asc' }, { currency: 'asc' }, { tier: 'asc' }, { effective_from: 'asc' }],
     });
     // Which rate_ids have commission computed against them → immutable regardless of date.
+    // rate_id IS NULLABLE since the affiliate programme: an affiliate's reward is a fixed sum from
+    // ProgrammeSettings, not a CommissionRate, so those entries reference no rate at all. They are
+    // filtered out rather than mapped to null — a null in this Set would be a "referenced rate"
+    // that is not a rate, and the one thing the Set decides is whether a row may still be edited.
     const referenced = new Set(
-      (await prisma.commissionEntry.findMany({ select: { rate_id: true }, distinct: ['rate_id'] })).map((e: { rate_id: string }) => e.rate_id),
+      (await prisma.commissionEntry.findMany({ where: { rate_id: { not: null } }, select: { rate_id: true }, distinct: ['rate_id'] }))
+        .map((e: { rate_id: string | null }) => e.rate_id as string),
     );
     // Per key, the in-force row is the latest effective_from ≤ now (mirrors resolveRate at `now`).
     const inForceId = new Map<string, string>();
