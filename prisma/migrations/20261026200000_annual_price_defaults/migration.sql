@@ -1,4 +1,11 @@
 -- @migration: constraining the classifier cannot reason about ALTER COLUMN SET DEFAULT and fails closed on it, which is the right direction; the change itself constrains nothing and touches no row
+-- @applied-ahead-of-deploy: 2026-10-26T21:53:09.269Z
+--   production was running: 0484280569f78587505fb501ac6c25b7ebed200c
+--   this tree: 45596f13dc671938046581b37926557cb1bb4f78
+--   app files not live at the time: lib/affiliate.ts, lib/programme-settings.ts, pages/api/superadmin/programme-settings.ts, pages/superadmin/billing.tsx, scripts/affiliate-gate.mjs, scripts/billing-plans-gate.mjs, scripts/entitlement-product-gate.mjs, scripts/gate-target-gate.mjs, scripts/gates.mjs, scripts/trial-setting-gate.mjs
+--   reason given: Defaults only on ProgrammeSettings; no row written. The Vercel build's migrate status requires it applied before 45596f1 can deploy.
+--   Applied with --even-if-not-live. Until the push landed, production ran code that did not
+--   satisfy this migration. If something broke in that window, this is the window.
 -- @precedes-deploy: it does not need to precede anything — a default applies only to rows inserted after it, and both existing rows are left exactly as they are — but a constraining migration must say when it should land, and the honest answer is that the order does not matter here
 --
 -- THE ANNUAL PRICES CHANGED (owner, 2026-10-26).
