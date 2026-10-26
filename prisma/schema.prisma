@@ -1172,6 +1172,31 @@ model TenantAffiliateTerms {
 /// already signed up is protected by its own frozen TenantPlanTerms / TenantAffiliateTerms, not by
 /// anything here. The prices are DERIVED from these and the standard monthly price at the moment
 /// of signup, so changing a number never means creating a Stripe Price by hand.
+/// WHICH DATABASE AM I. One row, and the only thing that distinguishes the gate database from
+/// production from inside a connection. gatePrisma requires `test` before a gate may run, and
+/// sendNotification refuses every send when this reads `test` — which is what lets a gate drive a
+/// real signup without an email leaving the building.
+///
+/// The DEFAULT IS `production`, deliberately: this is written by a migration that cannot see which
+/// database it is on, so an unconfigured database claims to be production. That refuses gates
+/// (work not done) rather than silencing production email (customers not written to).
+enum EnvironmentKind {
+  production
+  test
+}
+
+model Environment {
+  id         String          @id @default("singleton")
+  kind       EnvironmentKind @default(production)
+  /// Free text for a human: which project and branch this is, so a confusing connection names
+  /// itself in the refusal rather than being a hex endpoint id nobody recognises.
+  /// NULL = NOBODY HAS LABELLED THIS DATABASE. Deliberate: the migration that creates this row
+  /// cannot know which database it is on, so it writes no label, and a null means the refusal
+  /// prints the raw endpoint id instead of a friendly name. It is never a missing measurement.
+  label      String?
+  updated_at DateTime        @updatedAt
+}
+
 model ProgrammeSettings {
   id                         String   @id @default("singleton")
   /// THE one trial length, read by Checkout, by Group.trial_ends_at and by /llms.txt. It lived in
