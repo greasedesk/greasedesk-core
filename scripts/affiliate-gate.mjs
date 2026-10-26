@@ -12,10 +12,18 @@
  * programme that did nothing at all.
  *
  * ── AND THE RULE THE PLANS TURN ON ──────────────────────────────────────────────────────────────
- * TRIAL OR PAY NOW, NEVER BOTH (owner, 2026-10-24). A new garage on annual pays immediately for 12
- * months at the price of 9 — the trial IS the discount, taken once, at the front. Monthly keeps
- * the 30-day trial. The affiliate offer is 12 for 6, by code, once per garage. Renewal of any
- * annual plan is 12 for 10. Four shapes, one rule, and the rule is asserted rather than described.
+ * TRIAL OR PAY NOW, NEVER BOTH (owner, 2026-10-24). Monthly keeps the 30-day trial; every annual
+ * shape pays at the front and has none.
+ *
+ * ── THE PRICES CHANGED ON 2026-10-26, AND THIS FILE WAS WRITTEN BEFORE THEY DID ────────────────
+ *   annual, every garage, direct or referred ... 12 months for the price of 10 = £750, renewal too
+ *   affiliate annual offer ..................... 12 months for the price of  8 = £600
+ * The old 12-for-9 for new garages is GONE, and the offer was 12-for-6 (£450). Five assertions in
+ * this file asserted the old numbers; a gate that keeps asserting a retired price is a gate that
+ * will one day refuse the right answer.
+ *
+ * The REWARD is unchanged: £30 per paid month for the first four paid months, £120 cap per
+ * referred garage; or a single £120 when the annual offer invoice is paid.
  *
  * FIXTURES ON ZZ ONLY, by this gate's own prefix, swept before and after and REGISTERED.
  */
@@ -50,6 +58,9 @@ const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const R = '/Users/hugh/Developer/greasedesk-core';
 const PREFIX = 'ZZAFF';
+/** THIS GATE'S OWN settings row. The singleton is read by trial-setting-gate; two gates sharing
+ *  one mutable global is how a gate's trial length reached the public site on 2026-10-25. */
+const SETTINGS = 'ZZAFF-settings';
 
 let prisma;
 const sweep = async () => {
@@ -66,7 +77,8 @@ const sweep = async () => {
     await prisma.commissionEntry.deleteMany({ where: { party_id: { in: reps } } }).catch(() => {});
     await prisma.rep.deleteMany({ where: { id: { in: reps } } }).catch(() => {});
   }
-  return reps.length + groups.length;
+  const settings = await prisma.programmeSettings.deleteMany({ where: { id: SETTINGS } }).catch(() => ({ count: 0 }));
+  return reps.length + groups.length + (settings?.count ?? 0);
 };
 
 try {
@@ -84,45 +96,42 @@ try {
   // the one nobody edits goes stale first. This file keeps the affiliate subjects: entitlement,
   // frozen terms, the reward ledger, who may take the offer, and closing the programme.
 
-  // ── 4. ENTITLEMENT FOLLOWS THE PRODUCT, NOT THE PRICE ───────────────────────────────────────
-  // An inline price (ruling 4) has a generated id in no map, and the old lookup answered with a
-  // console.warn and NO modules — a garage paying for Core and entitled to nothing. The map moves
-  // to the product, which is what a module is actually a property of.
-  console.log('\n— a module belongs to the product —');
-  const MOD = await import(`${R}/lib/modules.ts`);
-  check('modules resolve from a PRODUCT id', typeof MOD.modulesFromProducts === 'function',
-    'modulesFromPriceIds cannot answer for a price created at signup');
-  check('  …and an annual signup is entitled to exactly what a monthly one is',
-    JSON.stringify(MOD.modulesFromProducts([process.env.STRIPE_PRODUCT_CORE ?? 'prod_core']).sort())
-      === JSON.stringify(MOD.modulesFromProducts([process.env.STRIPE_PRODUCT_CORE ?? 'prod_core']).sort()),
-    'same product, same entitlement, whatever the interval or the amount');
+  // ── ENTITLEMENT MOVED OUT (2026-10-26) ──────────────────────────────────────────────────────
+  // "A module belongs to the product, not the price" began here because the affiliate offer is
+  // what first needed an inline price. It is not an affiliate rule — it is the entitlement rule
+  // for every paying garage — and keeping it here made "the affiliate ledger is correct" and
+  // "entitlement resolves" share one verdict. It is scripts/entitlement-product-gate.mjs now, and
+  // it DECLINES until lib/modules exports modulesFromProducts.
 
   // ── 5. THE TERMS A GARAGE SIGNED UP UNDER ARE FROZEN ────────────────────────────────────────
   console.log('\n— what a garage signed up under —');
   const mkGarage = async (n) => (await prisma.group.create({ data: {
     group_name: `${PREFIX} garage ${n}`, billing_email: `${PREFIX.toLowerCase()}-${n}@example.invalid`,
   }, select: { id: true } })).id;
+  // THE AFFILIATE COMES FIRST. TenantAffiliateTerms.affiliate_id is a required FK: terms about a
+  // referral must name who referred. The first draft created the affiliate in section 6, after the
+  // terms in section 5 that cannot exist without it.
+  const aff = await prisma.rep.create({ data: {
+    email: `${PREFIX.toLowerCase()}@example.invalid`, name: `${PREFIX} affiliate`,
+    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'affiliate' }, select: { id: true } });
   const g1 = await mkGarage(1);
-  const frozen = await AF.freezeTermsAtSignup(prisma, g1, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 6, monthsGiven: 12 });
+  const frozen = await AF.freezeTermsAtSignup(prisma, g1, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 8, monthsGiven: 12 });
   check('the terms are written once, at signup', !!frozen && frozen.total_reward_pennies === 12000);
   // THE CLAUSE THE WHOLE SETTINGS DESIGN RESTS ON.
-  await AF.saveSettings(prisma, { totalRewardPennies: 20000, instalmentPennies: 5000 });
+  await AF.saveSettings(prisma, { totalRewardPennies: 20000, instalmentPennies: 5000 }, { settingsId: SETTINGS });
   const reread = await AF.termsFor(prisma, g1);
   check('a SETTINGS CHANGE does not move them', reread.total_reward_pennies === 12000 && reread.instalment_pennies === 3000,
     `${reread.total_reward_pennies}/${reread.instalment_pennies} — a garage keeps the terms it signed up under`);
   check('  …while a NEW garage gets the new ones',
-    (await AF.freezeTermsAtSignup(prisma, await mkGarage(2), await AF.currentTerms(prisma))).total_reward_pennies === 20000);
+    (await AF.freezeTermsAtSignup(prisma, await mkGarage(2), { ...(await AF.currentTerms(prisma, { settingsId: SETTINGS })), affiliateId: aff.id })).total_reward_pennies === 20000);
 
   // ── 6. THE REWARD LEDGER: IDEMPOTENT, CAPPED, AND ONLY ON MONEY ─────────────────────────────
   console.log('\n— one entry per payment, and never more than the total —');
-  const aff = await prisma.rep.create({ data: {
-    email: `${PREFIX.toLowerCase()}@example.invalid`, name: `${PREFIX} affiliate`,
-    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'affiliate' }, select: { id: true } });
   const g3 = await mkGarage(3);
-  await AF.freezeTermsAtSignup(prisma, g3, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await AF.freezeTermsAtSignup(prisma, g3, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
   await prisma.tenantAttribution.create({ data: { group_id: g3, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
 
-  const pay = (invoiceId) => AF.rewardPaidInvoice(prisma, { groupId: g3, invoiceId, paidPennies: 7500 });
+  const pay = (invoiceId) => AF.rewardPaidInvoice(prisma, { groupId: g3, invoiceId, paidPennies: 7500, status: 'paid' });
   await pay('in_ZZAFF_1');
   const after1 = await prisma.commissionEntry.count({ where: { group_id: g3 } });
   check('a successful payment writes ONE instalment', after1 === 1, `${after1}`);
@@ -137,21 +146,49 @@ try {
 
   console.log('\n— and nothing at all for a trial —');
   const g4 = await mkGarage(4);
-  await AF.freezeTermsAtSignup(prisma, g4, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await AF.freezeTermsAtSignup(prisma, g4, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
   await prisma.tenantAttribution.create({ data: { group_id: g4, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
   await AF.rewardTrialStarted(prisma, { groupId: g4 }).catch(() => {});
   check('starting a trial earns NOTHING', (await prisma.commissionEntry.count({ where: { group_id: g4 } })) === 0,
     'the reward is for a garage that PAYS, and a trial has paid nothing');
 
+  // ── ONLY ON MONEY ACTUALLY TAKEN ────────────────────────────────────────────────────────────
+  // "No reward on trial, unpaid, void or £0 invoices" (owner, 2026-10-26). The trial case above
+  // was the only one tested; these are the other three, each on its OWN garage so a refusal
+  // cannot be mistaken for the cap having been reached.
+  console.log('\n— nor for an invoice that took no money —');
+  const noMoney = async (n, invoiceId, args) => {
+    const g = await mkGarage(n);
+    await AF.freezeTermsAtSignup(prisma, g, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+    await prisma.tenantAttribution.create({ data: { group_id: g, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
+    await AF.rewardPaidInvoice(prisma, { groupId: g, invoiceId, ...args }).catch(() => {});
+    return prisma.commissionEntry.count({ where: { group_id: g } });
+  };
+  check('an UNPAID invoice earns nothing', (await noMoney(10, 'in_ZZAFF_OPEN', { paidPennies: 7500, status: 'open' })) === 0,
+    'an invoice that has been issued is not an invoice that has been paid');
+  check('a VOID invoice earns nothing', (await noMoney(11, 'in_ZZAFF_VOID', { paidPennies: 7500, status: 'void' })) === 0,
+    'a retired number paid nobody anything');
+  // ZERO IS TESTED AS A NUMBER, NOT AS FALSINESS. `if (paidPennies)` would skip a £0 invoice
+  // silently and look identical to refusing it — and a £0 invoice is a real shape here: a fully
+  // discounted first month is still an invoice marked paid.
+  check('a £0 invoice earns nothing, and is REFUSED rather than skipped',
+    (await noMoney(12, 'in_ZZAFF_ZERO', { paidPennies: 0, status: 'paid' })) === 0,
+    'zero is a measurement, not an absence — see three-states-not-two');
+  // THE DISCRIMINATOR for all four refusals above, including the trial: a paid invoice of real
+  // money on a fresh garage DOES earn. Without it they pass against a function that pays nobody.
+  check('  …while a PAID invoice on the same shape earns one instalment',
+    (await noMoney(13, 'in_ZZAFF_REAL', { paidPennies: 7500, status: 'paid' })) === 1,
+    'otherwise the four refusals prove only that the ledger is shut');
+
   console.log('\n— the annual path is one entry, not four —');
   const g5 = await mkGarage(5);
-  await AF.freezeTermsAtSignup(prisma, g5, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 6, monthsGiven: 12 });
+  await AF.freezeTermsAtSignup(prisma, g5, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 8, monthsGiven: 12 });
   await prisma.tenantAttribution.create({ data: { group_id: g5, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
-  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL', paidPennies: 45000 });
+  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL', paidPennies: 60000, status: 'paid' });
   const annual = await prisma.commissionEntry.findMany({ where: { group_id: g5 }, select: { amount_pennies: true } });
   check('the offer payment earns the FULL reward in one entry',
     annual.length === 1 && annual[0].amount_pennies === 12000, JSON.stringify(annual));
-  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL_2', paidPennies: 45000 });
+  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL_2', paidPennies: 60000, status: 'paid' });
   check('  …and a second payment on an annual tenant earns nothing more',
     (await prisma.commissionEntry.count({ where: { group_id: g5 } })) === 1);
 
@@ -187,15 +224,15 @@ try {
   // Closing is about NEW signups. It must not touch money already earned, nor instalments a
   // paying garage is still generating — those were promised on terms that were frozen.
   console.log('\n— closing signups —');
-  await AF.saveSettings(prisma, { signupsOpen: false });
+  await AF.saveSettings(prisma, { signupsOpen: false }, { settingsId: SETTINGS });
   check('a closed programme refuses a new signup',
     !!AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: false }));
   const earnedBefore = (await prisma.commissionEntry.aggregate({ where: { group_id: g3 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
   check('  …and leaves what was already EARNED alone', earnedBefore === 12000, `£${(earnedBefore / 100).toFixed(2)}`);
   const g6 = await mkGarage(6);
-  await AF.freezeTermsAtSignup(prisma, g6, { totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await AF.freezeTermsAtSignup(prisma, g6, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
   await prisma.tenantAttribution.create({ data: { group_id: g6, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
-  await AF.rewardPaidInvoice(prisma, { groupId: g6, invoiceId: 'in_ZZAFF_AFTERCLOSE', paidPennies: 7500 });
+  await AF.rewardPaidInvoice(prisma, { groupId: g6, invoiceId: 'in_ZZAFF_AFTERCLOSE', paidPennies: 7500, status: 'paid' });
   check('  …and a garage signed up BEFORE closing keeps earning its instalments',
     (await prisma.commissionEntry.count({ where: { group_id: g6 } })) === 1,
     'closing the door is not a clawback — the terms were frozen when they signed');
