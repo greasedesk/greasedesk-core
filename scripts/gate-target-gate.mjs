@@ -20,6 +20,7 @@ const { gatePrisma, gateDbRefusal, describeError } = await import('./_gate-prefl
 import './_ts.mjs';
 const { describeTarget, classifyUrl, endpointOf, PRODUCTION_ENDPOINT_SHA256 } = await import('./_db-target.mjs');
 const { readFileSync } = await import('node:fs');
+const { hasKey } = await import('/Users/hugh/Developer/greasedesk-core/lib/anchored-match.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -156,8 +157,11 @@ try {
     JSON.stringify(guards));
   // ONE DISPATCH FOR BOTH CHANNELS, which is what makes one guard cover Resend and Twilio. Two
   // adapters, one call site: a second call site would be a door this check does not stand in.
+  // hasKey, not a hand-rolled /email:\s*\{/ — anchored-match-gate forbids the hand-rolled form
+  // across the suite, and it was right to flag mine: an unanchored key pattern matches the word
+  // inside a comment, a string, or another object, so it can report an adapter that is not there.
   check('  …and there is exactly ONE provider dispatch, covering email and SMS',
-    notify.split('adapter.send(').length - 1 === 1 && /email:\s*\{/.test(notify) && /sms:\s*\{/.test(notify),
+    notify.split('adapter.send(').length - 1 === 1 && hasKey(notify, 'email') && hasKey(notify, 'sms'),
     `${notify.split('adapter.send(').length - 1} dispatch site(s)`);
 
   // ── 6. AND THE PROVIDER IS NEVER REACHED ────────────────────────────────────────────────────

@@ -21,8 +21,12 @@ import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/ope
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type CopyCheck = { url: string; shows: number | null; agrees: boolean };
+type PlanKindMap = Record<string, 'months' | 'pennies' | 'switch'>;
 type State = {
   trialDays: number;
+  planSettings: Record<string, number>;
+  planLabels: Record<string, string>;
+  planKinds: PlanKindMap;
   publicPaths: string[];
   revalidationTargets: string[];
   copyRevalidatedAt: string | null;
@@ -40,10 +44,16 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
   // THREE STATES, not two: null = we have not looked at the public site yet, which is a different
   // thing from having looked and found it stale.
   const [pub, setPub] = useState<{ copy: CopyCheck[]; agrees: boolean } | null>(null);
+  const [plan, setPlan] = useState<Record<string, string>>({});
+  const [planBusy, setPlanBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await fetch('/api/superadmin/programme-settings');
-    if (r.ok) { const d: State = await r.json(); setS(d); setDays(String(d.trialDays)); }
+    if (r.ok) {
+      const d: State = await r.json();
+      setS(d); setDays(String(d.trialDays));
+      setPlan(Object.fromEntries(Object.entries(d.planSettings).map(([k, v]) => [k, String(v)])));
+    }
   }, []);
   const checkPublic = useCallback(async () => {
     setPub(null);
@@ -70,6 +80,29 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
   }
 
   const dirty = s != null && String(s.trialDays) !== days.trim();
+  const planDirty = s != null && Object.entries(plan).some(([k, v]) => String(s.planSettings[k]) !== v.trim());
+
+  async function savePlan(e: React.FormEvent) {
+    e.preventDefault();
+    setPlanBusy(true); setMsg(null);
+    try {
+      const body: Record<string, number | boolean> = {};
+      for (const [k, v] of Object.entries(plan)) {
+        if (!s || String(s.planSettings[k]) === v.trim()) continue;
+        body[k] = s.planKinds[k] === 'switch' ? (v === 'true') : Number(v);
+      }
+      const r = await fetch('/api/superadmin/programme-settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      setMsg({ ok: r.ok, text: d.message || (r.ok ? 'Saved.' : 'Failed.') });
+      if (r.ok) await refresh();
+    } finally {
+      // Clear busy in the finally: a thrown fetch must not leave the button dead.
+      setPlanBusy(false);
+    }
+  }
+
 
   return (
     <EngineRoomLayout role={role}>
@@ -92,7 +125,11 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
           <form onSubmit={save} className="flex flex-wrap items-end gap-3">
             <div>
               <label className="block text-xs text-muted mb-1">Days</label>
-              <input type="number" min={1} max={365} step={1} required value={days}
+              {/* NAMED, because it is no longer the only number on this screen. The plan settings
+                  below added six more, and a gate locating this one by input[type="number"]
+                  matched seven elements. A selector that was unique stopped being unique when the
+                  page grew — the field did not change, its surroundings did. */}
+              <input data-testid="trial-days" type="number" min={1} max={365} step={1} required value={days}
                 onChange={(e) => setDays(e.target.value)} className={`${input} w-28`} />
             </div>
             <button disabled={busy || !dirty} className="bg-surface text-ink border border-line rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
@@ -136,6 +173,71 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
             </div>
           )}
         </div>
+
+        {/* ── PLAN AND REWARD SETTINGS ──────────────────────────────────────────────────────── */}
+        {s && (
+          <div className="rounded-xl border border-line bg-surface p-5">
+            <h2 className="text-sm font-semibold mb-1">Plan and reward settings</h2>
+            <p className="text-xs text-muted mb-4">
+              Months are charged out of {s.planSettings.months_given} given — an annual plan at{' '}
+              {s.planSettings.renewal_annual_months_paid} months charged is{' '}
+              {s.planSettings.months_given} for the price of {s.planSettings.renewal_annual_months_paid}.
+              Reward amounts are in <span className="text-ink">pennies</span>.
+              {/* ── THE SENTENCE THAT STOPS SOMEBODY REPRICING A LIVE GARAGE ──────────────────
+                  A referred garage's reward terms are COPIED into TenantAffiliateTerms at signup
+                  and its plan into TenantPlanTerms, precisely so these can change without moving
+                  them. A settings form that does not say so is a form somebody will use to try. */}
+              {' '}<span className="text-ink font-semibold">
+                A change here applies to garages signing up from now on only.
+              </span>{' '}
+              Garages already referred keep the terms frozen when they signed up; nothing on this
+              screen can alter them.
+            </p>
+            <form onSubmit={savePlan} className="space-y-3">
+              {Object.keys(s.planSettings).map((f) => (
+                <div key={f} className="flex flex-wrap items-center gap-3">
+                  <label className="text-xs text-muted flex-1 min-w-[16rem]" htmlFor={`ps-${f}`}>
+                    {s.planLabels[f]}
+                    {s.planKinds[f] === 'pennies' && plan[f] && Number.isFinite(Number(plan[f]))
+                      && <span className="ml-2 text-ink">= £{(Number(plan[f]) / 100).toFixed(2)}</span>}
+                    {/* THE FIELD THAT CURRENTLY CHANGES NOTHING. planFor('annual_new') really does
+                        read it (lib/billing-plans:94), but every annual plan is priced the same
+                        today, so an operator seeing a separate box would reasonably expect it to
+                        mean something. It is kept for a future promotion; the note says so. */}
+                    {f === 'new_annual_months_paid' && (
+                      <span className="block text-[11px] text-muted mt-0.5">
+                        Set it the same as renewal unless you’re running a promotion.
+                      </span>
+                    )}
+                  </label>
+                  {s.planKinds[f] === 'switch' ? (
+                    <input
+                      id={`ps-${f}`} data-testid={`ps-${f}`} type="checkbox"
+                      checked={plan[f] === 'true'}
+                      onChange={(e) => setPlan({ ...plan, [f]: e.target.checked ? 'true' : 'false' })}
+                      className="h-4 w-4 accent-accent"
+                    />
+                  ) : (
+                    <input
+                      id={`ps-${f}`} data-testid={`ps-${f}`} type="number" step={1}
+                      min={s.planKinds[f] === 'months' ? 1 : 0}
+                      max={s.planKinds[f] === 'months' ? 12 : undefined}
+                      value={plan[f] ?? ''} onChange={(e) => setPlan({ ...plan, [f]: e.target.value })}
+                      className={`${input} w-32`}
+                    />
+                  )}
+                </div>
+              ))}
+              <div className="flex items-center gap-3 pt-1">
+                <button disabled={planBusy || !planDirty} data-testid="save-plan-settings"
+                  className="bg-surface text-ink border border-line rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
+                  {planBusy ? 'Saving…' : 'Save plan settings'}
+                </button>
+                {planDirty && !planBusy && <span className="text-xs text-warn">Unsaved.</span>}
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </EngineRoomLayout>
   );

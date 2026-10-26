@@ -67,9 +67,21 @@ try {
   console.log('\n— the amount is arithmetic over the settings —');
   check('monthly is the monthly price, with the trial',
     BP.planFor('monthly', S).payNowPennies === 0 && BP.planFor('monthly', S).trialDays === 30);
-  check('a new garage on annual pays 9 months for 12',
-    BP.planFor('annual_new', S).payNowPennies === 9 * 7500 && BP.planFor('annual_new', S).monthsGiven === 12,
-    `${BP.planFor('annual_new', S).payNowPennies}`);
+  // 12-FOR-10, NEW OR RENEWAL (owner, 2026-10-26). The old 12-for-9 for a new garage is gone —
+  // every annual plan is the same price now — and new_annual_months_paid is kept only for a
+  // future promotion. S below still carries 9 so that this clause proves planFor reads the
+  // SETTING rather than a constant; the live default is 10.
+  check('a new garage on annual pays what the new-annual setting says',
+    BP.planFor('annual_new', S).payNowPennies === S.newAnnualMonthsPaid * 7500
+      && BP.planFor('annual_new', S).monthsGiven === 12,
+    `${BP.planFor('annual_new', S).payNowPennies} at ${S.newAnnualMonthsPaid} months`);
+  check('  …and at the CURRENT terms that is 12 for 10 = £750',
+    BP.planFor('annual_new', { ...S, newAnnualMonthsPaid: 10 }).payNowPennies === 75000
+      && BP.planFor('annual_renewal', { ...S, renewalAnnualMonthsPaid: 10 }).payNowPennies === 75000,
+    'new and renewal are the same price today; a difference would be a promotion nobody has set');
+  check('  …and the affiliate offer is 12 for 8 = £600',
+    BP.planFor('annual_offer', { ...S, offerMonthsPaid: 8 }).payNowPennies === 60000,
+    'was 12-for-6 (£450) until 2026-10-26');
   check('the affiliate offer pays 6 months for 12', BP.planFor('annual_offer', S).payNowPennies === 6 * 7500,
     `${BP.planFor('annual_offer', S).payNowPennies}`);
   check('a renewal pays 10 months for 12', BP.planFor('annual_renewal', S).payNowPennies === 10 * 7500,
@@ -162,7 +174,7 @@ try {
   // that bypasses lib/billing-plans entirely.
   const bothRefused = await prisma.tenantPlanTerms.create({
     data: { group_id: g, plan: 'annual_offer', months_paid: 6, months_given: 12,
-      paid_now_pennies: 45000, trial_days: 30, effective_from: new Date('2026-09-01T00:00:00.000Z') },
+      paid_now_pennies: 60000, trial_days: 30, effective_from: new Date('2026-09-01T00:00:00.000Z') },
   }).then(() => false, (e) => /trial_xor_paynow/.test(describeError(e)));
   check('the DATABASE refuses a row carrying both a trial and a payment', bothRefused,
     'the module cannot produce one, and a writer that goes round the module still cannot store one');
@@ -222,6 +234,98 @@ try {
   check('  …and the list is every such path — each one really does create a Group',
     SIGNUP_PATHS.every((f) => /(tx|prisma)\.group\.(create|upsert)\s*\(/.test(readFileSync(`${R}/${f}`, 'utf8'))),
     'a file that stopped creating garages would sit on this list forever, passing');
+
+  // ── 8. THE PRICES ARE A SETTING AN OPERATOR CHANGES, NOT A DEPLOY ───────────────────────────
+  // Until 2026-10-26 /superadmin/billing could edit the trial length and nothing else, so moving
+  // the annual price meant a migration or a direct database write — a price change with no
+  // operator against it and no audit row.
+  console.log('\n— and the prices are editable, validated and audited —');
+  check('every plan setting is named in one closed list', PS.PLAN_SETTING_FIELDS.length === 7
+    && PS.PLAN_SETTING_FIELDS.every((f) => PS.PLAN_SETTING_LABEL[f] && PS.PLAN_SETTING_KIND[f]),
+    JSON.stringify(PS.PLAN_SETTING_FIELDS));
+
+  // VALIDATION, each refusal and then the discriminator. Months are 1..12; money is whole pennies
+  // and zero or more — zero is a real setting (a programme paying nothing) and must be ALLOWED,
+  // which is the half a "must be positive" rule would get wrong.
+  check('months outside 1..12 are refused', !!PS.refusePlanSetting('offer_months_paid', 0)
+    && !!PS.refusePlanSetting('offer_months_paid', 13) && !!PS.refusePlanSetting('offer_months_paid', 1.5));
+  check('negative money is refused', !!PS.refusePlanSetting('total_reward_pennies', -1));
+  check('fractional pennies are refused', !!PS.refusePlanSetting('total_reward_pennies', 12.5));
+  check('  …while a legitimate value is ACCEPTED, including ZERO pennies',
+    PS.refusePlanSetting('offer_months_paid', 8) === null
+      && PS.refusePlanSetting('total_reward_pennies', 0) === null
+      && PS.refusePlanSetting('total_reward_pennies', 60000) === null,
+    'otherwise the refusals above prove only that nothing can be saved');
+
+  // ── THE RULES THAT ARE ABOUT TWO FIELDS AT ONCE ─────────────────────────────────────────────
+  // Checked over the RESULTING state: a save touching only months_given can invalidate an offer
+  // value set months ago and never moved, so a per-field check cannot see it.
+  const base = { new_annual_months_paid: 10, renewal_annual_months_paid: 10, offer_months_paid: 8,
+    months_given: 12, total_reward_pennies: 12000, instalment_pennies: 3000, affiliate_signups_open: true };
+  check('months charged may not exceed months given',
+    !!PS.refusePlanCombination({ ...base, offer_months_paid: 13 - 1, months_given: 10 })
+      && !!PS.refusePlanCombination({ ...base, new_annual_months_paid: 11, months_given: 10 })
+      && !!PS.refusePlanCombination({ ...base, renewal_annual_months_paid: 11, months_given: 10 }),
+    'charging for eleven and giving ten is worse than monthly, and nobody means it');
+  check('an instalment may not exceed the total reward',
+    !!PS.refusePlanCombination({ ...base, instalment_pennies: 12001 }),
+    'the cap would be reached by the first payment — a single payment wearing the word instalment');
+  check('  …and a sensible combination is ACCEPTED', PS.refusePlanCombination(base) === null,
+    'otherwise the two refusals above prove only that nothing can be saved');
+  // AND IT IS ENFORCED AT THE WRITE, over the merged result — not only exported as a predicate.
+  const crossRefused = await PS.savePlanSettings(prisma, {
+    changes: { months_given: 6 }, actorId: null, settingsId: GATE_SETTINGS,
+  }).then(() => false, (e) => /cannot be more than/.test(describeError(e)));
+  check('  …and savePlanSettings refuses it over the MERGED state',
+    crossRefused, 'lowering months_given alone must be refused when a months-charged already exceeds it');
+
+  // A SWITCH IS NOT A NUMBER. Number(false) is 0, a perfectly plausible value that would read
+  // back as "off" by accident rather than by decision.
+  check('the signups switch is a boolean, and a number is refused',
+    PS.refusePlanSetting('affiliate_signups_open', true) === null
+      && PS.refusePlanSetting('affiliate_signups_open', false) === null
+      && !!PS.refusePlanSetting('affiliate_signups_open', 0),
+    'false must be ACCEPTED — it is the whole point of the switch');
+
+  // THE WRITE: on this gate's OWN row, never the singleton, and audited old-to-new.
+  await prisma.programmeSettings.upsert({ where: { id: GATE_SETTINGS }, update: {}, create: { id: GATE_SETTINGS } });
+  const singletonBefore = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { offer_months_paid: true } }))?.offer_months_paid ?? null;
+  const op = await prisma.operator.create({ data: {
+    email: 'zzbp-plan-gate@greasedesk.test', name: 'Plan settings gate', role: 'owner', status: 'active',
+    regions: ['GB'], passwordHash: 'x' }, select: { id: true } });
+  const saved = await PS.savePlanSettings(prisma, {
+    changes: { offer_months_paid: 8, total_reward_pennies: 60000, affiliate_signups_open: false },
+    actorId: op.id, settingsId: GATE_SETTINGS,
+  });
+  check('a save reports what CHANGED, old to new', saved.changed.offer_months_paid?.to === 8
+    && saved.changed.total_reward_pennies?.to === 60000, JSON.stringify(saved.changed));
+  check('  …and READS BACK from the database, not from what it was sent',
+    saved.after.offer_months_paid === 8 && saved.after.total_reward_pennies === 60000
+      && saved.after.affiliate_signups_open === false,
+    JSON.stringify(saved.after));
+  const audit = await prisma.superAdminAudit.findFirst({
+    where: { action: 'programme_plan_settings', operator_user_id: op.id },
+    orderBy: { created_at: 'desc' }, select: { target_ref_snapshot: true, detail: true },
+  });
+  check('  …and writes ONE audit row naming the change and who made it',
+    !!audit && /offer_months_paid .* → 8/.test(String(audit.target_ref_snapshot)),
+    String(audit?.target_ref_snapshot));
+  check('  …and the SINGLETON is untouched by any of it',
+    (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { offer_months_paid: true } }))?.offer_months_paid === singletonBefore,
+    `singleton offer_months_paid ${singletonBefore} — a gate must not reprice the live programme`);
+  // A SAVE THAT CHANGES NOTHING WRITES NOTHING. An audit row per form submission, rather than per
+  // change, fills the log with "nothing happened" and buries the entries that matter.
+  const again = await PS.savePlanSettings(prisma, { changes: { offer_months_paid: 8 }, actorId: op.id, settingsId: GATE_SETTINGS });
+  check('  …and re-saving the same value records no change', Object.keys(again.changed).length === 0,
+    JSON.stringify(again.changed));
+  await prisma.operator.deleteMany({ where: { id: op.id } });
+
+  // AND NO PRODUCTION PATH NAMES A ROW. The existing scan covers pages/; this is the same rule
+  // for the new PUT handler, which must take its row from the chokepoint's default.
+  const apiSrc = readFileSync(`${R}/pages/api/superadmin/programme-settings.ts`, 'utf8');
+  check('the Engine Room API never names a settings row',
+    !/settingsId/.test(apiSrc) && /savePlanSettings\(/.test(apiSrc),
+    'it calls the chokepoint and lets it default — a caller that can choose the row can choose a gate\u2019s');
 
 } catch (e) {
   console.log(`\n✗ THREW: ${describeError(e).slice(0, 700)}`);

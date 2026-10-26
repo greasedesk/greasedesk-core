@@ -242,7 +242,10 @@ try {
     (await prisma.commissionEntry.findFirst({ where: { group_id: g3 }, select: { shown_as_visited: true } }))?.shown_as_visited === null,
     'NULL = an affiliate entry; there is no visit in this programme');
 } catch (e) {
-  console.log(`\n✗ THREW: ${String(e?.stack ?? e).slice(0, 700)}`);
+  // describeError, not String(e?.stack ?? e): a PrismaClientKnownRequestError thrown inside the
+  // suite printed as a bare class name with nothing after the colon, which said a fault occurred
+  // and not which. describeError leads with the class AND carries the code and message.
+  console.log(`\n✗ THREW: ${describeError(e).slice(0, 700)}`);
   out.push('F');
 } finally {
   const left = await sweep().catch(() => -1);

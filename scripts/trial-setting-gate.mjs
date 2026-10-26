@@ -336,9 +336,15 @@ try {
   };
   await signIn(OWNER_EMAIL);
   await er.goto(`${ER}/superadmin/billing`, { waitUntil: 'domcontentloaded' });
-  await er.waitForSelector('input[type="number"]', { timeout: 30000 }).catch(() => {});
-  await er.waitForTimeout(400); // the field is populated by the state fetch, not by SSR
-  const field = er.locator('input[type="number"]');
+  // WAIT FOR THE FIELD TO BE POPULATED, not merely present. The input is in the first render with
+  // an empty value and is filled by a client fetch, so waiting for the ELEMENT waits for nothing:
+  // on a dev server that is still compiling the API route the fetch takes seconds, and a fixed
+  // 400ms wait then asserted against an empty box. Wait for the condition, not a proxy for it.
+  await er.waitForFunction(
+    () => (document.querySelector('[data-testid="trial-days"]')?.value ?? '') !== '',
+    null, { timeout: 60000 },
+  ).catch(() => {});
+  const field = er.locator('[data-testid="trial-days"]');
   check('the owner reaches the Billing screen and it shows the current setting',
     (await field.count()) === 1 && (await field.inputValue()) === String(settingWas),
     `${await field.count()} field(s), value ${await field.count() ? await field.inputValue() : 'n/a'}`);
@@ -351,7 +357,14 @@ try {
   // fixed 1500ms wait asserted against the state BEFORE the save, which read as two failures of
   // the screen rather than as a gate that had not waited.
   await er.waitForSelector('[data-testid="save-result"]', { timeout: 60000 }).catch(() => {});
-  await er.waitForTimeout(500);
+  // AND THEN WAIT FOR THE SCREEN TO HAVE RE-READ. setMsg fires before `await refresh()`, so the
+  // banner appearing says the SAVE returned, not that the page has caught up — the attribution
+  // line can still be showing the previous change. A fixed wait was enough until the GET grew;
+  // this waits for the thing the next clause asserts.
+  await er.waitForFunction(
+    () => /Last changed .* by Trial Setting Gate/.test(document.body.innerText),
+    null, { timeout: 60000 },
+  ).catch(() => {});
   const typed = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { trial_days: true } }))?.trial_days;
   gateWrote = 23; // the SCREEN wrote it, but this gate caused it — the sweep must own it
   check('  …and typing a number into it changes the setting', typed === 23, `trial_days=${typed}`);

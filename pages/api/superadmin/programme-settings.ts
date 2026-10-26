@@ -19,6 +19,8 @@ import { requireOperatorApi } from '@/lib/operator-auth';
 import {
   getProgrammeSettings, saveTrialDays, refuseTrialLength,
   PUBLIC_COPY_PAGES, revalidationTargets, readPublicCopy, publicOrigin,
+  savePlanSettings, PLAN_SETTING_FIELDS, PLAN_SETTING_LABEL, PLAN_SETTING_KIND,
+  type PlanSettingField,
 } from '@/lib/programme-settings';
 
 /**
@@ -81,6 +83,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     res.status(200).json({
       trialDays: s.trial_days,
+      planSettings: Object.fromEntries(PLAN_SETTING_FIELDS.map((f) => [f, s[f]])),
+      planLabels: PLAN_SETTING_LABEL,
+      planKinds: PLAN_SETTING_KIND,
       publicPaths: PUBLIC_COPY_PAGES,
       revalidationTargets: revalidationTargets(),
       copyRevalidatedAt: s.copy_revalidated_at ? s.copy_revalidated_at.toISOString() : null,
@@ -119,6 +124,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  res.setHeader('Allow', ['GET', 'PATCH']);
+  if (req.method === 'PUT') {
+    // ── THE PLAN AND REWARD SETTINGS ────────────────────────────────────────────────────────
+    // A SEPARATE METHOD from the trial length on purpose: that one also refreshes public pages
+    // and reports whether they agree, and folding the two together would mean every price change
+    // claimed something about greasedesk.com that it had not checked.
+    //
+    // WHICH SETTINGS ROW IS NOT READ FROM THE REQUEST, here or anywhere under pages/. The
+    // chokepoint defaults to the singleton and production never names another; only a gate does.
+    // billing-plans-gate enforces that by scanning this whole directory for the parameter name,
+    // so it is deliberately not written here either — a production path that lets a caller choose
+    // the row is a production path that can be aimed at a gate's row.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const changes: Partial<Record<PlanSettingField, number | boolean>> = {};
+    for (const f of PLAN_SETTING_FIELDS) {
+      if (body[f] === undefined || body[f] === null || body[f] === '') continue;
+      // A SWITCH IS NOT A NUMBER. Number(false) is 0, which would store a perfectly plausible
+      // zero and read back as "off" by accident rather than by decision.
+      changes[f] = PLAN_SETTING_KIND[f] === 'switch' ? body[f] === true : Number(body[f]);
+    }
+    if (!Object.keys(changes).length) { res.status(400).json({ message: 'Nothing to change.' }); return; }
+    try {
+      const result = await savePlanSettings(prisma, { changes, actorId: actor.userId });
+      const n = Object.keys(result.changed).length;
+      res.status(200).json({
+        message: n === 0
+          ? 'Nothing changed — the values sent were the values already stored.'
+          : `Saved ${n} setting${n === 1 ? '' : 's'}. This applies to garages signing up from now on; terms already frozen are untouched.`,
+        ...result,
+      });
+    } catch (e: any) {
+      // The refusal text names the field and what is wrong with it, so it can be shown as-is.
+      res.status(400).json({ message: String(e?.message ?? e) });
+    }
+    return;
+  }
+
+  res.setHeader('Allow', ['GET', 'PATCH', 'PUT']);
   res.status(405).json({ message: 'Method not allowed.' });
 }

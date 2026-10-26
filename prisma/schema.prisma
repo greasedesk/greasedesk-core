@@ -1202,9 +1202,11 @@ model ProgrammeSettings {
   /// THE one trial length, read by Checkout, by Group.trial_ends_at and by /llms.txt. It lived in
   /// two hard-coded 60s kept in step by a comment saying one mirrored the other.
   trial_days                 Int      @default(30)
-  new_annual_months_paid     Int      @default(9)
+  /// KEPT FOR A FUTURE PROMOTION (owner, 2026-10-26). Every annual plan is 12-for-10 today,
+  /// new or renewal, so nothing currently prices this differently from the renewal figure.
+  new_annual_months_paid     Int      @default(10)
   renewal_annual_months_paid Int      @default(10)
-  offer_months_paid          Int      @default(6)
+  offer_months_paid          Int      @default(8)
   months_given               Int      @default(12)
   total_reward_pennies       Int      @default(12000)
   instalment_pennies         Int      @default(3000)

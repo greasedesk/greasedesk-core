@@ -1,0 +1,24 @@
+-- @migration: constraining the classifier cannot reason about ALTER COLUMN SET DEFAULT and fails closed on it, which is the right direction; the change itself constrains nothing and touches no row
+-- @precedes-deploy: it does not need to precede anything — a default applies only to rows inserted after it, and both existing rows are left exactly as they are — but a constraining migration must say when it should land, and the honest answer is that the order does not matter here
+--
+-- THE ANNUAL PRICES CHANGED (owner, 2026-10-26).
+--
+--   annual, every garage, new or renewal ... 12 months for the price of 10
+--   affiliate annual offer ................. 12 months for the price of  8
+--
+-- The old new_annual 9 and offer 6 were set when a new garage paid 9 and the offer was 12-for-6.
+--
+-- ── DEFAULTS ONLY. NO ROW IS UPDATED. ────────────────────────────────────────────────────────
+-- Deliberate, and the owner's instruction. A default decides what a database created tomorrow
+-- starts with; the live values are a SETTING, and a migration that reached in and changed them
+-- would be a price change made by a deploy rather than by a person — unauditable, with no
+-- operator against it. Both existing rows still hold 9 and 6 after this, and are changed in the
+-- Engine Room, where the change is attributed and recorded.
+--
+-- ── new_annual_months_paid IS KEPT ───────────────────────────────────────────────────────────
+-- Every annual plan is 12-for-10 today, new or renewal, so the "new garage" tier has no distinct
+-- price. The column stays for a future promotion (owner). It is therefore a setting that nothing
+-- currently prices differently — true, and worth knowing before somebody reads a difference into
+-- it that the business does not sell.
+ALTER TABLE "ProgrammeSettings" ALTER COLUMN "new_annual_months_paid" SET DEFAULT 10;
+ALTER TABLE "ProgrammeSettings" ALTER COLUMN "offer_months_paid" SET DEFAULT 8;

@@ -164,6 +164,171 @@ export async function trialEndsAt(db: Db = defaultDb, opts?: SettingsOpts): Prom
 
 const describe = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * ── THE PLAN AND REWARD SETTINGS, AND WHY THEY ARE NOT LIKE THE TRIAL LENGTH ───────────────────
+ * The trial length is printed on the public site, so saving it must also refresh statically
+ * generated pages and prove they changed. NONE of these six is on a public page — the only
+ * reader under pages/ is the owner-only Engine Room API — so there is nothing to revalidate, and
+ * a revalidate call here would be ceremony that looks like a guarantee.
+ *
+ * Said rather than inferred: if one of these ever reaches public copy, it joins PUBLIC_COPY_PATHS
+ * and this comment stops being true.
+ */
+export const PLAN_SETTING_FIELDS = [
+  'new_annual_months_paid',
+  'renewal_annual_months_paid',
+  'offer_months_paid',
+  'months_given',
+  'total_reward_pennies',
+  'instalment_pennies',
+  'affiliate_signups_open',
+] as const;
+export type PlanSettingField = typeof PLAN_SETTING_FIELDS[number];
+
+/** Which fields are a count of months, and which are money. Drives validation AND the labels. */
+export const PLAN_SETTING_KIND: Record<PlanSettingField, 'months' | 'pennies' | 'switch'> = {
+  new_annual_months_paid: 'months',
+  renewal_annual_months_paid: 'months',
+  offer_months_paid: 'months',
+  months_given: 'months',
+  total_reward_pennies: 'pennies',
+  instalment_pennies: 'pennies',
+  affiliate_signups_open: 'switch',
+};
+
+export const PLAN_SETTING_LABEL: Record<PlanSettingField, string> = {
+  new_annual_months_paid: 'First annual year for a new garage — months charged',
+  renewal_annual_months_paid: 'Annual, renewal — months charged',
+  offer_months_paid: 'Affiliate offer — months charged',
+  months_given: 'Months of service given on any annual plan',
+  total_reward_pennies: 'Affiliate reward per referred garage (total)',
+  instalment_pennies: 'Affiliate reward per paid month (monthly plans)',
+  affiliate_signups_open: 'Affiliate programme open to new signups',
+};
+
+/** Why this value may not be saved to this field, or null when it may. */
+export function refusePlanSetting(field: PlanSettingField, v: unknown): string | null {
+  const label = PLAN_SETTING_LABEL[field];
+  if (PLAN_SETTING_KIND[field] === 'switch') {
+    return typeof v === 'boolean' ? null : `${label}: must be on or off.`;
+  }
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isInteger(n)) return `${label}: must be a whole number.`;
+  if (PLAN_SETTING_KIND[field] === 'months') {
+    // 1 to 12. Zero months charged is a plan given away; more than twelve is not an annual plan.
+    if (n < 1 || n > 12) return `${label}: must be between 1 and 12 months (got ${n}).`;
+    return null;
+  }
+  // Money, in whole pennies. ZERO IS ALLOWED and is a real setting: a programme that pays no
+  // reward is a programme that is off, which is different from a negative one, which is nonsense.
+  if (n < 0) return `${label}: must be zero or more pennies (got ${n}).`;
+  return null;
+}
+
+/**
+ * ── THE RULES THAT ARE ABOUT TWO FIELDS AT ONCE ────────────────────────────────────────────────
+ * Checked over the RESULTING state, not over the change. A save that touches only months_given
+ * can invalidate an offer value that was set months ago and never moved, so asking "is this one
+ * value sensible" cannot answer it — the question is whether the settings AFTER this save hold
+ * together.
+ *
+ * Months charged may not exceed months given: charging for eleven and giving ten is worse than
+ * monthly and nobody means it. An instalment may not exceed the total reward: the cap would be
+ * reached by the first payment, which is a single payment wearing the word instalment.
+ */
+export function refusePlanCombination(after: Record<string, number | boolean>): string | null {
+  const given = Number(after.months_given);
+  for (const f of ['new_annual_months_paid', 'renewal_annual_months_paid', 'offer_months_paid'] as const) {
+    const paid = Number(after[f]);
+    if (Number.isFinite(paid) && Number.isFinite(given) && paid > given) {
+      return `${PLAN_SETTING_LABEL[f]} (${paid}) cannot be more than ${PLAN_SETTING_LABEL.months_given.toLowerCase()} (${given}).`;
+    }
+  }
+  const inst = Number(after.instalment_pennies), total = Number(after.total_reward_pennies);
+  if (Number.isFinite(inst) && Number.isFinite(total) && inst > total) {
+    return `${PLAN_SETTING_LABEL.instalment_pennies} (${inst}p) cannot be more than ${PLAN_SETTING_LABEL.total_reward_pennies.toLowerCase()} (${total}p).`;
+  }
+  return null;
+}
+
+export type SavePlanSettingsResult = {
+  /** field → { from, to }, only for fields that actually moved. */
+  changed: Partial<Record<PlanSettingField, { from: number | boolean; to: number | boolean }>>;
+  /** The row AS READ BACK after the write — not what was sent. */
+  after: Record<PlanSettingField, number | boolean>;
+};
+
+/**
+ * Change the plan and reward settings. THE write chokepoint: validation, the audit row and the
+ * read-back happen together, so no caller can do one without the others.
+ *
+ * ── IT READS BACK ──────────────────────────────────────────────────────────────────────────────
+ * `after` is a fresh read, not the values that were sent. A save that reports what it intended is
+ * the shape that told the owner "the public pages were refreshed" on 2026-10-25 while nothing had
+ * changed. What the screen prints is what the database holds.
+ *
+ * ── A CHANGE APPLIES TO NEW SIGNUPS ONLY ───────────────────────────────────────────────────────
+ * Nothing here touches TenantAffiliateTerms or TenantPlanTerms. A referred garage's terms are
+ * COPIED at signup precisely so an operator may change these tomorrow without moving them. The
+ * screen says so, because a settings form that does not is a form somebody will use to try to
+ * reprice an existing garage.
+ */
+export async function savePlanSettings(
+  db: Db,
+  opts: { changes: Partial<Record<PlanSettingField, number | boolean>>; actorId: string | null; settingsId?: string },
+): Promise<SavePlanSettingsResult> {
+  const id = opts.settingsId ?? SETTINGS_ID;
+  const entries = Object.entries(opts.changes) as [PlanSettingField, number | boolean][];
+  if (!entries.length) throw new Error('savePlanSettings: nothing to change');
+  for (const [field, value] of entries) {
+    if (!(PLAN_SETTING_FIELDS as readonly string[]).includes(field)) {
+      throw new Error(`savePlanSettings: ${field} is not a plan setting. The list is closed on purpose.`);
+    }
+    const refusal = refusePlanSetting(field, value);
+    if (refusal) throw new Error(refusal);
+  }
+
+  const before = await getProgrammeSettings(db, { settingsId: id });
+
+  // CROSS-FIELD, OVER THE RESULT. Everything this save would leave behind, not only what it sends.
+  const merged: Record<string, number | boolean> = {};
+  for (const f of PLAN_SETTING_FIELDS) merged[f] = before[f];
+  for (const [f, v] of entries) merged[f] = v;
+  const combination = refusePlanCombination(merged);
+  if (combination) throw new Error(combination);
+
+  const changed: SavePlanSettingsResult['changed'] = {};
+  const data: Record<string, number | boolean> = {};
+  for (const [field, value] of entries) {
+    if (before[field] === value) continue;   // not a change, so not an audit line
+    changed[field] = { from: before[field], to: value };
+    data[field] = value;
+  }
+  if (Object.keys(data).length) {
+    await db.programmeSettings.update({ where: { id }, data });
+    if (opts.actorId) {
+      await db.superAdminAudit.create({
+        data: {
+          operator_user_id: opts.actorId,
+          action: 'programme_plan_settings',
+          target_group_id: null, target_operator_id: null,
+          target_name_snapshot: 'Plan and reward settings',
+          // OLD TO NEW, in the snapshot a person reads first, not only in the JSON.
+          target_ref_snapshot: Object.entries(changed)
+            .map(([f, c]) => `${f} ${c!.from} → ${c!.to}`).join('; ').slice(0, 300),
+          detail: changed,
+        },
+      });
+    }
+  }
+
+  const after = await getProgrammeSettings(db, { settingsId: id });
+  return {
+    changed,
+    after: Object.fromEntries(PLAN_SETTING_FIELDS.map((f) => [f, after[f]])) as Record<PlanSettingField, number | boolean>,
+  };
+}
+
 export type SaveTrialResult = {
   days: number;
   /** The paths res.revalidate() was given. ATTEMPTED — not evidence that anything changed. */
