@@ -75,11 +75,15 @@ export function verdict(command) {
 }
 
 export const REFUSAL = (what) => [
-  `BLOCKED: \`${what}\` changes the database dev and production share.`,
+  `BLOCKED: \`${what}\` applies migrations without the deploy check.`,
   '',
-  'A migration is live the moment it is applied; the code that honours it is live only when it',
-  'deploys. On 2026-09-11 a trigger applied ahead of its push gave the live app four hours of 500s',
-  'on every "No SMS" save.',
+  'Against PRODUCTION: a migration is live the moment it is applied, while the code that honours',
+  'it is live only when it deploys. On 2026-09-11 a trigger applied ahead of its push gave the live',
+  'app four hours of 500s on every "No SMS" save.',
+  '',
+  'Against the GATE DATABASE: still the wrapper. It is the thing that refuses a migration with no',
+  'header, or one whose header disagrees with its own SQL — rules about the FILE, which hold',
+  'wherever it is applied. It skips only the deploy-window check there, and says so.',
   '',
   'Use the wrapper, which asks production what it is running first:',
   '    node scripts/migrate-apply.mjs --dry-run     # see the classification and the decision',

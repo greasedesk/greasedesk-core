@@ -33,9 +33,63 @@ import './_ts.mjs';
 const { execFileSync } = await import('node:child_process');
 const { readFileSync, writeFileSync, readdirSync, existsSync } = await import('node:fs');
 const R = await import('../lib/migration-deploy-rules.ts');
+// describeError leads with the error CLASS, so an error with no message still names itself.
+const { describeError } = await import('./_gate-preflight.mjs');
+const { readMarker } = await import('./_marker-read.mjs');
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const DRY = process.argv.includes('--dry-run');
+
+/**
+ * ── APPLYING TO PRODUCTION IS A SENTENCE SOMEBODY TYPES ─────────────────────────────────────────
+ * With one database this script applied to "the database", and that was the only one there was.
+ * With two, the quiet default is wrong in both directions: pointed at the gate database it should
+ * just work, and pointed at production it should make you say so.
+ *
+ * --yes-production --expect=<name[,name]>
+ *   reads the connection from .migrate-target.production and NOT from .env, so the working file is
+ *   never edited and there is no swap to forget to undo;
+ *
+ *   THE NAME IS DELIBERATELY OUTSIDE THE DOTENV NAMESPACE. The first draft called it
+ *   .env.production.local, which Next AUTO-LOADS whenever NODE_ENV=production and which takes
+ *   precedence over .env — so `npm run build` would have built against the live database while
+ *   every other tool read the gate one. Proved with @next/env's own loader before renaming. Next
+ *   looks for exactly .env.$(NODE_ENV).local, .env.local, .env.$(NODE_ENV) and .env; this is none
+ *   of them, and prisma.config.ts's dotenv reads only .env;
+ *   refuses unless that file names PRODUCTION — the flag is a statement of intent, and a mismatch
+ *   means something is wrong rather than something is safe;
+ *   refuses unless the pending set is EXACTLY --expect, so a second migration cannot ride along;
+ *   prints the endpoint, the Environment kind and the pending list, then requires the endpoint id
+ *   TYPED BACK from a terminal.
+ *
+ * The TTY requirement is the point of the design rather than a detail: with stdin not a terminal
+ * it refuses outright, so this cannot be run from a script, from CI, or by an agent. It belongs to
+ * a person at a keyboard.
+ */
+const YES_PRODUCTION = process.argv.includes('--yes-production');
+const EXPECT = (() => {
+  const a = process.argv.find((x) => x.startsWith('--expect='));
+  return a ? a.slice('--expect='.length).split(',').map((x) => x.trim()).filter(Boolean) : null;
+})();
+
+if (YES_PRODUCTION) {
+  const file = `${ROOT}/.migrate-target.production`;
+  if (!existsSync(file)) {
+    console.error(`\n  --yes-production needs ${file}, holding ONLY the production DATABASE_URL and DIRECT_URL.`);
+    console.error('  Move those two lines out of .env rather than copying them, so there is one home for each.\n');
+    process.exit(2);
+  }
+  if (!EXPECT?.length) {
+    console.error('\n  --yes-production also needs --expect=<migration-name[,name]>.');
+    console.error('  Naming what you expect to apply is what stops a second migration riding along.\n');
+    process.exit(2);
+  }
+  // Only these two keys, and they REPLACE whatever .env put there. Last-wins, matching dotenv.
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const m = line.match(/^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+}
 const OVERRIDE = (() => {
   const a = process.argv.find((x) => x.startsWith('--even-if-not-live'));
   if (!a) return null;
@@ -70,6 +124,16 @@ const MIGRATIONS_DIR = (() => {
   return override;
 })();
 
+/**
+ * WHICH DATABASE THIS IS POINTED AT. Until 2026-10-26 the answer was always "the one production
+ * reads", and every refusal below assumes it. There is a separate gate project now, so the
+ * assumption is asked rather than made. `safe` is true only when BOTH urls are positively known to
+ * be elsewhere — unknown counts as production, because the question is whether it is safe to
+ * change this database and silence is not a yes. See scripts/_db-target.mjs.
+ */
+const { describeTarget } = await import('./_db-target.mjs');
+const TARGET = describeTarget(ROOT);
+
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const gitOk = (...args) => { try { git(...args); return true; } catch { return false; } };
 
@@ -88,8 +152,18 @@ function die(lines) {
 const { prisma } = await import('../lib/db.ts');
 let pending;
 try {
+  // A VIRGIN DATABASE HAS NO LEDGER, and that is a legitimate state rather than a fault. The gate
+  // project created on 2026-10-26 had zero tables, so this query failed 42P01 and the wrapper could
+  // not bootstrap the one database it is actually safe to bootstrap. An empty applied set then
+  // means "apply everything", which the refusal below permits ONLY off production.
   const applied = new Set(
-    (await prisma.$queryRawUnsafe('SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL'))
+    (await prisma.$queryRawUnsafe('SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL')
+      .catch((e) => {
+        const missing = String(e?.meta?.code ?? '') === '42P01'
+          || /relation "_prisma_migrations" does not exist/.test(String(e?.message ?? ''));
+        if (missing) return [];
+        throw e;
+      }))
       .map((r) => r.migration_name),
   );
   const onDisk = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
@@ -99,7 +173,18 @@ try {
   // NOT VACUOUS: if the applied set came back empty, every migration would read as pending and this
   // would refuse loudly rather than sail through. Said out loud because the opposite mistake — an
   // empty PENDING set from a failed read — is the one that would pass.
-  if (!applied.size) die(['the database reports no applied migrations at all. That is not a migration question; stop and look at the connection.']);
+  // OFF PRODUCTION an empty ledger is a database waiting to be built. On production — or on a
+  // target this cannot positively identify — it is the connection fault it has always been.
+  if (!applied.size && !TARGET.safe) {
+    die([`the database reports no applied migrations at all, and this target is not positively known to be `
+      + `non-production (runtime ${TARGET.runtime} ${TARGET.runtimeEndpoint ?? '—'}, migrations `
+      + `${TARGET.migrations} ${TARGET.migrationsEndpoint ?? '—'}). That is not a migration question; `
+      + `stop and look at the connection.`]);
+  }
+  if (!applied.size) {
+    say(`\n  VIRGIN DATABASE — no migrations applied yet, and the target is not production`);
+    say(`  (runtime ${TARGET.runtimeEndpoint}, migrations ${TARGET.migrationsEndpoint}). Building it from zero.`);
+  }
   pending = onDisk.filter((n) => !applied.has(n));
 } finally {
   await prisma.$disconnect();
@@ -161,6 +246,51 @@ if (anyConstraining && classified.every((m) => m.klass)) {
   }
 }
 
+// ── THE FILE RULES APPLY EVERYWHERE; THE DEPLOY WINDOW DOES NOT ─────────────────────────────────
+// First draft of the off-production branch sat ABOVE the classification and skipped it, which
+// migration-class-gate caught: a headerless migration stopped being refused at all, because the
+// gate drives this script against the gate database. The two rules are different things.
+//
+//   the HEADER rules are about the migration FILE — a missing header, or one that disagrees with
+//   its own SQL, is a repo-discipline fault and is refused wherever it is applied.
+//   the DEPLOY WINDOW is about the database PRODUCTION READS — "a constraining migration breaks
+//   deployed writers" is meaningless where nothing is deployed.
+const fileRefusals = classified.filter((m) => m.refusal).map((m) => `${m.name}: ${m.refusal}`);
+if (fileRefusals.length) die(fileRefusals);
+
+// ── OFF PRODUCTION, THE CEREMONY HAS NOTHING TO PROTECT ─────────────────────────────────────────
+// Everything from here to the apply exists for ONE hazard, stated at the top of this file and in
+// the hook: a migration is live the moment it is applied, while the code that honours it is live
+// only when it deploys — so a constraining migration can break DEPLOYED WRITERS. That hazard is a
+// property of the database PRODUCTION READS. On the gate database there is no deployed writer at
+// all: nothing serves it, nothing reads it but this repo's own gates.
+//
+// Run against it, the classifier refuses almost the entire history — 250 migrations written before
+// the `@migration:` header existed, read as constraining because they create unique indexes on
+// tables that, on production, already held rows. Every one of those refusals is about a database
+// this is not pointed at. A guard that refuses correct work because its premise expired is the
+// shape that gets guards deleted.
+//
+// So the ceremony is SCOPED, not weakened: the production path below is untouched, and `safe` is
+// true only when BOTH urls are positively known to be elsewhere.
+if (TARGET.safe) {
+  say(`  Target is NOT production (runtime ${TARGET.runtimeEndpoint}, migrations ${TARGET.migrationsEndpoint}).`);
+  say('  Skipping the deploy-window check: it protects deployed writers, and this database has none.');
+  // --dry-run STILL MEANS DRY. The first draft of this branch applied regardless, which would have
+  // made the flag a lie on exactly the path somebody uses to look before leaping.
+  // A DRY RUN FALLS THROUGH, deliberately. There is ONE dry-run message and one dry-run exit, at
+  // section 5, and migration-class-gate drives this script with --dry-run to prove the positive
+  // case — a clean additive migration passing classification and stopping. A second dry-run exit
+  // here made that clause stop seeing it. Falling through costs nothing: on a dry run the window
+  // ceremony below only prints, and a clean additive set never reaches its refusals anyway.
+  if (!DRY) {
+    applyNow();
+    say('\n  APPLIED to the gate database. Production is untouched.\n');
+    process.exit(0);
+  }
+}
+
+
 // ── 4. THE DECISION ─────────────────────────────────────────────────────────────────────────────
 const d = R.deployDecision({ pending: classified, version, liveIsAncestor, head, appFilesNotLive, uncommittedAppFiles, schemaDefaults, override: OVERRIDE });
 if (!d.allow) die(d.refusals);
@@ -186,14 +316,67 @@ if (d.overridden) {
 }
 
 // ── 5. APPLY ────────────────────────────────────────────────────────────────────────────────────
-if (DRY) { say('\n  DRY RUN — nothing applied, nothing written.\n'); process.exit(0); }
-say('\n  → prisma migrate deploy\n');
-try {
-  execFileSync('npx', ['prisma', 'migrate', 'deploy'], { cwd: ROOT, stdio: 'inherit' });
-} catch {
-  say('\n  migrate deploy FAILED. The database may be part-applied; read the output above.\n');
-  process.exit(1);
+// ONE PLACE THIS RUNS, and it is a hoisted declaration so the off-production branch far above can
+// call it without a second execFileSync of its own. The first draft of that branch had its own
+// copy, which migration-class-gate caught: its ordering clause reads the FIRST occurrence of this
+// call and compares it against where the override note is written, so a duplicate above the note
+// made a load-bearing invariant unreadable. Prisma checksums migration.sql as it applies it, so a
+// note written afterwards makes every later deploy refuse the file.
+function applyNow() {
+  say('\n  → prisma migrate deploy\n');
+  try {
+    execFileSync('npx', ['prisma', 'migrate', 'deploy'], { cwd: ROOT, stdio: 'inherit' });
+  } catch {
+    say('\n  migrate deploy FAILED. The database may be part-applied; read the output above.\n');
+    process.exit(1);
+  }
 }
+
+if (DRY) { say('\n  DRY RUN — nothing applied, nothing written.\n'); process.exit(0); }
+
+// ── THE PRODUCTION DOOR ─────────────────────────────────────────────────────────────────────────
+if (TARGET.runtime === 'production' || TARGET.migrations === 'production') {
+  if (!YES_PRODUCTION) {
+    die([`this is PRODUCTION (runtime ${TARGET.runtimeEndpoint}, migrations ${TARGET.migrationsEndpoint}) `
+      + 'and --yes-production was not given. Applying to production is a sentence somebody types.']);
+  }
+  const unexpected = pending.filter((n) => !EXPECT.includes(n));
+  const absent = EXPECT.filter((n) => !pending.includes(n));
+  if (unexpected.length || absent.length) {
+    die([`the pending set is not what --expect named.`,
+      unexpected.length ? `pending but not expected: ${unexpected.join(', ')}` : '',
+      absent.length ? `expected but not pending: ${absent.join(', ')}` : ''].filter(Boolean));
+  }
+  // THE THREE ANSWERS live in _marker-read, so the same code can be run on its own against a
+  // database with no Environment table. Inline, it was handed over having never executed: a
+  // --dry-run exits before this point, so nothing here was covered by the run that "checked" it.
+  const marker = await (async () => {
+    const { prisma: p2 } = await import('../lib/db.ts');
+    return (await readMarker(p2, describeError)).text;
+  })();
+
+  say('\n  ── APPLYING TO PRODUCTION ──────────────────────────────────────────────');
+  say(`  file      .migrate-target.production`);
+  say(`  endpoint  ${TARGET.migrationsEndpoint}  → PRODUCTION`);
+  say(`  marker    Environment.kind = ${marker}`);
+  say(`  pending   ${pending.join('\n            ')}`);
+  say('');
+
+  // A TYPED MATCH, FROM A TERMINAL. Not a y/n: a y/n is reflex, and the thing being guarded is the
+  // database the business runs on. Not a terminal at all means not a person, so it refuses.
+  if (!process.stdin.isTTY) {
+    die(['stdin is not a terminal. --yes-production is for a person at a keyboard, not a script, CI, or an agent.']);
+  }
+  const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout });
+  const typed = (await rl.question(`  Type the endpoint id to apply, anything else to abort:\n  > `)).trim();
+  rl.close();
+  if (typed !== TARGET.migrationsEndpoint) {
+    say(`\n  Aborted — "${typed}" is not ${TARGET.migrationsEndpoint}. Nothing applied.\n`);
+    process.exit(1);
+  }
+}
+
+applyNow();
 
 // ── 6. AND THE SCHEMA FILE KEPT UP ──────────────────────────────────────────────────────────────
 // The mistake in the other direction: the SQL written, applied, and schema.prisma never edited. The

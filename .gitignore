@@ -10,6 +10,11 @@
 .env.local
 .env.development.local
 .env.production.local
+# Connection strings for ONE named target, read only by scripts/migrate-apply.mjs
+# --yes-production. NOT in the dotenv namespace on purpose: Next auto-loads
+# .env.production.local when NODE_ENV=production, which would point a local build
+# at the live database. Carries passwords; never committed.
+.migrate-target.*
 .env.test.local
 .env.staging.local # Added common staging environment
 env_file.txt        # Never commit ad-hoc env dumps (this file leaked a live DB URL once)

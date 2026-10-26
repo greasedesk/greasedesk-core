@@ -242,7 +242,11 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   SetupStepDef: OURS('operator-editable onboarding step definitions — our configuration'),
   // ONE ROW, NO GROUP COLUMN. The trial length and the affiliate reward figures we offer the next
   // garage to sign up — platform policy, reachable from no tenant at all.
-  ProgrammeSettings: OURS('the programme-wide terms we offer: trial length, affiliate rewards. A single global row, not a tenant\u2019s'),
+  ProgrammeSettings: OURS('the programme-wide terms we offer: trial length, affiliate rewards. A single global row, not a tenant’s'),
+  // ONE ROW SAYING WHICH DATABASE THIS IS. Platform infrastructure, reachable from no tenant, and
+  // the one row a tenant export must never carry: it would tell a garage nothing about itself, and
+  // a restored copy carrying it would claim to be production.
+  Environment: OURS('which database this is — production or a test one; infrastructure, not a tenant’s'),
   NavLink: OURS('navigation on our own marketing site'),
   Document: OURS('our legal and policy content, versioned for the public site'),
   StripeEvent: OURS('our billing webhook log'),

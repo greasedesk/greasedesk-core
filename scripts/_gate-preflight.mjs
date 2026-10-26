@@ -113,8 +113,48 @@ if (!globalThis.__gatePreflightRan) {
  */
 if (!process.env.DB_RETRY_TRANSIENT) process.env.DB_RETRY_TRANSIENT = '1';
 
+/**
+ * ── BOTH CHECKS, AND WHY NEITHER ALONE WOULD DO ────────────────────────────────────────────────
+ * A pure function of two facts, so it can be proved without repointing anything at production.
+ *
+ *   endpoint  (scripts/_db-target) answers before a schema exists and catches the case where the
+ *             connection string names production. It cannot catch a RESTORED COPY of production,
+ *             which hashes to an unfamiliar endpoint and is full of customers.
+ *   marker    (the Environment row) travels WITH the data, so a restored copy still says
+ *             `production`. It cannot answer on a database with no schema yet.
+ *
+ * Each covers the other's blind spot, so both must pass. Anything other than a positive `test` on
+ * both is a refusal — `unknown` included, because the question is whether it is safe to write
+ * fixtures here and silence is not a yes.
+ *
+ * It DECLINES rather than failing: a gate pointed at the wrong database has not tested anything,
+ * and a red would say "the code is broken", which is a different and untrue thing.
+ */
+export function gateDbRefusal(target, markerKind) {
+  if (!target?.safe) {
+    return `the database is not positively known to be a test one — runtime ${target?.runtime ?? '?'} `
+      + `${target?.runtimeEndpoint ?? '(unset)'}, migrations ${target?.migrations ?? '?'} ${target?.migrationsEndpoint ?? '(unset)'}. `
+      + 'Point DATABASE_URL and DIRECT_URL at the gate database. Gates do not run against production.';
+  }
+  if (markerKind !== 'test') {
+    return `the Environment marker reads ${markerKind ?? 'MISSING'}, not test. A database that has not `
+      + 'declared itself a test environment is treated as production — including a restored copy of it, '
+      + 'which the endpoint check cannot tell apart from anywhere else.';
+  }
+  return null;
+}
+
 export async function gatePrisma() {
   const { prisma } = await import('../lib/db.ts');
+  const { describeTarget } = await import('./_db-target.mjs');
+  const marker = await prisma.environment
+    .findUnique({ where: { id: 'singleton' }, select: { kind: true } })
+    .catch(() => null);
+  const refusal = gateDbRefusal(describeTarget(), marker?.kind ?? null);
+  if (refusal) {
+    await prisma.$disconnect().catch(() => {});
+    declineToRun(refusal);
+  }
   return prisma;
 }
 

@@ -22,6 +22,7 @@ import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
 import { smsAllowance } from '@/lib/sms-allowance';
 import { demoSendDecision } from '@/lib/demo-tenant';
+import { environmentSendRefusal } from '@/lib/environment';
 import type { Prisma } from '@prisma/client';
 import { customerAddressWhere, isCarrierStop, suppressionDecision, type SuppressionDecision } from '@/lib/contact-preference-rules';
 import { recordCarrierStop } from '@/lib/contact-preferences';
@@ -115,6 +116,14 @@ export type SendNotificationResult = {
    */
   skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent'
     | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
+    /** THIS IS THE GATE DATABASE. Nothing is sent from it — a gate can drive a real signup, and
+     *  the verification email must not leave the building. Distinct from `demo_tenant`: that is a
+     *  real database holding an invented tenant; this is a different database entirely. */
+    | 'test_environment'
+    /** The Environment marker could not be READ, so which database this is was not established.
+     *  Refused rather than risked. Not the same as knowing it is a test one, and it says so: the
+     *  remedy is to fix the database, not to reassure a customer. */
+    | 'environment_unknown'
     /** The carrier refused it because the handset replied STOP (Twilio 21610). Status stays `failed` —
      *  the provider WAS contacted — but it is not retryable, and the customer is now marked no texts. */
     | 'carrier_stop'
@@ -345,6 +354,20 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (!tpl) {
     const id = await record({ ...common, status: 'failed', error: `unknown template '${args.template}'` });
     return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template', skipCode: 'unknown_template' };
+  }
+
+  // ── AND BEFORE ALL OF IT: WHICH DATABASE IS THIS? ───────────────────────────────────────────
+  // Broader than the demo check below and therefore above it. A gate database holds invented
+  // tenants whose "customers" may carry real addresses copied from somewhere, and from 2026-10-26
+  // a gate can drive a real signup end to end — which sends a verification email. The refusal is
+  // keyed on a row in the database rather than an environment variable on purpose: an env var can
+  // be set on production by accident and silence every message the business sends, whereas the
+  // marker travels with the data it is about. See lib/environment for why an unreadable marker
+  // also refuses, and why that failure is never cached.
+  const envRefusal = await environmentSendRefusal();
+  if (envRefusal.refuse) {
+    const id = await record({ ...common, status: 'skipped', error: envRefusal.reason });
+    return { ok: false, notificationId: id, status: 'skipped', reason: envRefusal.reason, skipCode: envRefusal.skipCode };
   }
 
   // ── DEMO TENANTS REFUSE EVERYTHING, BEFORE THE SECURITY BYPASS BELOW ────────────────────────
