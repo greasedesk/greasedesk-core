@@ -356,20 +356,6 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     return { ok: false, notificationId: id, status: 'failed', reason: 'unknown template', skipCode: 'unknown_template' };
   }
 
-  // ── AND BEFORE ALL OF IT: WHICH DATABASE IS THIS? ───────────────────────────────────────────
-  // Broader than the demo check below and therefore above it. A gate database holds invented
-  // tenants whose "customers" may carry real addresses copied from somewhere, and from 2026-10-26
-  // a gate can drive a real signup end to end — which sends a verification email. The refusal is
-  // keyed on a row in the database rather than an environment variable on purpose: an env var can
-  // be set on production by accident and silence every message the business sends, whereas the
-  // marker travels with the data it is about. See lib/environment for why an unreadable marker
-  // also refuses, and why that failure is never cached.
-  const envRefusal = await environmentSendRefusal();
-  if (envRefusal.refuse) {
-    const id = await record({ ...common, status: 'skipped', error: envRefusal.reason });
-    return { ok: false, notificationId: id, status: 'skipped', reason: envRefusal.reason, skipCode: envRefusal.skipCode };
-  }
-
   // ── DEMO TENANTS REFUSE EVERYTHING, BEFORE THE SECURITY BYPASS BELOW ────────────────────────
   // Placed HERE and not inside isSuppressed on purpose: the next check exempts security templates
   // from contact preferences, so a demo check living down there would let phone codes and password
@@ -500,6 +486,32 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
   if (!adapter.configured()) {
     const id = await record({ ...common, status: 'skipped', subject, error: `${channel} provider not configured` });
     return { ok: false, notificationId: id, status: 'skipped', reason: `${channel} provider not configured`, skipCode: 'not_configured' };
+  }
+
+  // ── THE PROVIDER BOUNDARY: NOTHING LEAVES A TEST DATABASE ───────────────────────────────────
+  // This sat at the TOP of sendNotification for four hours, above the demo check, on the argument
+  // that "which database is this" is the broader question. It is — but putting it there meant
+  // that on the only database gates may now use, NOTHING BELOW IT EVER RAN. Suppression, opt-out,
+  // prospect refusal, the SMS allowance, carrier-stop: all unreachable, all untestable. Forty-four
+  // clauses across seven gates went red asserting their own skip codes and getting this one.
+  //
+  // "No email leaves the building" is a property of the PROVIDER, not of the chokepoint entrance.
+  // Here, every guard above has already run and returned its own honest code, and the only thing
+  // prevented is the thing that actually departs.
+  //
+  // ONE PLACE FOR BOTH CHANNELS, deliberately: `adapter.send` is the single dispatch to Resend and
+  // to Twilio, so a guard here is immediately before each of them and cannot drift out of step
+  // with the other, which two copies would.
+  //
+  // FAILS CLOSED, and the failure is not cached — see lib/environment. An unreadable marker stops
+  // the send, because a test database that sends is writing to real people and "I could not tell"
+  // does not rule that out.
+  const envRefusal = await environmentSendRefusal();
+  if (envRefusal.refuse) {
+    // RECORDED HONESTLY: skipped, never sent. The row is written exactly as every other refusal
+    // writes one, so a support lookup and the Messages thread both show it and say why.
+    const id = await record({ ...common, status: 'skipped', subject, error: envRefusal.reason });
+    return { ok: false, notificationId: id, status: 'skipped', reason: envRefusal.reason, skipCode: envRefusal.skipCode };
   }
 
   let accepted = false;

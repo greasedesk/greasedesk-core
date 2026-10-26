@@ -112,6 +112,16 @@ try {
     refusal.skipCode !== 'demo_tenant',
     'a real database holding an invented tenant and a different database entirely are two silences, not one');
 
+  // THE DISCRIMINATOR FOR THE WHOLE REFUSAL: a marker reading `production` must NOT refuse.
+  // Without this, every clause above passes against a function that refuses unconditionally —
+  // which would be a silent stop to every message the business sends, and would look like a very
+  // well-guarded system right up until somebody asked why nobody had heard from us.
+  E.__resetEnvironmentCache();
+  const asProd = { environment: { findUnique: async () => ({ kind: 'production' }) } };
+  check('a marker reading production does NOT refuse', (await E.environmentSendRefusal(asProd)).refuse === false,
+    'otherwise the refusals above prove only that nothing is ever sent from anywhere');
+  E.__resetEnvironmentCache();
+
   // AN UNREADABLE MARKER REFUSES, AND THE FAILURE IS NOT CACHED (owner ruling, 2026-10-26).
   E.__resetEnvironmentCache();
   const throwing = { environment: { findUnique: async () => { throw new Error('connection reset'); } } };
@@ -127,12 +137,66 @@ try {
   const third = await E.readEnvironment(prisma);
   check('  …while a SUCCESS is cached', third.cached === true, JSON.stringify(third));
 
-  // ── 5. AND THE SEND PATH REACHES IT ─────────────────────────────────────────────────────────
+  // ── 5. AT THE PROVIDER BOUNDARY, AND LAST ───────────────────────────────────────────────────
+  // THIS CLAUSE USED TO ASSERT THE OPPOSITE. It required the environment check to come FIRST, on
+  // the argument that "which database is this" is the broader question. It is — and putting it
+  // first meant nothing below it ran on the only database gates may use, so forty-four clauses
+  // across seven gates went red getting `test_environment` where they asserted their own code.
+  // "No email leaves the building" belongs at the thing that sends, not at the front door.
   const notify = readFileSync(`${R}/lib/notify.ts`, 'utf8');
-  const envAt = notify.indexOf('environmentSendRefusal(');
-  const demoAt = notify.indexOf('demoSendDecision(');
-  check('sendNotification asks BEFORE the demo check', envAt > 0 && demoAt > 0 && envAt < demoAt,
-    `environment at ${envAt}, demo at ${demoAt} — this question is broader, so it is asked first`);
+  const at = (t) => notify.indexOf(t);
+  const envAt = at('environmentSendRefusal(');
+  const dispatchAt = at('adapter.send(');
+  const guards = { demo: at('demoSendDecision('), prospect: at('prospectingRefusal('), suppression: at('await isSuppressed(') };
+  check('the environment check sits immediately before the single provider dispatch',
+    envAt > 0 && dispatchAt > envAt && (dispatchAt - envAt) < 1200,
+    `environment at ${envAt}, adapter.send at ${dispatchAt}`);
+  check('  …and AFTER every guard, so each still returns its own code',
+    Object.values(guards).every((g) => g > 0 && g < envAt),
+    JSON.stringify(guards));
+  // ONE DISPATCH FOR BOTH CHANNELS, which is what makes one guard cover Resend and Twilio. Two
+  // adapters, one call site: a second call site would be a door this check does not stand in.
+  check('  …and there is exactly ONE provider dispatch, covering email and SMS',
+    notify.split('adapter.send(').length - 1 === 1 && /email:\s*\{/.test(notify) && /sms:\s*\{/.test(notify),
+    `${notify.split('adapter.send(').length - 1} dispatch site(s)`);
+
+  // ── 6. AND THE PROVIDER IS NEVER REACHED ────────────────────────────────────────────────────
+  // The clause the whole move turns on: every guard runs, and the thing that actually departs is
+  // not called. Counted, not reasoned about — the adapters are swapped for counters.
+  // COUNTED AT THE NETWORK, not through a seam in production code. ADAPTERS is deliberately not
+  // exported, and a mutable export so a gate can reach in is a door left open for everything else.
+  // Both adapters reach their provider over fetch — Resend's SDK and the Twilio REST POST — so
+  // wrapping fetch counts what actually leaves, which is the property in question rather than a
+  // proxy for it.
+  const N = await import(`${R}/lib/notify.ts`);
+  const PROVIDER_HOSTS = /resend\.com|twilio\.com/i;
+  const realFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const u = typeof input === 'string' ? input : (input?.url ?? String(input));
+    if (PROVIDER_HOSTS.test(u)) providerCalls += 1;
+    return realFetch(input, init);
+  };
+  let sent;
+  try {
+    sent = await N.sendNotification({
+      recipient: 'provider-count@example.invalid', template: 'signup_verify', channel: 'email',
+      groupId: N.PLATFORM_SEND, subject: null, data: { name: 'Gate', link: 'https://x.invalid', trialDays: 30 },
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  check('on a test database NOTHING REACHES A PROVIDER', providerCalls === 0,
+    `${providerCalls} request(s) to resend/twilio — counted at the network, not argued`);
+  // AND THE COUNTER WOULD HAVE SEEN ONE. A count of zero from a counter that cannot count is the
+  // same number as a count of zero from a working one.
+  let proofCalls = 0;
+  globalThis.fetch = async (input) => { if (PROVIDER_HOSTS.test(String(input))) proofCalls += 1; return new Response('{}', { status: 200 }); };
+  try { await globalThis.fetch('https://api.resend.com/emails'); } finally { globalThis.fetch = realFetch; }
+  check('  …and the counter really counts — it is not a zero that means nothing', proofCalls === 1,
+    `${proofCalls} — a broken counter reports the same zero as a working one`);
+  check('  …and the row says skipped / test_environment, never sent',
+    sent?.status === 'skipped' && sent?.skipCode === 'test_environment', JSON.stringify(sent));
 } catch (e) {
   console.log(`\n✗ THREW: ${describeError(e).slice(0, 500)}`);
   out.push('F');

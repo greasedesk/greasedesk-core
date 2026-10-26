@@ -24,11 +24,21 @@
  * Every write is an upsert on a pinned id or a unique ref. Running it twice changes nothing, which
  * is what lets it be the first thing anybody does to a fresh database without thinking about it.
  *
+ * ── THE IDENTITIES ARE MEASURED, NOT INVENTED ──────────────────────────────────────────────────
+ * The first version made up `zz-owner@greasedesk.test` with a password of its own. The suite does
+ * not care what this script thinks: 83 gates hardcode `owner@zzgategarage.test`, one hardcodes
+ * `manager@zzgategarage.test`, and 65 type `GateGarage!2026`. Those strings ARE the contract, and
+ * inventing different ones produced a tenant no gate could sign into.
+ *
+ * `gate@zzgategarage.test` appears too but only ever as a notification RECIPIENT, never a login,
+ * so it needs no User row.
+ *
  * ── THE PASSWORD IS IN THE FILE, DELIBERATELY ──────────────────────────────────────────────────
- * Same choice the gates already make for their own operator fixtures. It is a login to a tenant
- * that exists only on a throwaway database holding no customer data, and the alternative — a
- * secret the suite needs and nobody can find — is how a reproducible environment stops being one.
- * It must never be given to a tenant on production, which is what the two refusals above enforce.
+ * Same choice the gates already make, and the same string they already contain 65 times — this
+ * discloses nothing new. It is a login to a tenant that exists only on a throwaway database
+ * holding no customer data, and the alternative — a secret the suite needs and nobody can find —
+ * is how a reproducible environment stops being one. It must never be given to a tenant on
+ * production, which is what the two refusals above enforce.
  */
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
@@ -39,7 +49,12 @@ const bcrypt = (await import('bcryptjs')).default;
 const ZZ_GROUP = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 const ZZ_REF = 'GB-GD2141';
 const ZZUS_REF = 'US-GD2175';
-const FIXTURE_PASSWORD = 'ZZGateGarage!2026';
+const FIXTURE_PASSWORD = 'GateGarage!2026';   // what 65 gates already type
+const ZZ_OWNER = 'owner@zzgategarage.test';   // what 83 gates already sign in as
+const ZZ_MANAGER = 'manager@zzgategarage.test';
+const ZZUS_OWNER = 'owner@zzusmotors.test';   // no gate signs in here yet; symmetry only
+/** Users the FIRST version of this script invented. Removed so ZZ has one owner, not two. */
+const WRONG_FROM_FIRST_DRAFT = ['zz-owner@greasedesk.test', 'zzus-owner@greasedesk.test'];
 
 const say = (s = '') => console.log(s);
 let prisma;
@@ -95,22 +110,48 @@ try {
 
   const zz = await tenant({
     id: ZZ_GROUP, ref: ZZ_REF, name: 'ZZ Gate Garage', country: 'GB',
-    email: 'zz-owner@greasedesk.test', internal: true,
+    email: ZZ_OWNER, internal: true,
   });
   say(`ZZ Gate Garage   group ${zz.groupId}`);
-  say(`                 ref ${zz.ref} · site ${zz.siteId} · owner zz-owner@greasedesk.test`);
+  say(`                 ref ${zz.ref} · site ${zz.siteId} · owner ${ZZ_OWNER}`);
 
   // ZZUS is resolved by REF, not by a pinned id — fourteen gates name US-GD2175 and none names a
   // uuid, so the ref is the identity and the id is free.
   const existingUs = await prisma.group.findFirst({ where: { ref: ZZUS_REF }, select: { id: true } });
   const us = await tenant({
     id: existingUs?.id ?? crypto.randomUUID(), ref: ZZUS_REF, name: 'ZZUS Motors', country: 'US',
-    email: 'zzus-owner@greasedesk.test', internal: true,
+    email: ZZUS_OWNER, internal: true,
   });
   say(`ZZUS Motors      group ${us.groupId}`);
-  say(`                 ref ${us.ref} · site ${us.siteId} · owner zzus-owner@greasedesk.test`);
+  say(`                 ref ${us.ref} · site ${us.siteId} · owner ${ZZUS_OWNER}`);
 
-  say(`\nBoth tenants are is_internal. Password for both owners is in this file.`);
+  // ── THE SITE MANAGER ────────────────────────────────────────────────────────────────────────
+  // support-route-gate signs in as this one to prove a site manager, not only the account holder,
+  // reaches the support route. A UserSite ROW is required as well as site_id: a STANDARD fixture
+  // once had the column and not the row, and canAccessSite refused it — caught by a discriminator
+  // clause, which is what discriminators are for.
+  const mgr = await prisma.user.upsert({
+    where: { email: ZZ_MANAGER },
+    update: { group_id: ZZ_GROUP, role: 'SITE_MANAGER', is_active: true, primary_site_id: zz.siteId },
+    create: {
+      email: ZZ_MANAGER, name: 'ZZ site manager', role: 'SITE_MANAGER', is_active: true,
+      group_id: ZZ_GROUP, primary_site_id: zz.siteId, passwordHash: await bcrypt.hash(FIXTURE_PASSWORD, 10),
+    },
+    select: { id: true },
+  });
+  await prisma.userSite.upsert({
+    where: { user_id_site_id: { user_id: mgr.id, site_id: zz.siteId } },
+    update: {}, create: { user_id: mgr.id, site_id: zz.siteId },
+  }).catch(async () => {
+    const has = await prisma.userSite.findFirst({ where: { user_id: mgr.id, site_id: zz.siteId } });
+    if (!has) await prisma.userSite.create({ data: { user_id: mgr.id, site_id: zz.siteId } });
+  });
+  say(`                 manager ${ZZ_MANAGER} (SITE_MANAGER, with a UserSite row)`);
+
+  const removed = await prisma.user.deleteMany({ where: { email: { in: WRONG_FROM_FIRST_DRAFT } } });
+  if (removed.count) say(`\nremoved ${removed.count} user(s) this script invented before the identities were measured`);
+
+  say(`\nBoth tenants are is_internal. The password is the one 65 gates already type.`);
 } catch (e) {
   say(`\nFAILED: ${describeError(e)}`);
   process.exitCode = 1;
