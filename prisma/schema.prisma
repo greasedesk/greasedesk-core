@@ -1130,12 +1130,22 @@ model RepMagicLink {
 model TenantPlanTerms {
   id               String   @id @default(uuid())
   group_id         String
-  /// 'monthly' | 'annual_new' | 'annual_offer' — the shape, not the price.
+  /// The shape, not the price. FOUR kinds, enumerated by `PLAN_KINDS` in lib/billing-plans — which
+  /// is the list to read, because this comment once named three and omitted `annual_renewal`:
+  /// 'monthly' | 'annual_new' | 'annual_offer' | 'annual_renewal'. Only `monthly`, `annual_offer`
+  /// and `annual_renewal` are reachable from Checkout today; `annual_new` is wired and unreached,
+  /// kept for a future promotion (owner, 2026-10-26).
   plan             String
   months_paid      Int? // NULL on monthly: there is no "months paid for" on a rolling plan
   months_given     Int? // NULL on monthly, for the same reason
   paid_now_pennies Int? // NULL on monthly: nothing is taken at signup. NOT zero — zero is a payment of nothing
-  trial_days       Int? // NULL on every annual shape: there is no trial. NOT 0, which would read as a trial that ended instantly
+  /// THE TRIAL IS ON EVERY PLAN, annual included (owner, 2026-10-28, reversing 2026-10-24). This
+  /// column said "NULL on every annual shape: there is no trial" and that is no longer true — an
+  /// annual row carries BOTH a trial and a payment, which is why the old
+  /// `TenantPlanTerms_trial_xor_paynow` CHECK had to go and `TenantPlanTerms_shape_by_plan` replaced
+  /// it. The replacement constrains `months_paid` and `paid_now_pennies` by plan and says nothing
+  /// about this column, deliberately. Still NOT 0, which would read as a trial that ended instantly.
+  trial_days       Int?
   /// When THESE terms took effect. Replaced signed_up_at, whose values it carries: on an
   /// append-only timeline that column would have had to be written on every row, repeating one
   /// fact down a timeline, and the garage's signup date is already on Group.created_at.

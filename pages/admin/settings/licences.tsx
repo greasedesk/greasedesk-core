@@ -21,6 +21,8 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
 import { resolveTenantProfile, formatProfileDate } from '@/lib/locale-profiles';
 import { isLapsedStatus } from '@/lib/billing';
+import { planChoiceFor, type PlanChoice } from '@/lib/plan-choice';
+import PlanChooser from '@/components/billing/PlanChooser';
 
 type PageProps = {
   groupName: string;
@@ -32,6 +34,10 @@ type PageProps = {
   isDemo: boolean;
   billingConfigured: boolean;
   isAdmin: boolean;
+  /** Null only for a demo, which may not buy anything. */
+  choice: PlanChoice | null;
+  /** What they are on NOW, from the latest TenantPlanTerms row (the webhook appends one per change). */
+  currentPlan: 'monthly' | 'annual' | null;
 };
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -49,19 +55,32 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [plan, setPlan] = useState<'monthly' | 'annual'>('monthly');
   const lapsed = isLapsedStatus(subscriptionStatus); // the ONE vocabulary (lib/billing)
   const subscribed = subscriptionStatus === 'trialing' || subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
+  // SWITCHING IS A TRIAL-ONLY DOOR (owner, 2026-10-28). Before the first charge there is no money
+  // to move; after it, a switch is a credit note and a proration and is out of scope. The control
+  // is ABSENT outside the trial rather than disabled — a disabled button invites a support call
+  // asking why, and change-plan would refuse it with TRIAL_OVER anyway.
+  const trialing = subscriptionStatus === 'trialing';
+  const switchTo: 'monthly' | 'annual' | null = !trialing || !currentPlan ? null : currentPlan === 'monthly' ? 'annual' : 'monthly';
 
-  async function go(path: string) {
+  async function go(path: string, body?: Record<string, unknown>) {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(path, { method: 'POST' });
+      const res = await fetch(path, {
+        method: 'POST',
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      });
       const data = await res.json();
-      if (!res.ok || !data?.url) throw new Error(data?.message || 'Could not open billing.');
-      window.location.href = data.url;
+      if (!res.ok) throw new Error(data?.message || 'Could not open billing.');
+      // CHECKOUT AND PORTAL HAND OFF TO STRIPE; change-plan does not. One helper, two endings,
+      // decided by what came back rather than by which path was asked for.
+      if (data?.url) { window.location.href = data.url; return; }
+      window.location.reload();
     } catch (e: any) { setError(e?.message || 'Something went wrong.'); setBusy(false); }
   }
 
@@ -105,6 +124,37 @@ export default function LicencesSettings(props: PageProps) {
 
       {error && <div className="bg-danger-soft border border-danger text-danger rounded-lg p-3 text-sm max-w-xl mt-4">{error}</div>}
 
+      {/* THE CHOICE, on the one screen an existing garage can buy from. It used to post no body at
+          all, so "Start subscription" could only ever start a monthly one. */}
+      {billingConfigured && !hasCustomer && choice && (
+        <div className="max-w-xl mt-4" data-testid="licence-plan-choice">
+          <PlanChooser choice={choice} value={plan} onChange={setPlan} disabled={busy} />
+        </div>
+      )}
+
+      {/* SWITCHING DURING THE TRIAL. Present only while trialing; see the derivation above. */}
+      {billingConfigured && switchTo && choice && (
+        <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-switch">
+          <p className="text-sm text-ink font-medium">
+            You’re on the <span data-testid="plan-switch-current">{currentPlan === 'annual' ? 'yearly' : 'monthly'}</span> plan.
+          </p>
+          <p className="text-sm text-muted mt-1" data-testid="plan-switch-sentence">
+            {switchTo === 'annual' ? choice.annual.trialSentence : choice.monthly.trialSentence}
+          </p>
+          <p className="text-xs text-muted mt-1">
+            You can change this while your trial is running. Nothing is charged and your trial end date does not move.
+          </p>
+          <button
+            onClick={() => go('/api/stripe/change-plan', { plan: switchTo })}
+            disabled={busy}
+            data-testid={`plan-switch-to-${switchTo}`}
+            className="mt-3 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? 'Changing…' : switchTo === 'annual' ? 'Switch to yearly' : 'Switch to monthly'}
+          </button>
+        </div>
+      )}
+
       <div className="max-w-xl mt-4 flex flex-wrap gap-3">
         {!billingConfigured ? (
           <p className="text-sm text-muted">Card billing isn’t switched on for this environment yet.</p>
@@ -113,7 +163,7 @@ export default function LicencesSettings(props: PageProps) {
             {busy ? 'Opening…' : 'Manage billing'}
           </button>
         ) : (
-          <button onClick={() => go('/api/stripe/checkout')} disabled={busy} className="bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">
+          <button onClick={() => go('/api/stripe/checkout', { plan })} disabled={busy} data-testid="licence-start-subscription" className="bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">
             {busy ? 'Opening…' : 'Start subscription'}
           </button>
         )}
@@ -134,11 +184,28 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   if (!vis.groupId) return { redirect: { destination: '/admin/login', permanent: false } };
   const groupId = vis.groupId;
 
-  const [group, billing, siteCount] = await Promise.all([
-    prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true } }),
+  const [group, billing, siteCount, latestTerms] = await Promise.all([
+    prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true, trial_ends_at: true } }),
     prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
     prisma.site.count({ where: { group_id: groupId } }),
+    // WHAT THEY ARE ON NOW. The plan is not in the billing cache, so it is read from the terms
+    // timeline, which the webhook appends to on every change — the latest row is the current shape.
+    prisma.tenantPlanTerms.findFirst({ where: { group_id: groupId }, orderBy: { effective_from: 'desc' }, select: { plan: true } }),
   ]);
+
+  // A DEMO MAY NOT BUY ANYTHING, so it is not offered a price to look at (see the panel above).
+  // The trial end comes from Group.trial_ends_at, which lib/stripe-billing-cache mirrors back from
+  // Stripe's own trial_end — GroupBilling.current_period_end is NULL on the Basil API and would
+  // silently compute a date from today instead of the real one.
+  const choice = (group as any)?.is_demo
+    ? null
+    : await planChoiceFor(prisma, groupId, {
+        country: group?.country_code ?? null,
+        sites: siteCount,
+        trialEndsAt: (group as any)?.trial_ends_at ?? null,
+      });
+  const planRow = latestTerms?.plan ?? null;
+  const currentPlan = planRow === null ? null : planRow === 'monthly' ? 'monthly' as const : 'annual' as const;
 
   return {
     props: {
@@ -153,6 +220,8 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       billingConfigured: !!process.env.STRIPE_SECRET_KEY,
       isDemo: !!(group as any)?.is_demo,
       isAdmin: true,
+      choice,
+      currentPlan,
     },
   };
 };

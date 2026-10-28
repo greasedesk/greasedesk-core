@@ -1,10 +1,18 @@
 /**
  * File: pages/onboarding/billing.tsx
  * Onboarding Step 6 — start the subscription (the FINAL, non-skippable step; item-13). A hosted
- * Stripe Checkout launcher: a free trial of the length set in the Engine Room, card verified
- * today, first charge a flat monthly
- * price per site at trial end unless cancelled. Real terms only (ruling 2026-07-13 — no fake card
+ * Stripe Checkout launcher: a free trial of the length set in the Engine Room, card verified today,
+ * first charge at trial end unless cancelled. Real terms only (ruling 2026-07-13 — no fake card
  * fields, no untrue money strings on a live domain).
+ *
+ * ── THE PLAN CHOICE LIVES HERE, BECAUSE THIS IS THE ONLY CHECKOUT A NEW GARAGE EVER SEES ───────
+ * This page posted `{ context: 'onboarding' }` with no `plan`, so checkout.ts took its monthly
+ * branch every time and annual billing — built, tested and complete underneath — was unreachable
+ * by the only audience that can buy a first year. Found 2026-10-28 by walking the path.
+ *
+ * Every figure comes from planChoiceFor() in getServerSideProps. The screen renders what the
+ * server resolved and sends back only a SHAPE ('monthly' | 'annual'); it never sends an amount,
+ * so a tampered body cannot buy an offer it is not entitled to.
  *
  * Completion is confirmed by a SYNCHRONOUS retrieve on the Checkout return (?session_id), NOT by
  * waiting for the webhook — a lagging webhook must never trap a paid tenant at a spinner. On return
@@ -16,20 +24,20 @@ import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
 import { requireOnboardingStep } from '@/lib/admin-guard';
 import OnboardingLayout, { primaryButtonClass } from '@/components/layout/OnboardingLayout';
-import { perLocationLabelFor } from '@/lib/billing-pricing';
-import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
-// ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
-// client half of the file then reads as a use of the server import, and client-bundle-gate
-// correctly cannot tell the difference. The alias is the distinction, not a workaround.
-import { trialDays as readTrialDays } from '@/lib/programme-settings';
+import { planChoiceFor, type PlanChoice } from '@/lib/plan-choice';
+import PlanChooser from '@/components/billing/PlanChooser';
 
 type Mode = 'idle' | 'launching' | 'finalising' | 'stuck' | 'unconfigured';
 
-export default function BillingPage({ priceLabel, trialDays }: { priceLabel: string; trialDays: number }) {
+export default function BillingPage({ choice }: { choice: PlanChoice }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('idle');
   const [error, setError] = useState<string | null>(null);
+  // MONTHLY IS THE DEFAULT (owner ruling, 2026-10-28) — the cheaper commitment is the one a garage
+  // falls into by not choosing, never the larger one.
+  const [plan, setPlan] = useState<'monthly' | 'annual'>('monthly');
+  const trialDays = choice.trialDays;
   const cancelled = router.query.billing === 'cancelled';
   const polls = useRef(0);
 
@@ -75,7 +83,7 @@ export default function BillingPage({ priceLabel, trialDays }: { priceLabel: str
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: 'onboarding' }),
+        body: JSON.stringify({ context: 'onboarding', plan }),
       });
       if (res.status === 503) { setMode('unconfigured'); return; }
       const data = await res.json();
@@ -124,8 +132,11 @@ export default function BillingPage({ priceLabel, trialDays }: { priceLabel: str
         </p>
       ) : (
         <>
+          <div className="mb-6">
+            <PlanChooser choice={choice} value={plan} onChange={setPlan} disabled={mode === 'launching'} />
+          </div>
+
           <div className="bg-surface-muted border border-line p-4 rounded-lg mb-6 text-sm text-muted space-y-2">
-            <p><span className="text-ink font-semibold">{priceLabel}</span> per location, per month.</p>
             <p>Your card is verified today but <span className="text-ink font-semibold">not charged</span>. The trial runs {trialDays} days.</p>
             <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
           </div>
@@ -159,10 +170,15 @@ export default function BillingPage({ priceLabel, trialDays }: { priceLabel: str
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const gate = await requireOnboardingStep(ctx, 'checkout');
   if (!gate.ok) return { redirect: gate.redirect };
+  const groupId = gate.vis.groupId as string;
   // Country-profile price (ruling 2026-07-28): the figure shown here is the figure checkout
-  // verifies against the Stripe Price — both halves or neither.
-  const group = await prisma.group.findUnique({ where: { id: gate.vis.groupId as string }, select: { country_code: true, ref: true } });
-  // The trial length is a SETTING. This page is server-rendered on every request, so the number
-  // here is whatever Checkout will actually seed — the two cannot drift.
-  return { props: { priceLabel: perLocationLabelFor(resolveTenantProfile(group)), trialDays: await readTrialDays() } };
+  // verifies against the Stripe Price — both halves or neither. Rendered from planChoiceFor, the
+  // same resolver checkout.ts prices from, so the screen and the charge cannot disagree.
+  //
+  // NO `trialEndsAt` IS PASSED: there is no subscription yet, so the trial has not started and the
+  // date is computed from the setting — which is exactly what Checkout will seed on this request.
+  const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true, ref: true } });
+  const sites = await prisma.site.count({ where: { group_id: groupId } });
+  const choice = await planChoiceFor(prisma, groupId, { country: group?.country_code ?? null, sites });
+  return { props: { choice } };
 };

@@ -66,14 +66,98 @@ behind in whichever account it reaches.
 - Delete them afterwards. They are on the gate database, so nothing is at stake, but a stale
   fixture is the thing the next run mistakes for a result.
 
+### THE PHONE STEP CANNOT BE COMPLETED ON THE GATE DATABASE
+
+**It is not a bug, and resending will never help.** Two correct rules collide:
+
+- `lib/environment.ts` refuses **every** send while the `Environment` marker reads `test` —
+  *"nothing is sent from the gate database"*. It sits immediately before the provider call, fails
+  closed, and is not bypassed by `security: true` templates, so the emailed fallback is refused too.
+- `sendPhoneVerification` calls `clearCodes()` on any failed send, because *"leaving it would let
+  the user sit on an 'enter the code' screen for a code that never left the building"*.
+
+So the code is minted, the send is refused, and the code is deleted. `DeliveredCode` ends up empty
+and there is **nothing to read back** — the hash is not the obstacle, the absent row is. Pressing
+"Send me a code" again repeats all three steps. `storeUnverified` does save the number, but the
+root gate wants `TwoFactorSecret.phone_recorded_at`, which is written only on **confirmation**, so
+"continue and confirm later" does not satisfy it either.
+
+**Do not flip the `Environment` marker.** It is the same switch `gatePrisma()` requires, so every
+gate would decline to run — and a gate database that can send is a gate database that emails real
+people.
+
+**Use the documented break-glass.** `lib/onboarding.ts` names exemption as one of three ways the
+step can be complete, and production grants it through
+`pages/api/superadmin/tenant-phone-exempt.ts`. That endpoint is unreachable here only because the
+gate database has no `Operator` row, so write the same three columns directly, **once per garage**:
+
+```sql
+UPDATE "Group" SET
+  phone_step_exempt_at = now(),
+  phone_step_exempt_reason = 'Local rehearsal: no code can be delivered from the gate database (lib/environment refuses every send while the Environment marker reads test), and sendPhoneVerification clears the code on a failed send, so the step cannot be completed here.',
+  phone_step_exempt_by = NULL
+WHERE id = '<group id>';
+```
+
+Scope it by `id`, check it reported **exactly one** row, and leave `phone_step_exempt_by` **NULL** —
+it holds an operator's user id and no operator granted this. The honest record is "this garage
+skipped the step, and here is why".
+
+**Never write `TwoFactorSecret.phone_recorded_at` instead.** It is one column rather than three and
+it is a lie: that column exists to mean *a handset answered*, and nothing downstream could later
+tell the difference.
+
 ---
+
+## THE FIGURES, AND WHERE THEY COME FROM
+
+**Nothing below is a literal.** Every amount in this runbook is derived from
+`ProgrammeSettings` plus the country's monthly price, and the settings on the database you are
+rehearsing against are **not** the settings in production — an Engine Room edit is made against
+production and nothing carries it across (see the standing board). Read the settings first, then
+compute what to expect. A runbook that named the numbers would have you confirming the arithmetic
+of a different database.
+
+| symbol | source | gate DB, 2026-10-28 |
+|---|---|---|
+| `M` monthly price | **code**, not a setting: the country profile's `monthlyPrice` (GB) | £75 |
+| `T` trial days | `ProgrammeSettings.trial_days` | 30 |
+| `R` renewal months charged | `ProgrammeSettings.renewal_annual_months_paid` | 10 |
+| `O` offer months charged | `ProgrammeSettings.offer_months_paid` | **6** |
+
+Derived:
+
+| quantity | formula | gate DB today |
+|---|---|---|
+| annual price | `R × M` | **£750** |
+| affiliate first-year price | `O × M` | **£450** |
+| first-year discount | `(R − O) × M` | **£300** |
+| coupon id | `gd-first-year-<discount pennies>-gbp` | **`gd-first-year-30000-gbp`** |
+
+Read them for yourself before you start:
+
+```sql
+SELECT trial_days, renewal_annual_months_paid, offer_months_paid, affiliate_signups_open
+FROM "ProgrammeSettings" WHERE id = 'singleton';
+```
+
+**Production holds `O` = 8**, so the offer a real garage sees is `8 × £75` = £600 with a £150
+discount. The gate database holds 6 because it predates the Engine Room edit of 2026-10-26.
+Rehearsing at 6 is deliberate (owner, 2026-10-28): at 8 the expected figures coincide with the
+schema defaults, so a hardcoded constant anywhere in the chain would pass unnoticed.
 
 ## A — MONTHLY (the regression)
 
 The path that already worked. Run it first: if A is wrong, B and C tell you nothing.
 
-1. Register a garage at `http://localhost:3010/register`.
-2. Reach checkout and choose **monthly**. Confirm the screen says **£75**.
+1. Register a garage at `http://localhost:3010/register`, GB, with a `@example.invalid` address.
+   The verification email **will not arrive** (same send refusal as above), so take the link from
+   `VerificationToken` instead. Then walk all six wizard steps —
+   `country → phone → site → rates → tax → checkout` — granting the phone exemption above when you
+   reach step 2.
+2. Reach checkout. The step now offers **two plans**, with **Monthly preselected** — leave it, and
+   confirm the Monthly card reads **`M`** (£75) *per location, per month* and that its trial
+   sentence names the end date and the amount.
 3. Pay with `4242 4242 4242 4242`, any future expiry, any CVC.
 
 **Confirm — in Stripe:** subscription `trialing`; trial ends in 30 days; one item, £75/month; no
@@ -84,23 +168,29 @@ discount.
 SELECT plan, trial_days, paid_now_pennies, months_paid FROM "TenantPlanTerms" WHERE group_id = '<id>' ORDER BY effective_from;
 SELECT feature_key, source, enabled FROM "GroupFeature" WHERE group_id = '<id>';
 ```
-Expect `monthly / 30 / NULL / NULL`, and `web`+`inbound` rows written `false` with source `stripe`.
+Expect `monthly / T / NULL / NULL` (so `monthly / 30 / NULL / NULL` today), and `web`+`inbound`
+rows written `false` with source `stripe`.
 **There will be no `core` row** — core is never written from Stripe, and that is correct.
 
 ---
 
 ## B — ANNUAL, UNREFERRED
 
-1. Register a second garage. Choose **annual**. Confirm the screen says **£750**.
+1. Register a second garage. At the checkout step choose **Yearly**. Confirm the card reads
+   **`R × M`** (£750 today) *per location, per year*, carries the derived saving line
+   (**`months_given − R` months free**, "2 months free" at today's settings), and that its trial
+   sentence reads "…then £750 for 12 months". An unreferred garage must show **no** first-year /
+   renewal split — there is no offer to explain.
 2. Pay with `4242 4242 4242 4242`.
 
 **Confirm — in Stripe:** subscription `trialing`, **nothing charged yet**; one item at
-**£750/year**; **no discount**; the item's price belongs to **the same product as the monthly
+**`R × M` per year**; **no discount**; the item's price belongs to **the same product as the monthly
 price** (this is the check that answers question 9 — compare it against step 0.1).
 
 **Confirm — in the database:** `TenantPlanTerms` has a second row,
-`annual_renewal / 30 / 75000 / 10`. The first row still says `monthly` — that is what they signed
-up under and a later choice must never erase it.
+`annual_renewal / T / (R × M in pennies) / R` — `annual_renewal / 30 / 75000 / 10` today. The first
+row still says `monthly` — that is what they signed up under and a later choice must never erase
+it.
 
 **Confirm — entitlement:** the `GroupFeature` rows are **identical to A's**. Two prices, one
 product, one level of access.
@@ -115,18 +205,26 @@ product, one level of access.
    should prefill itself from the URL — no cookie, no consent banner interaction needed.
 3. Confirm the attribution landed before going further:
    `SELECT party_type, party_id, share_bp FROM "TenantAttribution" WHERE group_id = '<id>';`
-4. Choose **annual**. Confirm the screen says **£600**.
+4. Choose **Yearly**. Confirm **three** things on the card, because this is the mis-sale case:
+   - the headline price is **`O × M`** (£450 on the gate database, £600 in production);
+   - a second line states **both**: "£450 for the first year, then £750 a year";
+   - the trial sentence also names both figures.
+   If the first-year price appears alone, stop — the garage would learn the real figure from its
+   second invoice.
 5. Pay with `4242 4242 4242 4242`.
 
 **Confirm — in Stripe, and this is the clause that matters most:**
-- the subscription item is **£750/year**, NOT £600;
-- a coupon `gd-first-year-15000-gbp` is attached, **duration `once`**, £150 off;
+- the subscription item is **`R × M` per year** (£750), **NOT** the discounted figure — the
+  discount must live on a coupon, never in the price;
+- a coupon `gd-first-year-<(R − O) × M in pennies>-gbp` is attached — **`gd-first-year-30000-gbp`**
+  today — **duration `once`**, `(R − O) × M` off (£300);
 - nothing charged yet (trialing).
 
 **Then read the upcoming invoice** (Stripe dashboard → the subscription → *Upcoming invoice*). It
-should show **£600** — £750 less the once-only £150.
+should show **`O × M`** (£450) — `R × M` less the once-only `(R − O) × M`.
 
-**Confirm — in the database:** `TenantPlanTerms` latest row is `annual_offer / 30 / 60000 / 8`, and
+**Confirm — in the database:** `TenantPlanTerms` latest row is
+`annual_offer / T / (O × M in pennies) / O` — `annual_offer / 30 / 45000 / 6` today — and
 `TenantAffiliateTerms` names the affiliate with the frozen reward.
 
 ---
@@ -135,11 +233,13 @@ should show **£600** — £750 less the once-only £150.
 
 On garage **C**, still trialing:
 
-1. `POST /api/stripe/change-plan` with `{"plan":"monthly"}` (from the licences screen, or curl with
-   a real admin session).
+1. On **Settings → Licence**, a trialing garage now has a **Switch to monthly / Switch to yearly**
+   control stating the plan it is on and what it would be charged. Press it. (Equivalently:
+   `POST /api/stripe/change-plan` with `{"plan":"monthly"}`.) Confirm the control is **absent**
+   once the subscription is `active` — it is removed, not disabled.
 2. **Confirm:** the subscription item is now £75/month; **the trial end date has not moved**;
    nothing has been charged; no proration line appears anywhere.
-3. Switch back with `{"plan":"annual"}`. Confirm it returns to £750/year **with the coupon still
+3. Switch back with `{"plan":"annual"}`. Confirm it returns to `R × M` per year **with the coupon still
    attached** — the garage did not lose its offer by changing its mind.
 4. **Confirm the timeline appends rather than overwrites:**
    `SELECT plan, effective_from FROM "TenantPlanTerms" WHERE group_id = '<id>' ORDER BY effective_from;`
@@ -168,15 +268,18 @@ Then advance:
 
 5. **Advance the clock to 27 days** (three days before trial end). Expect
    `customer.subscription.trial_will_end` in the `stripe listen` output, and in the dev server log
-   `[stripe] trial_will_end → sent: annual £600.00`. **Check the email**: it must name the plan,
-   **£600.00**, the date, and say it renews at £750.00 after that.
+   `[stripe] trial_will_end → sent: annual £450.00` (`O × M`). **Check the email**: it must name
+   the plan, **`O × M`**, the date, and say it renews at **`R × M`** after that.
 6. **Advance the clock past 30 days.** Expect:
-   - an invoice for **£600.00** (£750 less the once-only coupon), paid;
+   - an invoice for **`O × M`** (£450) — `R × M` less the once-only coupon — paid;
    - the subscription goes `trialing` → `active`;
    - `invoice.paid` fires, and `GroupBilling.subscription_status` becomes `active`.
-7. **THE CLAUSE NO GATE CAN PROVE.** Read the **next** upcoming invoice. It must be **£750.00**.
-   If it says £600, the coupon is not `once` and every referred garage is discounted for life.
-8. **Advance a year** and confirm the renewal invoice is **£750.00** and actually collected.
+7. **THE CLAUSE NO GATE CAN PROVE.** Read the **next** upcoming invoice. It must be **`R × M`**
+   (£750.00) — the UNDISCOUNTED figure. If it still shows `O × M`, the coupon is not `once` and
+   every referred garage is discounted for life. This is the one assertion whose expected value
+   does not move with `O`, which is exactly why it is the one that matters.
+8. **Advance a year** and confirm the renewal invoice is **`R × M`** (£750.00) and actually
+   collected.
 
 ---
 
