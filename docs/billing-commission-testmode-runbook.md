@@ -1,8 +1,19 @@
 # Billing → Commission — test-mode acceptance runbook
 
+> ### CORRECTION, 2026-10-28 — THE PREMISE BELOW IS FALSE
+>
+> **PRODUCTION IS ON LIVE STRIPE KEYS — confirmed in the live dashboard by the owner, 2026-10-28.** Live Stripe holds three subscriptions, all `trialing` with trials ending late 2027 by deliberate choice: The Mini & BMW Specialist, G-Force Auto Services, Hugh's Garage. Nothing is `active` in live.
+>
+> This file said billing was "dormant in prod until Stripe keys land". It is not dormant and the
+> keys are not test keys. **Everything in this runbook still runs the same way — locally, on test
+> keys — but the reason has changed from "production is harmless" to "production charges real
+> cards".** Treat every instruction about not touching production as hard, not cautionary.
+>
+> The claim survived because nothing re-checked it: see the standing note on a written rule not
+> being a tested rule.
+
 The `invoice.paid` → accrual and `charge.refunded` → clawback wiring is **built and proven** with
-synthetic Stripe-signed events (see `_billing_gate` results in the slice report). It is **dormant in
-prod** until Stripe keys land (`getStripe()` returns null → the webhook 503s). This runbook is the
+synthetic Stripe-signed events (see `_billing_gate` results in the slice report). This runbook is the
 **real-Stripe test-mode acceptance** — the part that needs a Stripe *test* account, the Stripe CLI, and
 test cards. It stays entirely in **test mode**; no live keys, no real charges. The live cutover with
 real cards is a **separate later step**.
@@ -13,8 +24,9 @@ real cards is a **separate later step**.
 - A **test-mode Price** for the subscription in `STRIPE_PRICE_ID` — ONE multi-currency Price: GBP £75 base with currency_options (USD $100, EUR €90, …), tax-exclusive. Checkout passes the tenant's currency on the session and verifies the option's amount against the country profile.
 
 ## Where to point the webhook (keep prod dormant / the real tenant safe)
-Do **not** put `sk_test`/`whsec` on production Vercel — that would un-dormant billing for the real
-TMBS tenant. Use one of:
+Do **not** put `sk_test`/`whsec` on production Vercel. That used to mean "it would un-dormant
+billing"; since production runs LIVE keys it now means swapping a live billing path for a test one
+underneath three real subscriptions. Use one of:
 - **Local**: run the app locally with the test env vars, and `stripe listen --forward-to
   localhost:3000/api/stripe/webhook`. The CLI prints the `whsec_…` to use.
 - **A Vercel preview deployment** with the test env vars scoped to that preview only.

@@ -22,17 +22,21 @@ to anybody else.
 checkout there creates a real tenant row, a real `GroupBilling` row and a real `NotificationLog`
 send. Even a perfect test leaves litter in the records the business runs on.
 
-**A note on production's Stripe mode, because the repo contradicts itself.**
-`docs/billing-commission-testmode-runbook.md` says billing is "dormant in prod until Stripe keys
-land". The 2026-07-28 survey recorded the opposite: keys configured, in **test** mode, with real
-tenants holding test-mode trialing subscriptions. The production snapshot of 2026-10-28 shows
-`active 1, trialing 3`, which cannot happen without keys — so the survey is right and the runbook
-line is stale. **Confirm the mode in the dashboard before trusting either.** It does not change
-where this runbook runs; it changes how alarmed to be if something reaches production by accident.
+**PRODUCTION IS ON LIVE KEYS.** **PRODUCTION IS ON LIVE STRIPE KEYS — confirmed in the live dashboard by the owner, 2026-10-28.** Live Stripe holds three subscriptions, all `trialing` with trials ending late 2027 by deliberate choice: The Mini & BMW Specialist, G-Force Auto Services, Hugh's Garage. Nothing is `active` in live.
 
-**Do not put `sk_test_…` or a `whsec_…` on production Vercel**, the same instruction the earlier
-runbook gives, and for a stronger reason now: annual checkout CREATES Stripe objects (an inline
-price and a coupon) rather than only reading one.
+The repo said otherwise in two places and both were wrong — the 2026-07-28 survey recorded "keys
+configured but TEST-mode", and `docs/billing-commission-testmode-runbook.md` said billing was
+"dormant in prod". Both are corrected as of this check. The lesson is worth more than the fact: a
+claim about the live environment was three months old, had never been re-tested, and two documents
+had quietly inherited it.
+
+So the instruction is not "be careful with production", it is **nothing in this runbook goes near
+production**. A mistake there is a real card and a real charge, not a sandbox row.
+
+**Do not put `sk_test_…` or a `whsec_…` on production Vercel.** On live keys that would point
+three real subscriptions at a test billing path. And annual checkout CREATES Stripe objects — an
+inline price and a coupon — rather than only reading one, so a misdirected run leaves objects
+behind in whichever account it reaches.
 
 ### What you must set up first (none of it exists on this machine today)
 

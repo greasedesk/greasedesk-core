@@ -13,7 +13,7 @@
 
 | State | Areas |
 |---|---|
-| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)**, **billing → commission wiring** (Stripe `invoice.paid`/`charge.refunded` → engine, test-mode, dormant until keys), **Content system** (`Document`: legal freeze / page latest-wins, country axis, markdown; cookies seeded) |
+| **BUILT / GATED** | Auth foundation (three-actor class), the shell, origin isolation, Operators, Settings, the commission engine, **Rates** (the CommissionRate write surface), **attribution resolution** (`resolveAttribution` — ref → `TenantAttribution`), **minimal Rep identity** (model + `ref_code`), **operator 2FA (TOTP)**, **billing → commission wiring** (Stripe `invoice.paid`/`charge.refunded` → engine; LIVE keys in production since before 2026-10-28, confirmed in the dashboard that day), **Content system** (`Document`: legal freeze / page latest-wins, country axis, markdown; cookies seeded) |
 | **NEXT** | The forecast dashboard, or Reps management UI — owner's call |
 | **DESIGNED — NOT BUILT** | Tenant lifecycle (suspend / transfer-ownership / purge), the forecast dashboard, Reps management UI, the rep PWA portal, the Countries module, **tenant/rep 2FA**, **mandatory-2FA enforcement policy** |
 
@@ -326,7 +326,7 @@ effective-dated, injected clock, provably correct.
   post-arrears, clawback-inside-window, clawback-after, no-attribution, effective-date boundaries,
   ledger append-only) and passes.
 
-### 8a. Billing → commission wiring  — **BUILT / GATED** (test-mode; dormant until keys)
+### 8a. Billing → commission wiring  — **BUILT / GATED** (LIVE keys in production, confirmed 2026-10-28)
 
 `lib/commission-billing.ts` + two cases in `pages/api/stripe/webhook.ts`. The first time the money loop
 runs from a card charge to a ledger entry. The Stripe webhook (already signature-verified against
@@ -360,7 +360,9 @@ commission, it maps the event onto a `Payment`/`Refund` and calls `accruePayment
 **Still pending:** the **live cutover** (real keys, real cards) — a separate deliberate step; the
 **payout run** (flips `pending → paid` after the arrears window, and pays).
 
-The engine + wiring are correct and gated; **dormant in prod until Stripe keys land** (`getStripe()` null
+The engine + wiring are correct and gated. **NOT dormant: production runs LIVE keys** (owner
+confirmed in the dashboard, 2026-10-28 — three live subscriptions, all trialing to late 2027). The
+"dormant until keys land" reading below applies only to an environment with no key (`getStripe()` null
 → the webhook 503s), so nothing pays anyone yet.
 
 ---
