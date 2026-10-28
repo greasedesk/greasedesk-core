@@ -4,12 +4,16 @@
  *
  * THE PLAN SHAPES, AND THE ARITHMETIC THAT PRICES THEM.
  *
- * ── THE RULE EVERYTHING HERE TURNS ON ───────────────────────────────────────────────────────────
- * TRIAL OR PAY NOW, NEVER BOTH (owner, 2026-10-24). A new garage on annual pays immediately for
- * twelve months at the price of nine — the trial IS the discount, taken at the front. Monthly
- * keeps the trial. The affiliate offer is twelve for six. A renewal is twelve for ten. Four
- * shapes, one rule, and the rule is ASSERTED over every shape the module says it can sell rather
- * than over four hand-written cases, which is the same mistake as a hand-kept status list.
+ * ── THE RULE EVERYTHING HERE TURNS ON (REVERSED 2026-10-28) ─────────────────────────────────────
+ * It was TRIAL OR PAY NOW, NEVER BOTH (owner, 2026-10-24): annual paid at the front and had no
+ * trial, because the trial WAS the discount. The offer changed on 2026-10-28 — every garage gets
+ * the 30-day trial whatever plan it picks, and is charged its plan when the trial ends, so an
+ * annual garage gets thirteen months of service for its first payment, deliberately.
+ *
+ * What survives is the SHAPE rule: monthly is rolling, so it takes nothing up front and names no
+ * term; every annual shape takes one payment for a stated number of months. That is what is
+ * asserted below, over every shape the module says it can sell rather than over hand-written
+ * cases. The trial clauses now live in annual-billing-gate with the rest of the reversal.
  *
  * These clauses began life in affiliate-gate, written before any of the code. They live here
  * because the plans are their own subject and ship a stage earlier; affiliate-gate keeps the
@@ -52,15 +56,20 @@ try {
   const PS = await import(`${R}/lib/programme-settings.ts`);
   const S = { monthlyPricePennies: 7500, trialDays: 30, newAnnualMonthsPaid: 9, renewalAnnualMonthsPaid: 10, offerMonthsPaid: 6, monthsGiven: 12 };
 
-  // ── 1. TRIAL OR PAY NOW, NEVER BOTH ─────────────────────────────────────────────────────────
-  console.log('— trial or pay now, never both —');
+  // ── 1. ROLLING OR A TERM, AND EVERY PLAN CARRIES THE TRIAL ──────────────────────────────────
+  console.log('— rolling or a term, and always a trial —');
   check('the module names every plan shape it can sell', Array.isArray(BP.PLAN_KINDS) && BP.PLAN_KINDS.length >= 4,
     JSON.stringify(BP.PLAN_KINDS));
   for (const kind of BP.PLAN_KINDS ?? []) {
     const p = BP.planFor(kind, S);
-    check(`  ${kind}: exactly one of trial / pay-now`,
-      (p.trialDays > 0) !== (p.payNowPennies > 0),
-      `trialDays=${p.trialDays} payNow=${p.payNowPennies} — both or neither is the contradiction this rule exists to stop`);
+    const rolling = kind === 'monthly';
+    check(`  ${kind}: ${rolling ? 'rolling — no payment up front, no term' : 'a term — one payment, months named'}`,
+      rolling
+        ? (p.payNowPennies === 0 && p.monthsPaid === null && p.monthsGiven === null)
+        : (p.payNowPennies > 0 && p.monthsPaid > 0 && p.monthsGiven > 0),
+      `payNow=${p.payNowPennies} monthsPaid=${p.monthsPaid}`);
+    check(`  ${kind}: carries the trial`, p.trialDays === S.trialDays,
+      `trialDays=${p.trialDays} — reversed 2026-10-28; this asserted the OPPOSITE until then`);
   }
 
   // ── 2. THE PRICES ARE DERIVED, NEVER TYPED ──────────────────────────────────────────────────
@@ -166,30 +175,36 @@ try {
   check('  …what they SIGNED UP under is the earliest, and it still says monthly',
     signup?.plan === 'monthly' && signup?.trial_days === 30,
     `${signup?.plan} / trial ${signup?.trial_days} — the row a later choice must not erase`);
-  // ── AND THE DATABASE REFUSES IT TOO ─────────────────────────────────────────────────────────
-  // TenantPlanTerms_trial_xor_paynow came in with the affiliate migration on 2026-10-24 and was
-  // found by a red-proof rather than by reading — a mutation that broke the rule in the module hit
-  // the CHECK on the way out. A guard nobody knows about is a guard that gets dropped by the next
-  // migration with nothing to notice, so it is asserted here: the rule holds even for a writer
-  // that bypasses lib/billing-plans entirely.
-  const bothRefused = await prisma.tenantPlanTerms.create({
-    data: { group_id: g, plan: 'annual_offer', months_paid: 6, months_given: 12,
-      paid_now_pennies: 60000, trial_days: 30, effective_from: new Date('2026-09-01T00:00:00.000Z') },
-  }).then(() => false, (e) => /trial_xor_paynow/.test(describeError(e)));
-  check('the DATABASE refuses a row carrying both a trial and a payment', bothRefused,
-    'the module cannot produce one, and a writer that goes round the module still cannot store one');
-  const neitherRefused = await prisma.tenantPlanTerms.create({
-    data: { group_id: g, plan: 'monthly', months_paid: null, months_given: null,
-      paid_now_pennies: null, trial_days: null, effective_from: new Date('2026-09-02T00:00:00.000Z') },
-  }).then(() => false, (e) => /trial_xor_paynow/.test(describeError(e)));
-  check('  …and a row carrying NEITHER', neitherRefused,
-    'service given away with nothing to charge later is the other half of the same rule');
+  // ── AND THE DATABASE STILL REFUSES THE SHAPES THAT ARE STILL WRONG ──────────────────────────
+  // TenantPlanTerms_trial_xor_paynow came in on 2026-10-24 and was found by a red-proof rather
+  // than by reading. The 2026-10-28 reversal REPLACED it with TenantPlanTerms_shape_by_plan —
+  // trial_days is now unconstrained (it is 30 on both shapes), and what the database still
+  // refuses is a plan whose shape contradicts its name. Asserted here for the same reason as
+  // before: a guard nobody knows about is one the next migration drops with nothing to notice.
+  const monthlyPaidRefused = await prisma.tenantPlanTerms.create({
+    data: { group_id: g, plan: 'monthly', months_paid: 12, months_given: 12,
+      paid_now_pennies: 75000, trial_days: 30, effective_from: new Date('2026-09-01T00:00:00.000Z') },
+  }).then(() => false, (e) => /shape_by_plan/.test(describeError(e)));
+  check('the DATABASE refuses a MONTHLY row that took a payment for a term', monthlyPaidRefused,
+    'monthly is rolling; a term on it is a contradiction no screen could render honestly');
+  const annualFreeRefused = await prisma.tenantPlanTerms.create({
+    data: { group_id: g, plan: 'annual_offer', months_paid: null, months_given: null,
+      paid_now_pennies: null, trial_days: 30, effective_from: new Date('2026-09-02T00:00:00.000Z') },
+  }).then(() => false, (e) => /shape_by_plan/.test(describeError(e)));
+  check('  …and an ANNUAL row that names no term and takes no payment', annualFreeRefused,
+    'a year given away with nothing to charge is the other half of the same rule');
+  const bothNowAllowed = await prisma.tenantPlanTerms.create({
+    data: { group_id: g, plan: 'annual_renewal', months_paid: 10, months_given: 12,
+      paid_now_pennies: 75000, trial_days: 30, effective_from: new Date('2026-09-03T00:00:00.000Z') },
+  }).then(() => true, () => false);
+  check('  …while a trial AND a payment together is now ALLOWED', bothNowAllowed,
+    'the reversal, proved against the database rather than against the module that writes it');
 
   // NULL IS A MEANINGFUL ABSENCE HERE, NOT ZERO.
   check('monthly records NO payment, rather than a payment of nothing', signup?.paid_now_pennies === null,
     `${signup?.paid_now_pennies} — zero would read as money collected`);
-  check('  …and the annual row records NO trial, rather than one that ended instantly',
-    now?.trial_days === null, `${now?.trial_days}`);
+  check('  …and an annual row records its trial alongside the payment',
+    now?.trial_days === 30, `${now?.trial_days} — NULL here was the old rule`);
   // ── 7. EVERY NEW GARAGE GETS A FIRST TERMS ROW ──────────────────────────────────────────────
   // The 2026-10-24 backfill gave every EXISTING garage a row so there would be ONE SHAPE for every
   // garage. Signup wrote none, so the next garage to register would have broken that the day after

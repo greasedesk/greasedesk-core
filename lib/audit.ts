@@ -210,6 +210,11 @@ export type AuditAction =
   | 'billing.country_mismatch'  // Stripe's customer country disagrees with Group.country_code.
                                 // Decides the TAX REGIME once automatic_tax is on, so it is
                                 // recorded, not logged: { groupCountry, stripeCountry, via }
+  | 'billing.plan_changed'       // the garage switched between monthly and annual DURING the trial.
+                                 // Recorded, not logged: it changes what they will be charged and
+                                 // by how much: { to, amountPennies, trialEnd }
+  | 'billing.plan_change_failed' // Stripe refused the switch. The garage saw a plan they did not
+                                 // get, so the attempt is evidence: { wanted, detail }
   | 'checkout.failed'     // Stripe refused to create a Checkout session. Carries Stripe's own
                          // message, code and REQUEST ID — without these the 502 is undiagnosable
                          // from outside: { detail, stripeCode, requestId, quantity, currency }

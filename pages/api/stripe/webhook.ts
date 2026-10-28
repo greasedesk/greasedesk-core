@@ -18,6 +18,7 @@ import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { recordTopUpFromSession } from '@/lib/sms-topup';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
+import { sendTrialEndingReminder } from '@/lib/trial-reminder';
 import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
 import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
 import { countryMismatch } from '@/lib/billing-country';
@@ -118,6 +119,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const c = event.data.object as Stripe.Customer;
         const row = await prisma.groupBilling.findFirst({ where: { stripe_customer_id: c.id }, select: { group_id: true } });
         await reportCountryMismatch(row?.group_id ?? null, c.address?.country ?? null, 'customer.updated');
+        break;
+      }
+      // THE ONE WARNING BEFORE MONEY MOVES. Stripe fires this three days out. Nothing listened to
+      // it until 2026-10-28, so the first a garage knew of the charge was the charge — tolerable
+      // at £75, not at an annual £750 off a card typed in a month earlier. See lib/trial-reminder.
+      case 'customer.subscription.trial_will_end': {
+        const r = await sendTrialEndingReminder(event.data.object as Stripe.Subscription);
+        console.log(`[stripe] trial_will_end → ${r.sent ? 'sent' : 'not sent'}: ${r.why}`);
         break;
       }
       case 'customer.subscription.created':

@@ -20,7 +20,10 @@
  */
 import { prisma as defaultDb } from '@/lib/db';
 import { getProgrammeSettings, type SettingsOpts } from '@/lib/programme-settings';
-import { planFor, planSettings, writePlanTerms, currentPlanTerms, type PlanKind } from '@/lib/billing-plans';
+import {
+  planFor, planSettings, writePlanTerms, currentPlanTerms,
+  renewalAnnualPennies, firstYearDiscountPennies, type PlanKind,
+} from '@/lib/billing-plans';
 import { attributeGroup, type RefMatch } from '@/lib/attribution';
 
 type Db = any; // a PrismaClient or an interactive-transaction client
@@ -241,12 +244,79 @@ export function refuseOffer(a: { code: string | null; codeValid: boolean; isNewG
   return null;
 }
 
-/** Paying at the front and being on trial are contradictory states, not a configuration. */
+/**
+ * ── REVERSED 2026-10-28: ANNUAL MAY CARRY A TRIAL, AND MUST ────────────────────────────────────
+ * This refused annual-with-a-trial, under the 2026-10-24 rule that the trial WAS the annual
+ * discount taken at the front. The offer changed: every garage gets the trial whatever it
+ * picks, and is charged its plan when the trial ends. What is left to refuse is a plan with NO
+ * trial at all, which no longer describes anything we sell — on monthly it would be service given
+ * away with nothing to charge later, and on annual it would contradict what signup promised.
+ */
 export function refusePlanCombination(a: { plan: PlanKind | string; trialDays: number }): string | null {
-  const annual = String(a.plan).startsWith('annual');
-  if (annual && a.trialDays > 0) return 'An annual plan is paid at the front; it cannot also carry a trial.';
-  if (!annual && a.trialDays <= 0) return 'A monthly plan with no trial offers neither a trial nor a payment.';
+  if (a.trialDays <= 0) return 'Every plan is sold with a trial; a plan with none is not one we offer.';
   return null;
+}
+
+/**
+ * MAY THIS GARAGE HAVE THE AFFILIATE OFFER, AND WHAT DOES IT PAY? One server-side resolver, read
+ * from the groupId and NEVER from request input — the screen that shows the price and the API that
+ * charges it both call this, so they cannot disagree. Same discipline as checkout.ts's
+ * "both halves or neither" price check, and the same reason settingsId is never taken from a body.
+ *
+ * A garage that is attributed but refused the offer STAYS ATTRIBUTED and is quoted the renewal
+ * price (owner, 2026-10-28). The affiliate still earns: rewardPaidInvoice reads the frozen terms
+ * and the attribution, and has never read affiliate_signups_open.
+ */
+export async function offerFor(
+  db: Db,
+  groupId: string,
+  opts?: SettingsOpts,
+): Promise<{
+  plan: Extract<PlanKind, 'annual_offer' | 'annual_renewal'>;
+  annualPennies: number;
+  discountPennies: number;
+  refusal: string | null;
+  attributed: boolean;
+}> {
+  const s = await planSettings(db, { settingsId: opts?.settingsId });
+  const terms = await currentTerms(db, opts);
+  const renewal = renewalAnnualPennies(s);
+
+  const attribution = await affiliateFor(db, groupId);
+  const frozen = attribution ? await termsFor(db, groupId) : null;
+
+  // NEVER HAD A SUBSCRIPTION THAT REACHED active OR trialing (owner definition, 2026-10-28).
+  // Read from the billing cache, which is Stripe's truth projected, not from our own guess at it.
+  const billing = await db.groupBilling.findUnique({
+    where: { group_id: groupId }, select: { subscription_status: true, stripe_subscription_id: true },
+  });
+  const everLive = !!billing?.stripe_subscription_id
+    && ['active', 'trialing', 'past_due', 'canceled', 'unpaid', 'paused'].includes(String(billing.subscription_status ?? ''));
+
+  // ALREADY TOOK IT = a TenantPlanTerms row naming the offer (owner definition, 2026-10-28).
+  const taken = await db.tenantPlanTerms.findFirst({ where: { group_id: groupId, plan: 'annual_offer' }, select: { id: true } });
+
+  // The attribution IS the code, resolved: refuseOffer's `code`/`codeValid` pair asks "was a code
+  // given" and "was it real", and at this point both are answered by whether a referrer is on
+  // record. The frozen terms are read alongside because a referral with no terms is a garage that
+  // was attributed before the terms existed — real, and still entitled to the offer.
+  const referrer = attribution ? (frozen?.affiliate_id ?? attribution.party_id) : null;
+  const refusal = refuseOffer({
+    code: referrer,
+    codeValid: !!attribution,
+    isNewGarage: !everLive,
+    alreadyTaken: !!taken,
+    signupsOpen: terms.signupsOpen,
+  });
+
+  const discount = refusal ? 0 : firstYearDiscountPennies(s);
+  return {
+    plan: refusal ? 'annual_renewal' : 'annual_offer',
+    annualPennies: renewal,          // the SUBSCRIPTION amount, always the renewal figure
+    discountPennies: discount,       // taken off the FIRST invoice only, via a duration:'once' coupon
+    refusal,
+    attributed: !!attribution,
+  };
 }
 
 const norm = (v: string | null | undefined) => (v ?? '').trim().toLowerCase();

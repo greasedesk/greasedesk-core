@@ -71,7 +71,14 @@ export function priceIdModuleMap(): Record<string, ModuleKey> {
   return map;
 }
 
-/** The module set a Stripe subscription entitles, derived from its line items' Price IDs. */
+/**
+ * The module set a Stripe subscription entitles, derived from its line items' Price IDs.
+ *
+ * SUPERSEDED BY modulesFromProducts FOR THE LIVE PATH (2026-10-28), and kept because it is the
+ * ONLY thing that can answer "what did entitlement say before the change" — the clause proving
+ * existing subscribers were unaffected compares the two against one recorded subscription. A
+ * second implementation is a liability unless something reads it; this one is read by the gate.
+ */
 export function modulesFromPriceIds(priceIds: string[]): ModuleKey[] {
   const map = priceIdModuleMap();
   const out = new Set<ModuleKey>();
@@ -82,6 +89,79 @@ export function modulesFromPriceIds(priceIds: string[]): ModuleKey[] {
   }
   return [...out];
 }
+
+// ── A MODULE BELONGS TO THE PRODUCT, NOT TO THE PRICE (2026-10-28) ───────────────────────────────
+// Annual amounts are inline `price_data` derived from the Engine Room settings, so that changing
+// months-paid never means creating a Stripe Price by hand. An inline price has a GENERATED id that
+// is in no map — and the price-based lookup above answers an unmapped id with a console.warn and
+// NO modules. A garage paying £750 for Core, entitled to nothing, with a log line as the only
+// witness. The product is the thing being sold; the price is only what it cost this garage, and
+// monthly and annual are two prices for one product precisely so they give identical access.
+
+/** Product ID → module key. The Core product is DERIVED (see coreProductId), not configured. */
+export function productIdModuleMap(coreProductId: string | null): Record<string, ModuleKey> {
+  const map: Record<string, ModuleKey> = {};
+  const add = (id: string | null | undefined, key: ModuleKey) => { if (id) map[id] = key; };
+  add(process.env.STRIPE_PRODUCT_CORE ?? coreProductId, 'core');
+  add(process.env.STRIPE_PRODUCT_WEB, 'web'); // not created yet; present so the shape is one line
+  return map;
+}
+
+/**
+ * The module set a subscription entitles, from its line items' PRODUCT ids.
+ *
+ * An unmapped product entitles NOTHING, and that is the opposite failure to the one above: an
+ * unmapped PRICE now means "an amount we generated for a product we do sell", while an unmapped
+ * PRODUCT means "something we do not sell". Guessing on the second would hand out access on any
+ * id Stripe happened to send. Both rules are needed and they are not the same rule.
+ */
+export function modulesFromProducts(productIds: (string | null | undefined)[], coreProductId: string | null = null): ModuleKey[] {
+  const map = productIdModuleMap(coreProductId);
+  const out = new Set<ModuleKey>();
+  for (const id of productIds) {
+    if (!id) continue;
+    const key = map[id];
+    if (key) out.add(key);
+    else console.warn(`[modules] unmapped Stripe product ${id} — entitles nothing`);
+  }
+  return [...out];
+}
+
+/**
+ * THE CORE PRODUCT, DERIVED FROM THE PRICE WE ALREADY CONFIGURE — not a new env var.
+ *
+ * Owner ruling 4 (2026-10-24) was that changing a number in the Engine Room must not mean touching
+ * Stripe by hand; adding STRIPE_PRODUCT_CORE to four environments would be the same shape of
+ * obligation, and a second id that must agree with the first is a thing that can disagree. So it
+ * is read ONCE from STRIPE_PRICE_ID's own `product` field and cached for the life of the process.
+ *
+ * A FAILED LOOKUP IS NOT CACHED, for the same reason lib/environment does not cache one: a Stripe
+ * blip at boot would otherwise entitle nobody for as long as the lambda lives. STRIPE_PRODUCT_CORE
+ * remains as an override for the case where somebody must pin it, which is why the map reads it
+ * first — it is an escape hatch, not the normal path.
+ */
+let _coreProduct: string | null = null;
+export async function coreProductId(): Promise<string | null> {
+  const pinned = process.env.STRIPE_PRODUCT_CORE;
+  if (pinned) return pinned;
+  if (_coreProduct) return _coreProduct;
+  const { getStripe, stripePriceId } = await import('@/lib/stripe');
+  const stripe = getStripe();
+  const priceId = stripePriceId();
+  if (!stripe || !priceId) return null;
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    const product = typeof price.product === 'string' ? price.product : price.product?.id ?? null;
+    if (product) _coreProduct = product;
+    return product;
+  } catch (e: any) {
+    console.error('[modules] could not resolve the Core product from the monthly price —', e?.message);
+    return null; // NOT cached
+  }
+}
+
+/** Test seam: forget the cached product id. Used by the gate, never by application code. */
+export function __resetCoreProductCache(): void { _coreProduct = null; }
 
 /** Every module row for a tenant, as a map. Enabled-only is what hasModule uses. */
 export async function getModules(groupId: string): Promise<Record<string, boolean>> {

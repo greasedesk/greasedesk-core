@@ -203,13 +203,19 @@ try {
     AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: true }) === null,
     'otherwise the four refusals above prove only that the door is nailed shut');
 
-  console.log('\n— trial or offer, never both —');
-  check('a card cannot carry the trial AND the offer',
-    !!AF.refusePlanCombination({ plan: 'annual_offer', trialDays: 30 }),
-    'paying immediately and being on trial are contradictory states, not a configuration');
-  check('  …while each alone is fine',
-    AF.refusePlanCombination({ plan: 'annual_offer', trialDays: 0 }) === null
-      && AF.refusePlanCombination({ plan: 'monthly', trialDays: 30 }) === null);
+  // ── REVERSED 2026-10-28 ─────────────────────────────────────────────────────────────────────
+  // This asserted the OPPOSITE until today: "a card cannot carry the trial AND the offer", under
+  // the 2026-10-24 rule that paying at the front and being on trial were contradictory. Every
+  // garage now gets the trial whatever plan it picks and is charged when the trial ends, so the
+  // offer and the trial coexist by design. What is still refused is a plan with NO trial.
+  // The full reversal is proved in annual-billing-gate; these two keep this file honest about it.
+  console.log('\n— the offer, with the trial —');
+  check('the offer and the trial coexist',
+    AF.refusePlanCombination({ plan: 'annual_offer', trialDays: 30 }) === null,
+    'reversed 2026-10-28 — this same call had to RETURN a refusal before today');
+  check('  …while a plan with no trial at all is refused, on either shape',
+    !!AF.refusePlanCombination({ plan: 'annual_offer', trialDays: 0 })
+      && !!AF.refusePlanCombination({ plan: 'monthly', trialDays: 0 }));
 
   console.log('\n— and nobody refers themselves —');
   const me = { email: 'sam@example.invalid', phone: '+447700900123', company: 'Sam Motors' };

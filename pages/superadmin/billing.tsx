@@ -188,7 +188,8 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
                   and its plan into TenantPlanTerms, precisely so these can change without moving
                   them. A settings form that does not say so is a form somebody will use to try. */}
               {' '}<span className="text-ink font-semibold">
-                A change here applies to garages signing up from now on only.
+                A change here applies to garages signing up from now on only — including at
+                renewal: a live annual subscription keeps the price it was created at.
               </span>{' '}
               Garages already referred keep the terms frozen when they signed up; nothing on this
               screen can alter them.

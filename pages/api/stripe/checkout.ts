@@ -21,6 +21,12 @@ import { requireAdminApi } from '@/lib/admin-guard';
 import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, stripePriceId, appBaseUrl } from '@/lib/stripe';
 import { trialDays } from '@/lib/programme-settings';
+import {
+  planFor, planSettings, subscriptionLineFor, renewalAnnualPennies,
+  firstYearCouponId, firstYearCouponSpec, type PlanKind,
+} from '@/lib/billing-plans';
+import { offerFor } from '@/lib/affiliate';
+import { coreProductId } from '@/lib/modules';
 import { createHash } from 'node:crypto';
 import type Stripe from 'stripe';
 import { writeAudit } from '@/lib/audit';
@@ -147,6 +153,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const quantity = Math.max(1, siteCount);
   const base = appBaseUrl();
 
+  // ── WHICH PLAN, AND AT WHAT PRICE ───────────────────────────────────────────────────────────
+  // The BODY may say 'monthly' or 'annual' and nothing else — it is a choice between two shapes,
+  // never an amount and never an offer. Which annual shape (and therefore what it costs) is
+  // resolved SERVER-SIDE from the group, by the same offerFor the screen called to decide what
+  // to display. A client that posts 'annual_offer' gets whatever offerFor says it is entitled to.
+  const wantsAnnual = (req.body && (req.body as any).plan) === 'annual';
+  const settings = await planSettings(prisma, { country: group.country_code });
+  const offer = wantsAnnual ? await offerFor(prisma, groupId) : null;
+  const planKind: PlanKind = wantsAnnual ? (offer!.plan) : 'monthly';
+  const plan = planFor(planKind, settings, quantity);
+
+  let coreProduct: string | null = null;
+  if (wantsAnnual) {
+    coreProduct = await coreProductId();
+    if (!coreProduct) {
+      // REFUSE RATHER THAN FALL BACK TO MONTHLY. A garage that chose annual and was quietly put on
+      // monthly would discover it at the first £75 charge, having been shown £750.
+      console.error('[stripe] annual checkout: could not resolve the Core product — refusing');
+      return res.status(503).json({ message: 'Annual billing is being set up — please try again shortly.' });
+    }
+  }
+
   // Onboarding returns INTO the wizard (item-13) so completion is confirmed by a synchronous
   // session retrieve on the billing step — never left at Settings → Licence. The settings-page
   // "Start subscription" path keeps its own return URL.
@@ -158,22 +186,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ? `${base}/onboarding/billing?billing=cancelled`
     : `${base}/admin/settings/licences?billing=cancelled`;
 
+  // ── THE FIRST-YEAR COUPON, CREATED FROM THE SETTINGS, REUSED BY ID ──────────────────────────
+  // Deterministic id, so the same discount reuses one coupon and a CHANGED setting makes a new one
+  // rather than mutating a coupon that live subscriptions already point at. 409 is the ordinary
+  // case (it exists), not an error. A failure to create it must not sell the offer at full price
+  // silently, so it refuses.
+  let couponId: string | null = null;
+  if (offer && offer.discountPennies > 0) {
+    const spec = firstYearCouponSpec(offer.discountPennies, wantCurrency);
+    couponId = firstYearCouponId(offer.discountPennies, wantCurrency);
+    try {
+      await stripe.coupons.create(spec as any);
+    } catch (e: any) {
+      if (e?.code !== 'resource_already_exists') {
+        console.error('[stripe] first-year coupon could not be created —', e?.message);
+        return res.status(503).json({ message: 'The referral offer is being set up — please try again shortly.' });
+      }
+    }
+  }
+
   try {
     const params: Stripe.Checkout.SessionCreateParams = {
       mode: 'subscription',
       // Selects the currency option on the multi-currency Price — verified above to exist and to
       // match the profile's displayed amount.
       currency: wantCurrency,
-      line_items: [{ price: priceId, quantity }],
+      line_items: [subscriptionLineFor(plan, {
+        monthlyPriceId: priceId, coreProductId: coreProduct,
+        // THE RENEWAL FIGURE, ALWAYS. A subscription created at the discounted £600 would renew at
+        // £600 for ever; the offer is for the first year, and the coupon below is how.
+        renewalPennies: renewalAnnualPennies(settings),
+        currency: wantCurrency, quantity,
+      }) as any],
       // Trial with a mandatory, authenticated card (see file header) — the SCA-safe conversion.
       // missing_payment_method: 'create_invoice' (ruling 2026-07-14): if the card is missing/fails
       // at trial end, ISSUE the invoice and let Stripe dunning chase for ~2 weeks — only THEN does
       // the sub go past_due → (later) lapsed. 'cancel' was the harshest reading of a soft failure —
       // it would drop the tenant into read-only mid-morning with no warning.
       subscription_data: {
+        // EVERY PLAN CARRIES THE TRIAL NOW (owner, 2026-10-28, reversing 2026-10-24). Annual is
+        // charged its full year when the trial ends, so an annual garage gets thirteen months of
+        // service for its first payment — intended, not a rounding error. See lib/billing-plans.
         trial_period_days: await trialDays(),
         trial_settings: { end_behavior: { missing_payment_method: 'create_invoice' } },
+        // THE SHAPE, CARRIED ON STRIPE'S OWN OBJECT. The webhook appends TenantPlanTerms from
+        // this rather than from anything we remember locally: it survives an abandoned checkout,
+        // a replayed webhook and a plan switch, and it is the one place the shape is recorded
+        // beside the money. Reading it back is reading Stripe's truth, not our intention.
+        metadata: { gd_plan: planKind },
       },
+      // THE OFFER IS A ONCE-ONLY COUPON, NOT A CHEAPER SUBSCRIPTION (see lib/billing-plans). The
+      // subscription renews at the full annual figure with nothing further to do; a subscription
+      // created at £600 would renew at £600 for ever, which is the defect this shape avoids.
+      ...(couponId ? { discounts: [{ coupon: couponId }] } : {}),
       payment_method_collection: 'always',
       // ── COLLECT THE ADDRESS ALWAYS, REGISTERED OR NOT ─────────────────────────────────────────
       // Stripe Tax cannot compute UK VAT without a customer address, and a customer created without

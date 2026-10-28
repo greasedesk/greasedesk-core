@@ -477,6 +477,38 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
 
+  /**
+   * THE TRIAL IS ABOUT TO END, AND HERE IS WHAT YOU WILL BE CHARGED.
+   *
+   * NEW on 2026-10-28, not an extension: nothing sent a trial-end reminder before — `trial_will_end`
+   * was not among the nine events the webhook handled, so the first a garage knew of the charge was
+   * the charge. That was survivable at £75 a month. Annual makes it £750 in one go, from a card
+   * typed in thirty days earlier, and a surprise of that size is both a bad thing to do to somebody
+   * and the most likely reason a payment is disputed.
+   *
+   * It names the PLAN, the AMOUNT and the DATE, because "your trial is ending" answers none of the
+   * three questions a person actually has. `amount` is already formatted by the caller through the
+   * money chokepoint; this template never does arithmetic on pennies.
+   */
+  trial_ending: {
+    label: 'Your free trial is ending',
+    security: true,
+    email: (d) => ({
+      subject: `Your GreaseDesk trial ends ${d.when ? esc(d.when) : 'soon'}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">Your free trial ends ${d.when ? esc(d.when) : 'soon'}</h2>
+        <p>Hi ${esc(d.name ?? 'there')},</p>
+        <p>Nothing has been charged to your card so far. On <strong>${esc(d.when)}</strong> your
+           ${esc(d.planLabel)} plan starts and we will charge <strong>${esc(d.amount)}</strong>.</p>
+        ${d.note ? `<p>${esc(d.note)}</p>` : ''}
+        <p>Everything in your garage stays exactly as it is. If you would like to change plan or
+           stop before then, you can do it from Settings — there is nothing to cancel by phone.</p>
+        ${button(String(d.link ?? ''), 'Review your plan')}
+        <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your
+           browser:<br/>${esc(d.link)}</p>`),
+    }),
+  },
+
   signup_verify: {
     label: 'Verify your email (signup)',
     security: true,

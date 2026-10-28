@@ -2,15 +2,29 @@
  * File: lib/billing-plans.ts
  * THE plan shapes GreaseDesk sells, and the arithmetic that prices them.
  *
- * ── TRIAL OR PAY NOW, NEVER BOTH (owner, 2026-10-24) ────────────────────────────────────────────
- * A new garage on annual pays immediately for twelve months at the price of nine — the trial IS
- * the discount, taken once, at the front. Monthly keeps the trial. The affiliate offer is twelve
- * for six, by code, once per garage. A renewal of any annual plan is twelve for ten.
+ * ── EVERY GARAGE GETS THE TRIAL (owner, 2026-10-28 — THIS REVERSES 2026-10-24) ──────────────────
+ * The rule here used to be TRIAL OR PAY NOW, NEVER BOTH: annual paid at the front and had no
+ * trial, because "the trial IS the discount, taken once". That is no longer the offer. Every
+ * garage now gets the trial whatever plan it picks, and is charged its chosen plan when
+ * the trial ends — monthly £75, annual renewal_annual_months_paid × monthly for the twelve months
+ * from that date, the affiliate offer offer_months_paid for the first year and the renewal figure
+ * after it.
  *
- * THE RULE IS STRUCTURAL, NOT CHECKED AFTERWARDS. There are two factories below and no third:
- * `monthlyPlan` sets a trial and a zero payment, `annualPlan` sets a zero trial and a payment.
- * No code path can produce both, so the invariant cannot be broken by editing a number — only by
- * writing a new factory, which is a thing a reader can see.
+ * SO AN ANNUAL GARAGE GETS THIRTEEN MONTHS OF SERVICE FOR ITS FIRST PAYMENT, and that is
+ * intended, not a rounding error in the rule. It is written down here because a future reader
+ * finding "12 months" beside a trial of any length will otherwise read it as the bug it looks like.
+ *
+ * WHAT THE REVERSAL COST, so nobody re-derives it: the DB CHECK `TenantPlanTerms_trial_xor_paynow`
+ * encoded the old rule physically and had to be replaced (see the 2026-10-28 migration), the two
+ * factories below both set a trial now, refusePlanCombination stopped refusing annual-with-a-trial,
+ * and four clauses in billing-plans-gate asserted the XOR. The invariant that REMAINS structural is
+ * the one in the factories: monthly never takes money at signup, annual always does.
+ *
+ * ── THE PRICE A GARAGE SIGNS UP AT IS THE PRICE IT KEEPS ────────────────────────────────────────
+ * An annual subscription is created at the amount these settings produce on the day, and renews at
+ * that amount. Changing months-paid in the Engine Room moves NEW garages only; nothing reaches
+ * back into a live subscription. That is the same promise TenantPlanTerms and TenantAffiliateTerms
+ * make, and the Engine Room says so on the screen.
  *
  * ── THE PRICES ARE DERIVED, NEVER TYPED (owner ruling 4, 2026-10-24) ────────────────────────────
  * Changing months-paid in the Engine Room must not require a Stripe Price to be created by hand.
@@ -57,9 +71,9 @@ export type Plan = {
 export function refusePlanSettings(s: PlanSettings): string | null {
   if (!Number.isFinite(s.monthlyPricePennies) || s.monthlyPricePennies <= 0) return 'The monthly price must be a positive amount.';
   if (!Number.isInteger(s.trialDays) || s.trialDays < 1) {
-    // A zero-day trial would make MONTHLY have neither a trial nor a payment — a plan that
-    // gives service for nothing, with nothing to charge later. Refused rather than normalised.
-    return 'The trial length must be at least one day, or the monthly plan offers neither a trial nor a payment.';
+    // EVERY plan carries the trial now, so a zero here is not a monthly-only problem: it would
+    // make the signup promise of a free trial untrue on both plans. Refused, never normalised.
+    return 'The trial length must be at least one day; every plan is sold with a trial.';
   }
   for (const [name, v] of [['new annual', s.newAnnualMonthsPaid], ['renewal annual', s.renewalAnnualMonthsPaid], ['offer', s.offerMonthsPaid]] as const) {
     if (!Number.isInteger(v) || v < 1) return `The ${name} months-paid must be at least 1; an annual plan that charges nothing is not a plan.`;
@@ -74,9 +88,12 @@ const monthlyPlan = (s: PlanSettings): Plan => ({
   monthsPaid: null, monthsGiven: null,
 });
 
+// `payNowPennies` is what the garage is charged WHEN THE TRIAL ENDS, not at the checkout screen.
+// The name predates the reversal and is kept: it is still the one payment this plan takes up
+// front for the whole term, and renaming it would touch the frozen TenantPlanTerms column.
 const annualPlan = (kind: PlanKind, monthsPaid: number, s: PlanSettings, sites: number): Plan => ({
   kind, interval: 'year',
-  trialDays: 0, payNowPennies: monthsPaid * s.monthlyPricePennies * sites,
+  trialDays: s.trialDays, payNowPennies: monthsPaid * s.monthlyPricePennies * sites,
   monthsPaid, monthsGiven: s.monthsGiven,
 });
 
@@ -184,4 +201,77 @@ export async function signupPlanTerms(db: Db, groupId: string) {
     where: { group_id: groupId },
     orderBy: { effective_from: 'asc' },
   });
+}
+
+// ── WHAT STRIPE IS ASKED FOR, AS PLAIN DATA ──────────────────────────────────────────────────────
+// Pure builders: they take a Plan and return the shape Checkout is handed. Pure so the gate can
+// assert the amounts, the interval, the tax behaviour and the coupon WITHOUT a Stripe key and
+// without a network call — no gate calls Stripe, and these are the only things worth asserting.
+
+/** Terms v2: the published price INCLUDES VAT. A constant, as in checkout.ts, for the same reason. */
+export const TAX_BEHAVIOR = 'inclusive' as const;
+
+/**
+ * The recurring line for a plan. Monthly names the configured Price id; annual is an INLINE
+ * amount on the SAME product, which is what makes the two give identical access (lib/modules).
+ *
+ * The annual amount is the RENEWAL figure, always — never the discounted one. A subscription
+ * created at £600 would renew at £600 for ever, and the offer is for the first year. The discount
+ * is a separate, once-only coupon; see firstYearDiscountPennies.
+ */
+export function subscriptionLineFor(
+  plan: Plan,
+  opts: { monthlyPriceId: string | null; coreProductId: string | null; renewalPennies: number; currency: string; quantity: number },
+): { price: string; quantity: number } | { price_data: Record<string, unknown>; quantity: number } {
+  if (plan.interval === 'month') {
+    if (!opts.monthlyPriceId) throw new Error('subscriptionLineFor: monthly needs STRIPE_PRICE_ID');
+    return { price: opts.monthlyPriceId, quantity: opts.quantity };
+  }
+  if (!opts.coreProductId) throw new Error('subscriptionLineFor: annual needs the Core product id');
+  if (!Number.isInteger(opts.renewalPennies) || opts.renewalPennies <= 0) {
+    throw new Error(`subscriptionLineFor: renewal amount must be a positive integer, got ${opts.renewalPennies}`);
+  }
+  return {
+    price_data: {
+      product: opts.coreProductId,
+      currency: opts.currency,
+      recurring: { interval: 'year' },
+      unit_amount: opts.renewalPennies,
+      tax_behavior: TAX_BEHAVIOR,
+    },
+    quantity: opts.quantity,
+  };
+}
+
+/** What one site's annual renewal costs: the renewal months, never the offer months. */
+export const renewalAnnualPennies = (s: PlanSettings): number => s.renewalAnnualMonthsPaid * s.monthlyPricePennies;
+
+/**
+ * THE FIRST-YEAR DISCOUNT, DERIVED — the gap between what a referred garage pays and what the
+ * plan renews at. Zero when the settings leave no gap, which is a real state: offer_months_paid
+ * and renewal_annual_months_paid were both 10 until 2026-10-26, and a £0 coupon is not something
+ * to send to Stripe.
+ */
+export function firstYearDiscountPennies(s: PlanSettings, sites = 1): number {
+  const gap = s.renewalAnnualMonthsPaid - s.offerMonthsPaid;
+  return gap > 0 ? gap * s.monthlyPricePennies * sites : 0;
+}
+
+/**
+ * The coupon id for a discount of this size. DETERMINISTIC, so the same settings reuse one coupon
+ * and changed settings make a NEW one rather than mutating a coupon that live subscriptions point
+ * at. `duration: 'once'` is the whole mechanism by which the offer is a FIRST-YEAR offer: it comes
+ * off the first invoice and the subscription's own amount is the renewal figure throughout.
+ */
+export const firstYearCouponId = (pennies: number, currency: string): string =>
+  `gd-first-year-${pennies}-${currency.toLowerCase()}`;
+
+export function firstYearCouponSpec(pennies: number, currency: string): Record<string, unknown> {
+  return {
+    id: firstYearCouponId(pennies, currency),
+    amount_off: pennies,
+    currency: currency.toLowerCase(),
+    duration: 'once',
+    name: `First year — ${(pennies / 100).toFixed(2)} off`,
+  };
 }

@@ -17,8 +17,26 @@
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
 import { billingStatusFromStripe } from '@/lib/billing';
-import { modulesFromPriceIds, applyStripeModules } from '@/lib/modules';
+import { modulesFromProducts, coreProductId, applyStripeModules } from '@/lib/modules';
 import { clearFree, isLiveSubscription } from '@/lib/free-tenant';
+
+/**
+ * THE PRODUCTS A SUBSCRIPTION IS FOR. Exported because it is the step entitlement turns on, and a
+ * clause asserting "monthly and annual give the same access" has to run the REAL extraction over
+ * two real subscription shapes — comparing modulesFromProducts([core]) with itself passes against
+ * any implementation, including one that entitles nobody.
+ *
+ * A line item whose price arrived as a bare string carries no product at all, so it contributes
+ * nothing rather than being guessed at. `price.product` is a plain id on the subscription objects
+ * Stripe sends, so this needs no expansion and no second API call.
+ */
+export function productsOfSubscription(sub: Stripe.Subscription): string[] {
+  return (sub.items?.data ?? [])
+    .map((i) => (typeof i.price === 'string'
+      ? null
+      : (typeof i.price?.product === 'string' ? i.price.product : i.price?.product?.id ?? null)))
+    .filter((x): x is string => !!x);
+}
 
 /** Map a Stripe subscription onto GroupBilling (+ the trial clock on Group). Resolves the tenant by
  *  customer id, falling back to an explicit groupId (first confirm, before the customer is cached). */
@@ -35,11 +53,17 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
 
   // ENTITLEMENT IS DERIVED HERE, from the SAME subscription object, in the SAME transaction as the
   // billing status — that is what makes "the price they pay" and "the modules they get" incapable of
-  // drifting. Per-module line items: each item's Price ID maps 1:1 to a module key (lib/modules).
-  const priceIds = (sub.items?.data ?? [])
-    .map((i) => (typeof i.price === 'string' ? i.price : i.price?.id))
-    .filter((x): x is string => !!x);
-  const entitled = modulesFromPriceIds(priceIds);
+  // drifting. Per-module line items: each item's PRODUCT maps 1:1 to a module key (lib/modules).
+  //
+  // THE PRODUCT, NOT THE PRICE (2026-10-28). Annual is an inline price_data amount derived from the
+  // Engine Room settings, so its Price id is generated and in no map; the old price-based lookup
+  // answered that with no modules at all — a garage paying for Core and entitled to nothing. Both
+  // intervals are prices OF THE SAME PRODUCT, which is exactly why they give identical access.
+  //
+  // `price.product` is a plain id on the subscription objects Stripe sends, so this needs no
+  // expansion and no second API call. A line item whose price arrived as a bare string carries no
+  // product at all — it contributes nothing rather than being guessed at.
+  const entitled = modulesFromProducts(productsOfSubscription(sub), await coreProductId());
 
   // Read the anchor BEFORE writing: "written once, never overwritten while non-null" needs to know
   // whether one is already there.
@@ -106,6 +130,33 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   // Stripe owns the trial clock once a subscription exists (item-13): mirror trial_end onto Group.
   if (trialEnd) {
     await prisma.group.update({ where: { id: groupId }, data: { trial_ends_at: trialEnd } }).catch(() => {});
+  }
+
+  // ── THE PLAN SHAPE, APPENDED FROM STRIPE'S OWN OBJECT ───────────────────────────────────────
+  // Checkout and the plan-switch endpoint both stamp `gd_plan` on the subscription's metadata, so
+  // the shape travels with the money instead of beside it. Appending HERE rather than at checkout
+  // means an abandoned session writes nothing, a replayed webhook writes nothing twice, and a
+  // switch during the trial appends its own row — all from the same line.
+  //
+  // APPEND-ONLY and only on a CHANGE: TenantPlanTerms is a timeline, so re-writing the same shape
+  // on every subscription.updated would bury the one row that says what they signed up under
+  // under hundreds that say nothing new.
+  const shape = (sub.metadata as Record<string, string> | null)?.gd_plan;
+  if (shape) {
+    try {
+      const { planFor, planSettings, writePlanTerms, currentPlanTerms } = await import('@/lib/billing-plans');
+      const current = await currentPlanTerms(prisma, groupId);
+      if (current?.plan !== shape) {
+        const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true } });
+        const sites = Math.max(1, (sub.items?.data ?? []).reduce((n, i) => n + (i.quantity ?? 1), 0));
+        const settings = await planSettings(prisma, { country: group?.country_code });
+        await writePlanTerms(prisma, groupId, planFor(shape as any, settings, sites));
+      }
+    } catch (e: any) {
+      // NON-FATAL, and loudly so. The billing cache is what decides access; the terms row is the
+      // record of what was agreed. Losing the second must never cost the tenant the first.
+      console.error(`[billing-cache] could not append plan terms (${shape}) for ${groupId} —`, e?.message);
+    }
   }
 
   return groupId;
