@@ -11,6 +11,8 @@ import { sendNotification } from '@/lib/notify';
 import crypto from 'crypto';
 import { trialEndsAt, trialDays } from '@/lib/programme-settings';
 import { ensureStartingPlanTerms } from '@/lib/billing-plans';
+import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
+import { attributeAtSignup } from '@/lib/affiliate';
 
 type Payload = { name: string; email: string; password: string; ref?: string };
 
@@ -66,8 +68,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+
+    // WHO SENT THEM — RESOLVED HERE, OUTSIDE THE TRANSACTION, BECAUSE IT IS A READ.
+    // The write goes in with the garage (see attributeAtSignup); the lookup stays out, so a
+    // database hiccup resolving a code costs the referral and not the customer. `none` is the
+    // honest value for "we could not find out", and it attributes nothing.
+    let refMatch: RefMatch = { status: 'none' };
+    if (signupRef) {
+      try {
+        refMatch = await findPartyByRefCode(prisma, signupRef);
+      } catch (refErr) {
+        console.error('findPartyByRefCode at signup failed (non-fatal):', refErr);
+      }
+    }
     // ... (Prisma transaction logic remains unchanged) ...
-    const { user, group } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const { user, group, attribution } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
         // ref is auto-assigned by the DB sequence default; status defaults to 'trial'.
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
@@ -95,18 +110,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // point of the backfill was that there is one shape for every garage.
       await ensureStartingPlanTerms(tx, group.id);
 
-      return { user, group };
+      // AND WHO REFERRED THEM, in the SAME transaction, for the same reason the plan terms are.
+      // A garage committed without the record of who sent it is an affiliate who introduced a
+      // customer and will never be paid — found weeks later, when the money is already spent.
+      const attribution = await attributeAtSignup(tx, {
+        groupId: group.id,
+        match: refMatch,
+        garage: { email: emailNorm, company: name.trim() },
+      });
+
+      return { user, group, attribution };
     });
 
-    // ATTRIBUTION (trigger 1 of 2): resolve the captured ?ref= NOW if a Rep already exists for it.
-    // Best-effort and non-fatal — a resolution error must never fail a signup, and if no Rep matches
-    // yet the raw signup_ref stays intact for the deferred path (resolveAttributionsForRep) to pick up
-    // when that Rep is created. See lib/attribution.
-    try {
-      const { resolveAttribution } = await import('@/lib/attribution');
-      await resolveAttribution(prisma, group.id);
-    } catch (attrErr) {
-      console.error('resolveAttribution at signup failed (non-fatal):', attrErr);
+    // ATTRIBUTION, SECOND CHANCE. The transaction above has already attributed every signup whose
+    // code resolved, so this runs only when it did not — the lookup threw, or no party held that
+    // code yet. It is idempotent (attributeGroup refuses a duplicate), so the cost of it running
+    // needlessly is two reads, and the cost of it NOT running is a referral that depended on one
+    // query succeeding. If no party exists yet the raw signup_ref stays intact and the deferred
+    // path (resolveAttributionsForRep) picks it up when one is created.
+    if (signupRef && !attribution.attributed) {
+      try {
+        const { resolveAttribution } = await import('@/lib/attribution');
+        await resolveAttribution(prisma, group.id);
+      } catch (attrErr) {
+        console.error('resolveAttribution at signup failed (non-fatal):', attrErr);
+      }
     }
 
     // PROSPECT → CUSTOMER: any prospect holding this address leaves the follow-up sequence, is marked
@@ -152,6 +180,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       where: 'success',
       message: 'Account created. Please check your email to verify.',
       user,
+      // The signup SUCCEEDED either way; this says what became of the referral code, if there was
+      // one. Null message = nothing to report. The page shows it rather than swallowing it, so a
+      // mistyped code is visible to the person who can still fix it with whoever gave it to them.
+      attribution: { ok: attribution.attributed, reason: attribution.reason, message: attribution.message },
     });
   } catch (err: any) {
     // ENHANCED LOGGING: Now includes Prisma and generic errors

@@ -11,19 +11,12 @@
  *  - Sends Accept: application/json and disables caches to avoid stale intermediaries.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import SiteChrome from '@/components/marketing/SiteChrome';
-
-// Marketing attribution stashed by _app when a public ?ref= landed. Read it at signup so it reaches
-// the server (dormant — persisted to Group.signup_ref, no rep system yet). null when absent.
-function readRefCookie(): string | null {
-  if (typeof document === 'undefined') return null;
-  const m = document.cookie.match(/(?:^|;\s*)gd_ref=([^;]+)/);
-  return m ? decodeURIComponent(m[1]) : null;
-}
+import { readGdRef, sanitiseRef } from '@/lib/consent';
 
 /* ─────────────────────  SAFE JSON PATCH (browser + dev only)  ───────────────────── */
 
@@ -63,6 +56,47 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [refCode, setRefCode] = useState('');
+  const [refNote, setRefNote] = useState<string | null>(null);
+
+  /**
+   * THE REFERRAL CODE, PREFILLED AND VISIBLE.
+   *
+   * ?ref= ON THIS PAGE NEEDS NO COOKIE AND NO CONSENT (owner, 2026-10-28). It is read from the URL
+   * straight into the field and submitted with the form; nothing is stored, so there is nothing to
+   * ask permission for. That matters commercially: gd_ref is gated on functional consent, which is
+   * off by default, so an affiliate link whose only mechanism was the cookie would credit nobody
+   * for the large majority of visitors. This is the path that works.
+   *
+   * THE URL BEATS THE COOKIE. First-click-wins governs the COOKIE — an old link does not get
+   * overwritten by a newer one while someone browses. But arriving on the signup page itself with
+   * a code in the URL is not browsing, it is being handed the form by a particular affiliate, and
+   * that is the better evidence of who introduced them. The field is editable either way, which is
+   * what makes a typed code beat both.
+   */
+  useEffect(() => {
+    if (!router.isReady) return;
+    const fromUrl = sanitiseRef(router.query.ref);
+    const prefill = fromUrl || sanitiseRef(readGdRef());
+    if (prefill) setRefCode((cur) => cur || prefill);
+  }, [router.isReady, router.query.ref]);
+
+  /** Advisory only — it never blocks the form. Silent while the field is empty. */
+  const checkRefCode = async (code: string) => {
+    const clean = sanitiseRef(code);
+    if (!clean) { setRefNote(null); return; }
+    try {
+      const r = await fetch('/api/affiliate/check-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: clean }),
+      });
+      const j = await r.json();
+      setRefNote(j?.ok ? null : (j?.message ?? null));
+    } catch {
+      setRefNote(null); // a failed check is not a verdict about the code
+    }
+  };
 
   // UI state
   const [loading, setLoading] = useState(false);
@@ -111,7 +145,9 @@ export default function RegisterPage() {
           'Cache-Control': 'no-store',
           'Pragma': 'no-cache',
         },
-        body: JSON.stringify({ name: nameTrim, email: emailNorm, password: pass, ref: readRefCookie() }),
+        // THE FIELD IS THE ANSWER. It was prefilled from the URL or the cookie and may have been
+        // corrected since; whatever it says now is what this person is telling us.
+        body: JSON.stringify({ name: nameTrim, email: emailNorm, password: pass, ref: sanitiseRef(refCode) || null }),
       });
 
       const status = res.status;
@@ -212,6 +248,27 @@ export default function RegisterPage() {
               autoComplete="new-password"
               className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
+          </div>
+
+          <div>
+            <label htmlFor="ref-code" className="block text-sm font-medium text-muted mb-1">
+              Referral code <span className="font-normal">(optional)</span>
+            </label>
+            <input
+              id="ref-code"
+              data-testid="ref-code"
+              type="text"
+              value={refCode}
+              onChange={(e) => { setRefCode(e.target.value); setRefNote(null); }}
+              onBlur={(e) => checkRefCode(e.target.value)}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+            {refNote && (
+              <p data-testid="ref-note" className="mt-1 text-xs text-warn">{refNote}</p>
+            )}
           </div>
 
           <p className="text-xs text-muted text-center leading-relaxed">

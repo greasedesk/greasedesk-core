@@ -182,7 +182,7 @@ const TIERS = {
     'nullable-annotation-gate', 'observation-key-gate', 'odometer-gate', 'photo-partition-gate',
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'credential-residue-gate',
-    'products-gate', 'catalogue-sets-gate', 'no-charge-gate', 'affiliate-gate', 'entitlement-product-gate', 'trial-setting-gate', 'billing-plans-gate', 'gate-target-gate',
+    'products-gate', 'catalogue-sets-gate', 'no-charge-gate', 'affiliate-gate', 'attribution-gate', 'entitlement-product-gate', 'trial-setting-gate', 'billing-plans-gate', 'gate-target-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',

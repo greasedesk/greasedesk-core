@@ -8,6 +8,11 @@
  *
  * gd_ref (the only consent-gated writer today) is handled through here too: a ?ref= seen before the
  * visitor has chosen is held pending, and written iff/when functional consent is granted.
+ *
+ * IT IS NO LONGER THE ONLY PATH TO ATTRIBUTION, and that matters for what this gate costs. A ?ref=
+ * on the signup page itself prefills the referral field straight from the URL and is submitted with
+ * the form — no cookie, no storage, nothing to consent to. So a refusal here loses the referral of
+ * someone who clicked a link and signed up LATER, not of someone who clicked it and signed up.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -77,7 +82,11 @@ export function ConsentProvider({ initialRecord, region, children }: { initialRe
 
   const noteRef = useCallback((clean: string) => {
     if (!clean) return;
-    if (consented('functional')) writeGdRef(clean); // already allowed → write now
+    // FIRST CLICK WINS. writeGdRef enforces it against an already-written cookie; this guards the
+    // other half — two ?ref= values seen before the visitor has chosen, where no cookie exists yet
+    // to refuse the second. Without it the pending slot keeps the LAST one and the rule inverts.
+    if (pendingRef.current) return;
+    if (consented('functional')) writeGdRef(clean); // already allowed → write now (refused if one exists)
     else if (!record) pendingRef.current = clean;   // undecided → hold until they choose (same page)
     // functional explicitly refused → do nothing (attribution intentionally lost)
   }, [consented, record]);

@@ -50,11 +50,62 @@ export function parseConsentCookie(cookieHeader: string | undefined | null): Con
   return m ? decodeConsent(m[1]) : null;
 }
 
-/** Client-side: persist the choice in the (exempt) consent cookie. Secure + SameSite=Lax, host-only. */
-export function writeConsentCookie(rec: ConsentRecord): void {
+// ── COOKIE SCOPE: THE REGISTRABLE DOMAIN, NOT THE HOST ───────────────────────────────────────────
+// Both cookies below are scoped to `.greasedesk.com` so they hold ACROSS SUBDOMAINS. Host-only was
+// right while there was one public host; it stopped being right the moment affiliates got their own.
+// A consent given on greasedesk.com must still be a consent on affiliates.greasedesk.com — asking
+// the same visitor twice is worse than not asking — and a referral cookie set by an affiliate link
+// has to survive the walk to the apex signup page, which is the whole point of the link.
+//
+// Anything that is not greasedesk.com gets NO domain attribute, which leaves the cookie host-only:
+// localhost, *.vercel.app previews and the .test hosts cannot be given a parent domain anyway, and
+// a wrong `domain=` is silently dropped by the browser rather than reported.
+export const COOKIE_DOMAIN = '.greasedesk.com';
+
+/** The domain attribute for a host, or '' when the host cannot carry one. Exported so it is testable. */
+export function cookieDomainFor(host: string | null | undefined): string {
+  const h = (host ?? '').toLowerCase().split(':')[0].replace(/\.$/, '');
+  if (!h) return '';
+  return h === 'greasedesk.com' || h.endsWith('.greasedesk.com') ? COOKIE_DOMAIN : '';
+}
+
+const currentDomain = () => cookieDomainFor(typeof location !== 'undefined' ? location.hostname : '');
+
+/**
+ * Write a cookie at the widest scope this host allows.
+ *
+ * A HOST-ONLY COOKIE OF THE SAME NAME SURVIVES A DOMAIN-SCOPED WRITE. The browser keeps both, and
+ * `document.cookie` returns both as `name=a; name=b` with no attributes and no defined order — so a
+ * reader cannot tell which it has. Every visitor already holding the old host-only gd_ref or
+ * gd_consent would be in exactly that state the first time this widened write ran. Widening a
+ * cookie's scope therefore means EXPIRING THE NARROW ONE FIRST, not just setting the wide one.
+ */
+function setCookie(name: string, value: string, maxAgeDays: number): void {
   if (typeof document === 'undefined') return;
-  const maxAge = CONSENT_MAX_AGE_DAYS * 24 * 60 * 60;
-  document.cookie = `${CONSENT_COOKIE}=${encodeConsent(rec)}; path=/; max-age=${maxAge}; SameSite=Lax; Secure`;
+  const domain = currentDomain();
+  if (domain) document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax; Secure`; // the host-only predecessor
+  document.cookie = `${name}=${value}; path=/; max-age=${maxAgeDays * 24 * 60 * 60}`
+    + `${domain ? `; domain=${domain}` : ''}; SameSite=Lax; Secure`;
+}
+
+/** Expire a cookie at BOTH scopes — a withdrawal that leaves either copy standing has withdrawn nothing. */
+function expireCookie(name: string): void {
+  if (typeof document === 'undefined') return;
+  const domain = currentDomain();
+  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax; Secure`;
+  if (domain) document.cookie = `${name}=; path=/; max-age=0; domain=${domain}; SameSite=Lax; Secure`;
+}
+
+/** Read one cookie from document.cookie, or null. Shared so every reader agrees on the name. */
+export function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  return m && m[1] ? decodeURIComponent(m[1]) : null;
+}
+
+/** Client-side: persist the choice in the (exempt) consent cookie, scoped to the registrable domain. */
+export function writeConsentCookie(rec: ConsentRecord): void {
+  setCookie(CONSENT_COOKIE, encodeConsent(rec), CONSENT_MAX_AGE_DAYS);
 }
 
 // ── The ONE consent-gated first-party writer today: gd_ref (functional / referral attribution). ──
@@ -65,14 +116,31 @@ export function sanitiseRef(raw: unknown): string {
   const s = (Array.isArray(raw) ? raw[0] : raw);
   return (typeof s === 'string' ? s : '').trim().replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
 }
-/** Write gd_ref. Callers MUST have checked functional consent first — this is the sink, not the gate. */
-export function writeGdRef(clean: string): void {
-  if (typeof document === 'undefined' || !clean) return;
-  const maxAge = GD_REF_MAX_AGE_DAYS * 24 * 60 * 60;
-  document.cookie = `${GD_REF_COOKIE}=${encodeURIComponent(clean)}; path=/; max-age=${maxAge}; SameSite=Lax; Secure`;
+/** The referral code this visitor already carries, or null. The ONE reader — register.tsx had its
+ *  own regex, which is how two readers of one cookie drift apart. */
+export function readGdRef(): string | null {
+  return readCookie(GD_REF_COOKIE);
 }
-/** Remove gd_ref (e.g. functional consent withdrawn) — set it expired. */
+
+/**
+ * Write gd_ref. Callers MUST have checked functional consent first — this is the sink, not the gate.
+ *
+ * FIRST CLICK WINS, and it is enforced HERE rather than asked of callers. A visitor who arrives on
+ * one affiliate's link, reads for a week and arrives again on another's belongs to the first: the
+ * introduction is what is being paid for, and it already happened. The rule lives at the sink
+ * because it is the only place every write passes through — a caller-side check is a rule that
+ * holds until somebody adds a second caller. Returns whether this call wrote.
+ *
+ * To REPLACE a code deliberately (an operator correcting an attribution), clear it first; that is
+ * an explicit two-step and not something a stray `?ref=` in a URL can do.
+ */
+export function writeGdRef(clean: string): boolean {
+  if (typeof document === 'undefined' || !clean) return false;
+  if (readGdRef()) return false; // already introduced — the first link keeps the credit
+  setCookie(GD_REF_COOKIE, encodeURIComponent(clean), GD_REF_MAX_AGE_DAYS);
+  return true;
+}
+/** Remove gd_ref (e.g. functional consent withdrawn) — expired at both scopes. */
 export function clearGdRef(): void {
-  if (typeof document === 'undefined') return;
-  document.cookie = `${GD_REF_COOKIE}=; path=/; max-age=0; SameSite=Lax; Secure`;
+  expireCookie(GD_REF_COOKIE);
 }

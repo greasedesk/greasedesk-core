@@ -21,6 +21,7 @@
 import { prisma as defaultDb } from '@/lib/db';
 import { getProgrammeSettings, type SettingsOpts } from '@/lib/programme-settings';
 import { planFor, planSettings, writePlanTerms, currentPlanTerms, type PlanKind } from '@/lib/billing-plans';
+import { attributeGroup, type RefMatch } from '@/lib/attribution';
 
 type Db = any; // a PrismaClient or an interactive-transaction client
 
@@ -226,7 +227,13 @@ export async function rewardTrialStarted(_db: Db, _args: { groupId: string }): P
 
 /** Why this garage may not take the affiliate offer, or null when it may. */
 export function refuseOffer(a: { code: string | null; codeValid: boolean; isNewGarage: boolean; alreadyTaken: boolean; signupsOpen: boolean }): string | null {
-  if (!a.signupsOpen) return 'The affiliate programme is closed to new signups.';
+  // THE SWITCH GATES THE OFFER, NEVER THE ATTRIBUTION (owner, 2026-10-28). It decides whether a new
+  // garage may have the 12-for-8 price, not whether affiliates may join and not whether a referral
+  // is recorded — a garage that arrives on a link is credited to the affiliate either way, because
+  // who introduced them is a fact and the discount is a decision. The old wording, "the affiliate
+  // programme is closed to new signups", read as though it stopped affiliates signing up, which is
+  // a thing nothing in this file controls.
+  if (!a.signupsOpen) return 'The affiliate offer is not available to new garages at the moment.';
   if (!a.code) return 'The affiliate offer needs a referral code.';
   if (!a.codeValid) return 'That referral code is not one we recognise.';
   if (!a.isNewGarage) return 'The affiliate offer is for a new garage only.';
@@ -259,4 +266,99 @@ export function refuseSelfReferral(
   if (a && a === g) return 'That is the affiliate’s own phone number.';
   if (norm(affiliate.company) && norm(affiliate.company) === norm(garage.company)) return 'That is the affiliate’s own business.';
   return null;
+}
+
+
+// ── WHO REFERRED THIS GARAGE, RECORDED AT THE MOMENT THE GARAGE IS CREATED ──────────────────────
+
+/** Named outcomes, because "not attributed" has to be SAYABLE: each one needs different words. */
+export type SignupAttribution = {
+  attributed: boolean;
+  reason: 'attributed' | 'no_code' | 'unknown_code' | 'ambiguous_code' | 'suspended' | 'self_referral' | 'already_referred';
+  /** What to show the person signing up. Null when there is nothing to say (no code, or it worked). */
+  message: string | null;
+  partyId?: string;
+  partyType?: string;
+};
+
+/** The public wording for each outcome. One place, so the signup page and the code checker agree. */
+export function attributionMessage(reason: SignupAttribution['reason'], detail?: string | null): string | null {
+  switch (reason) {
+    case 'attributed': return null;
+    case 'no_code': return null;
+    case 'unknown_code': return 'That referral code is not one we recognise, so no referral has been recorded. Everything else about your account is unaffected.';
+    case 'ambiguous_code': return 'That referral code matches more than one account, so we have not guessed. Please check it with whoever gave it to you.';
+    case 'suspended': return 'That referral code is no longer active, so no referral has been recorded. Everything else about your account is unaffected.';
+    case 'self_referral': return detail ?? 'A referral code cannot be used on your own account, so no referral has been recorded.';
+    case 'already_referred': return 'This garage is already recorded against a referrer, and a referral is never changed afterwards.';
+  }
+}
+
+/**
+ * ATTRIBUTE THE GARAGE AND FREEZE WHAT IT WAS PROMISED — IN THE GARAGE'S OWN TRANSACTION.
+ *
+ * ── WHY IT IS IN THE TRANSACTION ───────────────────────────────────────────────────────────────
+ * Attribution used to run AFTER the signup transaction, best-effort and swallowed, which was the
+ * right shape while a ref was a dormant marketing string. It is money now. A garage created with
+ * its referral silently dropped is not a garage missing a field: it is an affiliate who introduced
+ * a customer and will never be paid, discovered weeks later when somebody asks why. Committing the
+ * garage and the record of who sent them together means there is no interval in which one is true
+ * and the other is not.
+ *
+ * The LOOKUP is deliberately outside: findPartyByRefCode is a read, it is the part that can fail
+ * for reasons that have nothing to do with this garage, and a failed lookup must leave the signup
+ * standing. Pass the match in. Everything in here is a write, and a write that fails SHOULD take
+ * the signup with it.
+ *
+ * ── AND IT NEVER REFUSES A SIGNUP ──────────────────────────────────────────────────────────────
+ * Every non-match returns `attributed: false` with words for it. An unknown code is a typo, not a
+ * reason to turn away a paying customer at the door.
+ */
+export async function attributeAtSignup(
+  tx: Db,
+  args: {
+    groupId: string;
+    match: RefMatch;
+    garage: { email?: string | null; phone?: string | null; company?: string | null };
+    at?: Date;
+  },
+  opts?: SettingsOpts,
+): Promise<SignupAttribution> {
+  const { match } = args;
+  const at = args.at ?? new Date();
+  const no = (reason: SignupAttribution['reason'], detail?: string | null): SignupAttribution =>
+    ({ attributed: false, reason, message: attributionMessage(reason, detail) });
+
+  if (match.status === 'none') return no('no_code');
+  if (match.status === 'ambiguous') return no('ambiguous_code');
+  if (match.status === 'suspended') return no('suspended');
+
+  // NOBODY REFERS THEMSELVES — checked before anything is written, not cleaned up afterwards.
+  const self = refuseSelfReferral(
+    { email: match.email, phone: match.phone, company: match.name },
+    args.garage,
+  );
+  if (self) return no('self_referral', self);
+
+  const written = await attributeGroup(tx, {
+    groupId: args.groupId, partyId: match.partyId, partyType: match.partyType, effectiveFrom: at,
+  });
+  // A GARAGE IS REFERRED ONCE. attributeGroup refuses to add a second active attribution, and that
+  // refusal is reported rather than resolved: changing who a garage belongs to is an operator act.
+  if ('conflict' in written) return no('already_referred');
+
+  // The reward terms are frozen HERE, in the same transaction, for the same reason the attribution
+  // is: an operator may change the programme tomorrow and this garage keeps today's terms. Only an
+  // affiliate has reward terms — a rep is paid from the commission rate table, not a frozen sum.
+  if (match.partyType === 'affiliate') {
+    const terms = await currentTerms(tx, opts);
+    await freezeTermsAtSignup(tx, args.groupId, {
+      affiliateId: match.partyId,
+      totalRewardPennies: terms.totalRewardPennies,
+      instalmentPennies: terms.instalmentPennies,
+      at,
+    }, opts);
+  }
+
+  return { attributed: true, reason: 'attributed', message: null, partyId: match.partyId, partyType: match.partyType };
 }

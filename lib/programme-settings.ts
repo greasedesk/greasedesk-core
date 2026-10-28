@@ -203,7 +203,7 @@ export const PLAN_SETTING_LABEL: Record<PlanSettingField, string> = {
   months_given: 'Months of service given on any annual plan',
   total_reward_pennies: 'Affiliate reward per referred garage (total)',
   instalment_pennies: 'Affiliate reward per paid month (monthly plans)',
-  affiliate_signups_open: 'Affiliate programme open to new signups',
+  affiliate_signups_open: 'Affiliate offer (12 for 8) available to new garages',
 };
 
 /** Why this value may not be saved to this field, or null when it may. */
