@@ -183,6 +183,10 @@ const TIERS = {
     'phone-gate-blast-radius', 'prisma-any-gate', 'pwa-intake-gate', 'send-outcome-gate',
     'credential-residue-gate',
     'products-gate', 'catalogue-sets-gate', 'no-charge-gate', 'affiliate-gate', 'attribution-gate', 'annual-billing-gate', 'entitlement-product-gate', 'plan-choice-gate', 'trial-setting-gate', 'billing-plans-gate', 'gate-target-gate',
+    // public-pricing-gate spends the refcode:ip budget deliberately — it proves a burst IS refused,
+    // which costs the window's 60 tokens. Its own key, swept before and after the run and cleared
+    // by the loopback reaper like the rest, so nothing carries over to a real visitor.
+    'public-pricing-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',
@@ -734,8 +738,12 @@ if (litter.length) {
 
 console.log(`\n${reapLine}`);
 console.log('  Budget, re-measured 2026-09-09 after the diagnostics moved off /c/:');
-console.log('    core 0  ·  money 17 magic:ip + 7 repauth:ip  ·  slow 3 magic:ip  ·  the runner itself 0');
+console.log('    core 0 magic:ip + the whole refcode:ip window  ·  money 17 magic:ip + 7 repauth:ip  ·  slow 3 magic:ip  ·  the runner itself 0');
 console.log('    A full sweep spends 20 of magic:ip\'s 60/hour and 7 of repauth:ip\'s 30.');
+console.log('    refcode:ip (added 2026-10-29) is spent in FULL on purpose: public-pricing-gate');
+console.log('    proves a burst past the limit is refused, which costs the whole window. Stated as');
+console.log('    "the whole window" rather than a count, because the gate clears its own key on');
+console.log('    teardown and the figure above cannot measure what it already swept.');
 console.log('    Previously 23, plus one more for EVERY gate that failed — reds caused exhaustion and');
 console.log('    exhaustion caused reds. That amplifier is gone; the remaining spend is gates driving');
 console.log('    real customer links, which is what they are for. No limit is weakened.');

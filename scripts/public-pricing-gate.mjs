@@ -235,6 +235,108 @@ try {
       && PC.normaliseRefCode('') === null,
     'the page echoes this string back to the visitor — an arbitrary query string is somebody else’s sentence in our voice');
 
+  // ── 6b. THE RATE LIMIT, AND WHAT IT MUST NOT DO (owner, 2026-10-29) ──────────────────────
+  // This endpoint went from "called by the signup form on field blur" to "called by every public
+  // visitor arriving with a ?ref=" the moment /pricing started quoting the offer. The limit guards
+  // LOAD, not secrecy — the answer carries no name, so a sweep learns which codes exist and
+  // nothing about who owns them (asserted above).
+  //
+  // THE CLAUSE THAT MATTERS IS THE SILENT ONE. A limiter is easy to prove restrictive and hard to
+  // prove harmless, and the harm here is INVISIBLE: a referred garage behind an office or carrier
+  // NAT shown the standard prices has no way to tell that anything was withheld, and the affiliate
+  // loses the commission. So normal traffic is measured first, at its real shape.
+  console.log('\n— the rate limit on check-code —');
+  const ARL = await import(`${R}/lib/auth-rate-limit.ts`);
+  const LIM = ARL.REF_CODE_LIMITS.perIp;
+
+  // THIS GATE'S OWN KEY, and it is swept before and after. The runner's loopback reaper matches any
+  // key ending in a loopback address, so refcode:ip:::1 is cleared with the rest — but this gate
+  // must not inherit a budget already spent by an earlier run in the same hour, which would make
+  // the "stays silent" clause fail for a reason that has nothing to do with the code.
+  const clearLimiter = async () => {
+    const r = await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: 'refcode:ip:' } } });
+    return r.count;
+  };
+  await clearLimiter();
+  onTeardown(clearLimiter);
+
+  const ask = async (code) => {
+    const r = await fetch(`${B}/api/affiliate/check-code`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+
+  check('the limit is its OWN key, not shared with magic:ip or repauth:ip',
+    ARL.refCodeIpKey('1.2.3.4') === 'refcode:ip:1.2.3.4'
+      && ARL.refCodeIpKey('x') !== ARL.smsIpKey('x'),
+    `${ARL.refCodeIpKey('1.2.3.4')} — a shared key means one caller silently spends another's budget`);
+  // THE REAPER REALLY TAKES ITS ROWS. This was an arithmetic clause —
+  // `RATE_LIMIT_RETENTION_MINUTES >= 2 × the window` — and a red-proof removing REF_CODE_LIMITS
+  // from that Math.max left it GREEN, because the SMS tenant window is 24 hours and already
+  // dominates the figure. It found decoration: the number it checked cannot move when this window
+  // is excluded. So the clause is the behaviour instead, which is what the retention is FOR —
+  // refcode:ip holds a visitor's address in clear, and this is what bounds how long we hold it.
+  const stale = new Date(Date.now() - (ARL.RATE_LIMIT_RETENTION_MINUTES + 60) * 60 * 1000);
+  const planted = await prisma.authRateLimit.create({ data: { key: 'refcode:ip:198.51.100.7', created_at: stale }, select: { id: true } });
+  // This reaps EVERY expired row, not only the planted one — that is the function's job and what
+  // the nightly cron already does. Rows it takes are expired by definition and can affect no
+  // limit decision.
+  await ARL.reapRateLimits();
+  const survived = await prisma.authRateLimit.findUnique({ where: { id: planted.id }, select: { id: true } });
+  check('  …and an expired refcode row is REAPED, address and all',
+    survived === null,
+    `planted at ${stale.toISOString()}, retention ${ARL.RATE_LIMIT_RETENTION_MINUTES} minutes — ipKey stores the address in clear, so this is the bound on holding it`);
+
+  // A NORMAL SIGNUP: the field blurs a few times while somebody types and corrects a code, plus
+  // the page load that arrived with it. Measured at the shape a person actually produces.
+  const NORMAL = 6;
+  const normal = [];
+  for (let i = 0; i < NORMAL; i += 1) normal.push(await ask('ZZNOSUCHCODE'));
+  check(`a normal visitor and a normal signup (${NORMAL} calls) are never rate-limited`,
+    normal.every((r) => r.json?.reason !== 'rate_limited'),
+    normal.map((r) => r.json?.reason).join(',') || 'no answers');
+  check('  …and each still gets a real verdict about the code',
+    normal.every((r) => r.json?.ok === false && r.json?.reason === 'unknown_code'),
+    'silent means answering the question, not answering nothing');
+
+  // AND THE HEADROOM IS REAL, not "six is under sixty". The limit must be far enough above normal
+  // traffic that a shared address does not reach it: a tight limit here is the invisible failure.
+  check('  …with the limit an order of magnitude above that',
+    LIM.max >= NORMAL * 10, `${LIM.max} per ${LIM.windowMinutes} minutes against ${NORMAL} for a real signup`);
+
+  // A BURST IS REFUSED. Spend the rest of the window's budget, then prove the next call is the
+  // standard-prices answer and NOT the wrong-code wording.
+  const burst = [];
+  for (let i = normal.length; i < LIM.max + 2; i += 1) burst.push(await ask('ZZNOSUCHCODE'));
+  const limited = burst.filter((r) => r.json?.reason === 'rate_limited');
+  check('a burst past the limit IS refused', limited.length >= 2,
+    `${limited.length} of ${burst.length} refused after ${LIM.max} in the window`);
+  check('  …answering ok:false, so the pricing page shows the standard prices',
+    limited.every((r) => r.status === 200 && r.json?.ok === false),
+    limited.map((r) => `${r.status} ok=${r.json?.ok}`).slice(0, 3).join('; '));
+  check('  …and carrying NO message, so no person is told a valid code is wrong',
+    limited.every((r) => r.json?.message === null),
+    `${JSON.stringify(limited[0]?.json)} — the signup form shows message to a human; the unknown-code wording would make them delete a code that was right`);
+  check('  …and it is distinguishable from an unknown code in the REASON',
+    limited.every((r) => r.json?.reason === 'rate_limited')
+      && normal.every((r) => r.json?.reason === 'unknown_code'),
+    'the page treats both as "no offer"; the two must still be tellable apart in a log');
+
+  // A VALID code is refused too while the window is spent — stated because it is the cost of the
+  // design, not an oversight. The signup path resolves the code itself and is unaffected: this
+  // endpoint has never gated attribution.
+  const validWhileLimited = await ask('TESTAFF');
+  check('  …and a VALID code gets the same answer while the window is spent',
+    validWhileLimited.json?.reason === 'rate_limited',
+    'this is the cost of a per-IP axis, and the reason the limit is generous');
+
+  await clearLimiter();
+  const afterClear = await ask('ZZNOSUCHCODE');
+  check('  …and the window RECOVERS, rather than locking the address out',
+    afterClear.json?.reason === 'unknown_code', JSON.stringify(afterClear.json));
+
   // ── 7. SAVING THE SETTINGS REFRESHES THE PUBLIC COPY, AND READS IT BACK ───────────────────
   console.log('\n— revalidation on save —');
   // THE EXTRACTOR IS THE ORACLE for every verification clause, so it is proved on planted cases

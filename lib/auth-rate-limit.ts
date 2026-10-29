@@ -26,6 +26,33 @@ export const LIMITS = {
  */
 export const REP_REQUEST_LIMITS = { perIp: { max: 10, windowMinutes: 60 } };
 
+/**
+ * ── CHECKING A REFERRAL CODE (2026-10-29) ───────────────────────────────────────────────────────
+ * Its OWN key, `refcode:ip:`, for the reason rep-magic-link has its own: a shared key means one
+ * caller's traffic silently spends another's budget, and this one's traffic is now PUBLIC. Since
+ * the pricing page started quoting the referral offer, /api/affiliate/check-code is called by
+ * every visitor who arrives with a ?ref= — not only by the signup form on field blur.
+ *
+ * WHAT THIS GUARDS, AND WHAT IT DOES NOT. It is load, not secrecy: the endpoint answers yes/no
+ * with no name, no email and no party type, so a sweep of the code space learns which codes exist
+ * and nothing about who owns them. That is the design, and it is why this limit can be generous.
+ *
+ * SIXTY AN HOUR, matching magic:ip. One a minute sustained, which no browsing pattern approaches —
+ * a page load with a ref costs one, a signup's field blurs cost a handful — while a scripted sweep
+ * of a code space needs thousands and stops in the first minute.
+ *
+ * GENEROUS ON PURPOSE, because the per-IP axis punishes the wrong people when it is tight: a
+ * garage behind an office or carrier NAT shares one address with everybody else there, and the
+ * failure is INVISIBLE — they are simply shown the standard prices with no referral line and no
+ * way to tell that anything was withheld. A limit low enough to bite a real visitor would cost an
+ * affiliate their commission silently.
+ *
+ * It takes the FAIL-OPEN takeToken, not the strict one: nothing here spends money, and a limiter
+ * outage must not stop the public page pricing itself correctly.
+ */
+export const REF_CODE_LIMITS = { perIp: { max: 60, windowMinutes: 60 } };
+export const refCodeIpKey = (ip: string) => `refcode:ip:${ip}`;
+
 export const emailKey = (email: string) => `email:${hashToken(email.trim().toLowerCase())}`;
 export const ipKey = (ip: string) => `ip:${ip}`;
 
@@ -117,6 +144,8 @@ export const RATE_LIMIT_RETENTION_MINUTES =
   2 * Math.max(
     ...Object.values(LIMITS).map((l) => l.windowMinutes),
     ...Object.values(SMS_LIMITS).map((l) => l.windowMinutes),
+    ...Object.values(REP_REQUEST_LIMITS).map((l) => l.windowMinutes),
+    ...Object.values(REF_CODE_LIMITS).map((l) => l.windowMinutes),
   );
 
 /**
