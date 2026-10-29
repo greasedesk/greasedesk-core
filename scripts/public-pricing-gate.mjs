@@ -432,6 +432,38 @@ try {
   check('  …and both fit Stripe\u2019s 1200-character cap on custom_text',
     yearly.length <= 1200 && monthly.length <= 1200, `${yearly.length} / ${monthly.length}`);
 
+  // ── AND THE DATE IS TODAY PLUS THE SETTING, NOT A DATE ANYBODY PASSED IN ─────────────────
+  // THE GAP THIS CLOSES, found by the owner reading the clauses above rather than the code. Every
+  // checkout clause so far hands `endsAt` in as a fixture (4 March 2027), so all of them would
+  // pass against a handler that passed the wrong date — or a constant. The message is only true if
+  // the date is the one the subscription will really be created with: now + trial_days.
+  //
+  // RESOLVED THE WAY THE HANDLER RESOLVES IT. publicPlanChoice and planChoiceFor share buildChoice,
+  // which computes the trial end from the clock when the caller passes none — and checkout.ts
+  // passes none, because there is no subscription yet. So this reads the same field the handler
+  // reads and checks it against an independently computed date.
+  const liveChoice = await PC.publicPlanChoice(prisma, { referred: false });
+  const resolvedEnd = new Date(liveChoice.trialEndsAt);
+  const expectedEnd = new Date(Date.now() + s.trial_days * 86400000);
+  // A MINUTE OF SLACK, because the two were computed a few statements apart and not because the
+  // date is approximate: anything beyond a minute means it was not derived from this clock.
+  check('the trial end a checkout would use is NOW plus the trial setting',
+    Math.abs(resolvedEnd.getTime() - expectedEnd.getTime()) < 60_000,
+    `${resolvedEnd.toISOString()} vs ${expectedEnd.toISOString()} (${s.trial_days} days)`);
+
+  const liveMsg = TW.checkoutCustomText({
+    plan: 'monthly', days: liveChoice.trialDays, endsAt: resolvedEnd, profile: prof,
+    firstChargeLabel: liveChoice.monthly.totalLabel, renewalLabel: null,
+  });
+  // THE DATE AS A GARAGE WOULD READ IT, formatted by this gate rather than by the module, so the
+  // clause does not agree with the thing it is checking.
+  const expectedLabel = expectedEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  check('  …so the message a real checkout shows names THAT date',
+    liveMsg.includes(`Cancel before ${expectedLabel} and you pay nothing.`),
+    `${liveMsg} — expected ${expectedLabel}`);
+  check('  …and the amount beside it is the live monthly price, not a fixture',
+    liveMsg.includes(`Then ${pounds(MONTHLY_P)} a month`), liveMsg);
+
   // THE COUPON NAME, derived from the amount and formatted through the money chokepoint.
   const BPg = await import(`${R}/lib/billing-plans.ts`);
   const spec = BPg.firstYearCouponSpec(expectRenewal - expectOffer, 'gbp');
