@@ -13,6 +13,7 @@ import { PAGE_TITLE } from '@/lib/brand';
 // (lib/billing-pricing's perLocationLabel is gone from this file: the hero's price now comes
 //  from the settings through publicPlanChoice, like every other public figure.)
 import { publicPlanChoice } from '@/lib/plan-choice';
+import { trialCta, trialUndated, trialUndatedSentence } from '@/lib/trial-wording';
 // ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
 // client half of the file then reads as a use of the server import, and client-bundle-gate
 // correctly cannot tell the difference. The alias is the distinction, not a workaround.
@@ -74,7 +75,7 @@ export default function HomePage({ trialDays: trial, perSite, perYear }: { trial
     <>
       <Seo
         title={PAGE_TITLE}
-        description={`See what you actually kept: GreaseDesk gives independent garages a live profit-and-loss view alongside job cards, bookings and invoicing. Start a ${trial}-day free trial.`}
+        description={`See what you actually kept: GreaseDesk gives independent garages a live profit-and-loss view alongside job cards, bookings and invoicing. ${trialUndatedSentence(trial)}`}
         path="/"
         softwareApp
         trialDays={trial}
@@ -111,7 +112,7 @@ export default function HomePage({ trialDays: trial, perSite, perYear }: { trial
               </p>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <Link href="/register" className="inline-flex justify-center items-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-                  Start your {trial}-day free trial
+                  {trialCta(trial)}
                 </Link>
                 <Link href="/contact" className="inline-flex justify-center items-center bg-surface border border-line text-ink font-medium rounded-lg px-6 py-3.5 text-base hover:bg-surface-muted transition-colors">
                   Talk to us
@@ -124,7 +125,7 @@ export default function HomePage({ trialDays: trial, perSite, perYear }: { trial
                   as that page and as signup — so the hero cannot quote a price the rest of the
                   site has moved on from. */}
               <p className="mt-4 text-sm text-muted" data-testid="home-price-line">
-                {`${perSite} per site, per month, or ${perYear} a year`} · payment card required · cancel anytime.
+                {`${perSite} per site, per month, or ${perYear} a year · ${trialUndated(trial)} · cancel any time.`}
               </p>
             </div>
 
@@ -184,7 +185,7 @@ export default function HomePage({ trialDays: trial, perSite, perYear }: { trial
             <h2 className="text-2xl sm:text-3xl font-bold text-ink">Find out what last month actually made.</h2>
             <div className="mt-8">
               <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-                Start your {trial}-day free trial
+                {trialCta(trial)}
               </Link>
             </div>
           </div>

@@ -31,7 +31,7 @@ export const FALLBACK_NAV: Record<NavPlacement, PublicNavLink[]> = {
   footer: [
     { label: 'Pricing', href: '/pricing', external: false },
     { label: 'Contact', href: '/contact', external: false },
-    { label: 'Start free trial', href: '/register', external: false },
+    { label: 'Start a trial', href: '/register', external: false },
     { label: 'Sign in', href: '/admin/login', external: false },
     { label: 'Become a reseller', href: '/reseller', external: false },
     { label: 'Cookie policy', href: '/cookies', external: false },

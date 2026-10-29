@@ -112,7 +112,7 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
         {msg && <div data-testid="save-result" className={`text-sm rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>{msg.text}</div>}
 
         <div className="rounded-xl border border-line bg-surface p-5">
-          <h2 className="text-sm font-semibold mb-1">Free trial length</h2>
+          <h2 className="text-sm font-semibold mb-1">Trial length</h2>
           <p className="text-xs text-muted mb-4">
             How many days a garage signing up <span className="text-ink">from now on</span> gets before
             their card is charged. This is what Stripe is told at checkout, and it is the number printed

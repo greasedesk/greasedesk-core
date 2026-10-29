@@ -81,7 +81,9 @@ You may add and remove Users through the Service. You are responsible for what y
 
 ## 4. The trial period
 
-New accounts include a **free trial**. The length of the trial is the one stated at sign-up. No charge is made during the trial. You may cancel at any time before it ends and you will not be charged.
+New accounts include a **trial period**. The length of the trial is the one stated at sign-up. **No charge is made during the trial**, and a payment card is required to start it. You may cancel at any time before the trial ends and you will not be charged.
+
+We describe this as a trial rather than as "free": the card you provide is charged automatically when the trial ends unless you have cancelled, and the date of that first payment is stated to you at sign-up, in your dashboard and by email before it happens.
 
 At the end of the trial, your subscription begins automatically and the card you provided is charged, unless you have cancelled. Your dashboard shows a countdown to the trial end date throughout the trial.
 

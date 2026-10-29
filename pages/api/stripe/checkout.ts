@@ -26,6 +26,8 @@ import {
   type PlanKind,
 } from '@/lib/billing-plans';
 import { offerFor, planForGarage } from '@/lib/affiliate';
+import { planChoiceFor } from '@/lib/plan-choice';
+import { checkoutCustomText } from '@/lib/trial-wording';
 import { ensureFirstYearCoupon } from '@/lib/first-year-coupon';
 import { coreProductId } from '@/lib/modules';
 import { createHash } from 'node:crypto';
@@ -205,6 +207,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!couponId) return res.status(503).json({ message: 'The referral offer is being set up — please try again shortly.' });
   }
 
+  // THE LABELS THE SCREEN QUOTED, from the resolver, with the settings and offer this request has
+  // already read passed in so nothing is read twice. These are TOTALS for the sites being bought —
+  // what the card is actually charged — not the per-location illustration.
+  const choice = await planChoiceFor(prisma, groupId, {
+    country: group.country_code, sites: quantity, settings, offer: offer ?? undefined,
+  });
+  const checkoutMessage = checkoutCustomText({
+    plan: wantsAnnual ? 'annual' : 'monthly',
+    days: choice.trialDays,
+    endsAt: new Date(choice.trialEndsAt),
+    profile,
+    firstChargeLabel: wantsAnnual ? choice.annual.totalLabel : choice.monthly.totalLabel,
+    renewalLabel: wantsAnnual ? choice.annual.renewalTotalLabel : null,
+  });
+
   try {
     const params: Stripe.Checkout.SessionCreateParams = {
       mode: 'subscription',
@@ -239,6 +256,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // subscription renews at the full annual figure with nothing further to do; a subscription
       // created at £600 would renew at £600 for ever, which is the defect this shape avoids.
       ...(couponId ? { discounts: [{ coupon: couponId }] } : {}),
+      // ── OUR OWN WORDS, NEXT TO THE BUTTON (owner, 2026-10-29) ────────────────────────────────
+      // Stripe prints "30 days free" above the card form from trial_period_days. That string is
+      // Stripe's and has no parameter; custom_text.submit is the one place on their page where we
+      // speak, so it carries the plain version of the same fact — the length, the amount, the DATE
+      // of the first payment and that cancelling before it costs nothing. Built in
+      // lib/trial-wording from the SAME resolver that priced the screen the garage just read, so
+      // the quote and the checkout cannot disagree.
+      custom_text: { submit: { message: checkoutMessage } },
       payment_method_collection: 'always',
       // ── COLLECT THE ADDRESS ALWAYS, REGISTERED OR NOT ─────────────────────────────────────────
       // Stripe Tax cannot compute UK VAT without a customer address, and a customer created without

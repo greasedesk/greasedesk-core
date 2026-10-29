@@ -124,7 +124,11 @@ const softwareAppLd = (trialDays?: number) => ({
     ...(trialDays
       ? [{
         '@type': 'Offer',
-        name: `${trialDays}-day free trial`,
+        // NOT "free trial" (owner, 2026-10-29). This name is quoted verbatim in rich results, so
+        // it is the one place our wording reaches a prospect before any page does. `price: '0'`
+        // below is the structured fact and stays true — the trial itself costs nothing; the NAME
+        // must not imply the arrangement does.
+        name: `${trialDays}-day trial`,
         price: '0',
         priceCurrency: 'GBP',
         eligibleDuration: { '@type': 'QuantitativeValue', value: trialDays, unitCode: 'DAY' },

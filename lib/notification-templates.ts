@@ -64,6 +64,9 @@ const esc = (v: unknown): string =>
  */
 const trialOffer = (days: unknown): string => {
   const n = Number(days);
+  // NEVER "free" (owner, 2026-10-29): a card is taken at signup and charged when the trial ends,
+  // so "free trial" is a true phrase that sets a false expectation. See lib/trial-wording for the
+  // full reasoning and for the dated forms the screens use.
   return Number.isFinite(n) && n > 0 ? `your ${n}-day GreaseDesk trial` : 'your GreaseDesk trial';
 };
 
@@ -491,18 +494,19 @@ export const NOTIFICATION_TEMPLATES = {
    * money chokepoint; this template never does arithmetic on pennies.
    */
   trial_ending: {
-    label: 'Your free trial is ending',
+    label: 'Your trial is ending',
     security: true,
     email: (d) => ({
       subject: `Your GreaseDesk trial ends ${d.when ? esc(d.when) : 'soon'}`,
       html: shell(`
-        <h2 style="margin:0 0 8px">Your free trial ends ${d.when ? esc(d.when) : 'soon'}</h2>
+        <h2 style="margin:0 0 8px">Your first payment is ${d.when ? `on ${esc(d.when)}` : 'due soon'}</h2>
         <p>Hi ${esc(d.name ?? 'there')},</p>
         <p>Nothing has been charged to your card so far. On <strong>${esc(d.when)}</strong> your
            ${esc(d.planLabel)} plan starts and we will charge <strong>${esc(d.amount)}</strong>.</p>
         ${d.note ? `<p>${esc(d.note)}</p>` : ''}
-        <p>Everything in your garage stays exactly as it is. If you would like to change plan or
-           stop before then, you can do it from Settings — there is nothing to cancel by phone.</p>
+        <p>Everything in your garage stays exactly as it is. Cancel before that date and you pay
+           nothing. If you would like to change plan or stop, you can do it from Settings — there is
+           nothing to cancel by phone.</p>
         ${button(String(d.link ?? ''), 'Review your plan')}
         <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your
            browser:<br/>${esc(d.link)}</p>`),
@@ -518,6 +522,7 @@ export const NOTIFICATION_TEMPLATES = {
         <h2 style="margin:0 0 8px">Verify your email address</h2>
         <p>Hi ${esc(d.name ?? 'there')},</p>
         <p>Thanks for signing up. Verify your email to activate ${trialOffer(d.trialDays)} and finish setting up your garage.</p>
+        ${d.when ? `<p>Nothing to pay for the first ${esc(String(d.trialDays ?? ''))} days. Your first payment would be on <strong>${esc(d.when)}</strong>, and cancelling before then costs nothing.</p>` : ''}
         ${button(String(d.link ?? ''), 'Verify email address')}
         <p style="font-size:13px;color:#475569">If the button doesn't work, paste this into your browser:<br/>${esc(d.link)}</p>`),
     }),

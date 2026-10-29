@@ -1,7 +1,7 @@
 /**
  * File: pages/onboarding/billing.tsx
  * Onboarding Step 6 — start the subscription (the FINAL, non-skippable step; item-13). A hosted
- * Stripe Checkout launcher: a free trial of the length set in the Engine Room, card verified today,
+ * Stripe Checkout launcher: a trial of the length set in the Engine Room, card verified today,
  * first charge at trial end unless cancelled. Real terms only (ruling 2026-07-13 — no fake card
  * fields, no untrue money strings on a live domain).
  *
@@ -26,6 +26,8 @@ import { requireOnboardingStep } from '@/lib/admin-guard';
 import OnboardingLayout, { primaryButtonClass } from '@/components/layout/OnboardingLayout';
 import { prisma } from '@/lib/db';
 import { planChoiceFor, type PlanChoice } from '@/lib/plan-choice';
+import { firstPaymentDated } from '@/lib/trial-wording';
+import { getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
 import PlanChooser from '@/components/billing/PlanChooser';
 
 type Mode = 'idle' | 'launching' | 'finalising' | 'stuck' | 'unconfigured';
@@ -40,6 +42,8 @@ export default function BillingPage({ choice }: { choice: PlanChoice }) {
   // charge sentence under the headline states the exact amount and date before the button.
   const [plan, setPlan] = useState<'monthly' | 'annual'>('annual');
   const trialDays = choice.trialDays;
+  // The profile the resolver already used for every figure on this screen; GB today.
+  const profile = getProfile(DEFAULT_COUNTRY);
   const cancelled = router.query.billing === 'cancelled';
   const polls = useRef(0);
 
@@ -98,7 +102,7 @@ export default function BillingPage({ choice }: { choice: PlanChoice }) {
   }
 
   return (
-    <OnboardingLayout step="checkout" title="Start your subscription" heading={`Start your ${trialDays}-day free trial`}>
+    <OnboardingLayout step="checkout" title="Start your subscription" heading={`Start your ${trialDays}-day trial`}>
       {mode === 'finalising' ? (
         <div className="text-center py-6">
           <div className="animate-spin h-8 w-8 border-2 border-line border-t-accent rounded-full mx-auto mb-4" />
@@ -139,8 +143,14 @@ export default function BillingPage({ choice }: { choice: PlanChoice }) {
           </div>
 
           <div className="bg-surface-muted border border-line p-4 rounded-lg mb-6 text-sm text-muted space-y-2">
-            <p>Your card is verified today but <span className="text-ink font-semibold">not charged</span>. The trial runs {trialDays} days.</p>
-            <p>At the end of the trial your card is charged automatically, unless you cancel first. Cancel anytime from Settings → Licence.</p>
+            {/* THE DATE, because this screen HAS one. planChoiceFor computes the trial end from
+                the same setting Checkout will seed the subscription with on this same request, so
+                the date shown here is the date the card is charged — not an estimate. */}
+            <p data-testid="onboarding-trial-terms">
+              Your card is verified today but <span className="text-ink font-semibold">not charged</span>.{' '}
+              {firstPaymentDated(trialDays, new Date(choice.trialEndsAt), profile)}
+            </p>
+            <p>On that date your card is charged automatically unless you cancel first. Cancel any time from Settings → Licence.</p>
           </div>
 
           {/* CANCELLED IS NEITHER A WARNING NOR AN ERROR — they chose to back out, and the screen

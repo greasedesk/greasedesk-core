@@ -52,6 +52,7 @@ import { perLocationLabel } from '@/lib/billing-pricing';
 import { publicPlanChoice, type PlanChoice } from '@/lib/plan-choice';
 // Pure string helpers — no db, safe on both sides.
 import { normaliseRefCode, publicReferralSentence } from '@/lib/plan-choice';
+import { trialCta, trialUndated, trialUndatedSentence } from '@/lib/trial-wording';
 // ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
 // client half of the file then reads as a use of the server import, and client-bundle-gate
 // correctly cannot tell the difference. The alias is the distinction, not a workaround.
@@ -124,7 +125,7 @@ export default function PricingPage({ trialDays: trial, standard, referred }: Pr
     <>
       <Seo
         title="Pricing — GreaseDesk garage management software"
-        description={`Simple, flat pricing: ${perLocationLabel()} per site, per month. No tiers, no setup fees, cancel any time. Start a ${trial}-day free trial.`}
+        description={`Simple, flat pricing: ${perLocationLabel()} per site, per month. No tiers, no setup fees, cancel any time. ${trialUndatedSentence(trial)}`}
         path="/pricing"
         softwareApp
         trialDays={trial}
@@ -194,9 +195,13 @@ export default function PricingPage({ trialDays: trial, standard, referred }: Pr
             )}
 
             <Link href="/register" className="mt-6 inline-block w-full bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
-              Start your {trial}-day free trial
+              {trialCta(trial)}
             </Link>
-            <p className="mt-2 text-xs text-muted">Payment card required. Cancel any time.</p>
+            {/* THE PROMISE, DATELESS. A public page has no trial and so no end date; one computed
+                from "now" would be frozen into the ISR render. See lib/trial-wording. */}
+            <p className="mt-2 text-xs text-muted" data-testid="public-trial-terms">
+              {`${trialUndated(trial)}. A payment card is required to start. Cancel any time.`}
+            </p>
 
             <ul className="mt-8 space-y-3 text-left">
               {INCLUDED.map((item) => (

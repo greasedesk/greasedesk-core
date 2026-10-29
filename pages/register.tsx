@@ -190,13 +190,13 @@ export default function RegisterPage() {
   return (
     <>
       <Head>
-        <title>Start your free trial - GreaseDesk</title>
+        <title>Start your trial - GreaseDesk</title>
       </Head>
       <SiteChrome>
       <div className="max-w-md mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
         <div className="bg-surface border border-line rounded-2xl shadow-card p-8">
           <h1 className="text-xl font-semibold text-ink mb-6 text-center">
-            Start your free trial
+            Start your trial
           </h1>
 
         {/* Error Message */}

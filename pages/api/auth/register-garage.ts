@@ -5,6 +5,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/db';
+import { formatProfileDate, getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
 import * as bcrypt from 'bcryptjs';
 import { UserRole, Prisma } from '@prisma/client';
 import { sendNotification } from '@/lib/notify';
@@ -171,7 +172,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       channel: 'email',
       groupId: group.id,
       subject: { type: 'user', id: user.id },
-      data: { name: user.name || 'there', link: verificationLink, trialDays: await trialDays() },
+      // THE DATE, because this request has one (owner, 2026-10-29). Group.trial_ends_at was
+      // stamped inside the signup transaction above, so the first email a garage receives can name
+      // the day its card would be charged instead of only how long it has. `when` is formatted
+      // here, through the profile — the template never formats a date.
+      data: {
+        name: user.name || 'there',
+        link: verificationLink,
+        trialDays: await trialDays(),
+        when: group.trial_ends_at
+          ? formatProfileDate(getProfile(group.country_code ?? DEFAULT_COUNTRY), group.trial_ends_at, { long: true })
+          : null,
+      },
     });
     if (!notified.ok) console.warn('[register] verification email not sent:', notified.status, notified.reason, verificationLink);
 

@@ -237,7 +237,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (sub.status !== 'trialing') {
     return res.status(409).json({
-      message: 'Your plan can be changed during the free trial. After the first payment, please contact us and we will sort it out.',
+      message: 'Your plan can be changed during the trial, before your first payment. After that, please contact us and we will sort it out.',
       code: 'TRIAL_OVER',
     });
   }

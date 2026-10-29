@@ -44,6 +44,9 @@ type PageProps = {
   currentPlan: 'monthly' | 'annual' | null;
   /** On a yearly plan with money already taken: the switch is closed outside the window below. */
   annualLocked: boolean;
+  /** The FIRST PAYMENT date while trialing, formatted. Null when there is no trial running — the
+   *  copy then says "before your first payment" rather than naming a date it does not have. */
+  trialEndsLabel: string | null;
   /** THE LAST FOURTEEN DAYS. Derived server-side from Stripe's own renewal date so the screen and
    *  change-plan decide on one rule (lib/renewal-window). */
   windowOpen: boolean;
@@ -71,7 +74,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan, annualLocked, windowOpen, renewalLabel, windowOpensLabel, heldForRenewal, windowDays } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan, annualLocked, windowOpen, renewalLabel, windowOpensLabel, heldForRenewal, windowDays, trialEndsLabel } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // YEARLY IS THE DEFAULT SELECTION on both doors below (owner, 2026-10-29). On the resubscribe
@@ -238,8 +241,10 @@ export default function LicencesSettings(props: PageProps) {
             You’re on the <span data-testid="plan-switch-current">{currentPlan === 'annual' ? 'yearly' : 'monthly'}</span> plan.
           </p>
           <PlanChooser choice={choice} value={plan} onChange={setPlan} disabled={busy} />
-          <p className="text-xs text-muted mt-2">
-            You can change this while your trial is running. Nothing is charged and your trial end date does not move.
+          <p className="text-xs text-muted mt-2" data-testid="plan-switch-terms">
+            {trialEndsLabel
+              ? `You can change this until your first payment on ${trialEndsLabel}. Nothing is charged now and that date does not move.`
+              : 'You can change this before your first payment. Nothing is charged now and your first-payment date does not move.'}
           </p>
           {switchTo ? (
             <button
@@ -369,6 +374,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       windowOpensLabel: win.opensAt ? formatProfileDate(profile, win.opensAt, { long: true }) : null,
       heldForRenewal,
       windowDays: WINDOW_DAYS,
+      // FROM Group.trial_ends_at, which lib/stripe-billing-cache mirrors back from Stripe's own
+      // trial_end — so the date the screen names is the date Stripe will charge on, and only while
+      // a trial is actually running.
+      trialEndsLabel: billing?.subscription_status === 'trialing' && (group as any)?.trial_ends_at
+        ? formatProfileDate(profile, (group as any).trial_ends_at, { long: true })
+        : null,
     },
   };
 };

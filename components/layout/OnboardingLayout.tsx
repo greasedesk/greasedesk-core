@@ -7,7 +7,7 @@
  * onboarding every one of those links is a trap — the gate bounces the user straight back here, so
  * the nav would offer nothing but dead ends.
  *
- * SiteChrome is the public site: "Sign in", "Start free trial", the marketing footer. Right for
+ * SiteChrome is the public site: "Sign in", "Start a trial", the marketing footer. Right for
  * check-email (genuinely pre-auth), wrong the moment somebody is signed in and halfway through
  * setting up — it invites them back out of the flow they are trying to finish.
  *

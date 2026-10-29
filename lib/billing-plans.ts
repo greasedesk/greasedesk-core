@@ -38,6 +38,8 @@
  */
 import { prisma as defaultDb } from '@/lib/db';
 import { getProgrammeSettings } from '@/lib/programme-settings';
+import { firstYearCouponName } from '@/lib/trial-wording';
+import { formatMoney } from '@/lib/format-money';
 import { getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
 
 type Db = any; // a PrismaClient or an interactive-transaction client
@@ -103,7 +105,7 @@ export function refusePlanSettings(s: PlanSettings): string | null {
   if (!Number.isFinite(s.monthlyPricePennies) || s.monthlyPricePennies <= 0) return 'The monthly price must be a positive amount.';
   if (!Number.isInteger(s.trialDays) || s.trialDays < 1) {
     // EVERY plan carries the trial now, so a zero here is not a monthly-only problem: it would
-    // make the signup promise of a free trial untrue on both plans. Refused, never normalised.
+    // make the signup promise of a trial untrue on both plans. Refused, never normalised.
     return 'The trial length must be at least one day; every plan is sold with a trial.';
   }
   for (const [name, v] of [['new annual', s.newAnnualMonthsPaid], ['renewal annual', s.renewalAnnualMonthsPaid], ['offer', s.offerMonthsPaid]] as const) {
@@ -356,6 +358,15 @@ export function firstYearCouponSpec(pennies: number, currency: string): Record<s
     amount_off: pennies,
     currency: currency.toLowerCase(),
     duration: 'once',
-    name: `First year — ${(pennies / 100).toFixed(2)} off`,
+    // THE NAME A GARAGE READS ON ITS INVOICE (owner, 2026-10-29). It was "First year — 150.00
+    // off": true, and useless beside a number on a VAT invoice, with no currency and no hint of
+    // where the discount came from. Built in lib/trial-wording from the formatted amount, so the
+    // figure here and the figure on the screen are the same string.
+    //
+    // EXISTING COUPONS KEEP THEIR NAMES. The id is deterministic from the amount and currency and
+    // live subscriptions point at it; ensureFirstYearCoupon only ever CREATES a missing coupon and
+    // never updates one, so this reaches new coupons only. That is the same property that makes a
+    // settings change safe: it mints a new coupon rather than mutating one in use.
+    name: firstYearCouponName(formatMoney(pennies, { currency: currency.toUpperCase(), maximumFractionDigits: pennies % 100 === 0 ? 0 : 2 })),
   };
 }

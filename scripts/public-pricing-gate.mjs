@@ -337,6 +337,115 @@ try {
   check('  …and the window RECOVERS, rather than locking the address out',
     afterClear.json?.reason === 'unknown_code', JSON.stringify(afterClear.json));
 
+  // ── 6c. NO "FREE", AND THE DATES AND AMOUNTS DERIVED (owner ruling, 2026-10-29) ──────────
+  // "Start your 30-day free trial" is a true sentence that sets a false expectation: a card is
+  // taken at signup and charged on day 30. A garage that read "free" and then saw £75 leave its
+  // account was told the truth and still surprised, which is what the dashboard banner's own
+  // ruling forbids.
+  //
+  // THE SCAN IS OVER THE RENDERED TEXT, not the source. A source scan would pass against copy
+  // that reaches a visitor through a component it did not think to read, and would go red over
+  // the comments that explain WHY the word is gone.
+  console.log('\n— no "free" in our wording —');
+  const FREE = /\bfree trial\b|\bdays? free\b|\bfree for \d/i;
+  const surfaces = [
+    ['/pricing', pricing.text],
+    ['/', home.text],
+    ['/llms.txt', llms.text],
+    ['/register', (await get('/register')).text],
+  ];
+  for (const [name, t] of surfaces) {
+    check(`${name} does not call the trial FREE`, !FREE.test(t),
+      (FREE.exec(t) ?? ['—'])[0]);
+  }
+  // THE DISCRIMINATOR: the scan must be able to find the phrase. Without this, a regex that
+  // matches nothing anywhere passes on every surface and proves nothing.
+  check('  …and the scan would have found it — it matches the phrase it forbids',
+    FREE.test('Start your 30-day free trial') && FREE.test('30 days free') && !FREE.test('30-day trial'),
+    'otherwise every clause above passes against a regex that matches nothing');
+
+  // AND THE REPLACEMENT SAYS WHAT HAPPENS. Absence of a word is not presence of a promise.
+  //
+  // THE SENTENCES ARE WRITTEN OUT HERE, not read from lib/trial-wording. The first draft asserted
+  // `pricing.text.includes(TW.trialUndated(s.trial_days))` and a red-proof that TYPED a 30 into
+  // that function left it green: the clause compared the page against the module that rendered it
+  // and agreed with itself. The NUMBER still comes from the settings row, so the length is derived
+  // and only the WORDS are pinned — which is what should happen to copy this deliberate: changing
+  // it goes red and a person decides.
+  const TW = await import(`${R}/lib/trial-wording.ts`);
+  const wantUndated = `${s.trial_days}-day trial, nothing to pay for the first ${s.trial_days} days`;
+  const wantCta = `Start your ${s.trial_days}-day trial`;
+  check('/pricing states the dateless promise, with the length from the setting',
+    pricing.text.includes(wantUndated), `expected "${wantUndated}"`);
+  check('  …and the call to action names the length and not the word',
+    pricing.text.includes(wantCta) && !FREE.test(wantCta), `expected "${wantCta}"`);
+  check('  …and lib/trial-wording is what the page got them from',
+    TW.trialUndated(s.trial_days) === wantUndated && TW.trialCta(s.trial_days) === wantCta,
+    `${TW.trialUndated(s.trial_days)} / ${TW.trialCta(s.trial_days)} — one module, so eleven surfaces cannot drift`);
+  check('/llms.txt says nothing is paid for the first N days, from the same setting',
+    llms.text.includes(`${s.trial_days}-day trial on either plan`)
+      && llms.text.includes(`nothing to pay for the first ${s.trial_days} days`),
+    `trial_days is ${s.trial_days}`);
+
+  // THE DATED FORMS, which are what a garage with a trial sees. Asserted as pure functions here —
+  // the screens that render them are driven by plan-choice-gate — and the point is that the DATE
+  // and the LENGTH both come from arguments, so neither can be typed into a page.
+  const when = new Date('2027-03-04T00:00:00Z');
+  const prof = (await import(`${R}/lib/locale-profiles.ts`)).getProfile('GB');
+  check('the dated promise names the length AND the date, both passed in',
+    TW.trialDated(30, when, prof) === 'Try GreaseDesk for 30 days. Nothing to pay until 4 March 2027.',
+    TW.trialDated(30, when, prof));
+  check('  …and the first-payment form names the date and the way out',
+    TW.firstPaymentDated(30, when, prof)
+      === '30-day trial: your first payment is on 4 March 2027; cancel before then and you pay nothing.',
+    TW.firstPaymentDated(30, when, prof));
+  check('  …and moving the setting moves the sentence',
+    TW.trialDated(45, when, prof).includes('45 days') && !TW.trialDated(45, when, prof).includes('30'),
+    TW.trialDated(45, when, prof));
+
+  // ── 6d. WHAT STRIPE CHECKOUT SHOWS NEXT TO THE BUTTON ────────────────────────────────────
+  // Stripe's own "30 days free" headline comes from trial_period_days and has no parameter; this
+  // is the one place on their page where our words appear, so it carries the plain version of the
+  // same fact. Every figure is PASSED IN, already formatted — the module holds no price.
+  console.log('\n— the checkout wording —');
+  const yearly = TW.checkoutCustomText({
+    plan: 'annual', days: s.trial_days, endsAt: when, profile: prof,
+    firstChargeLabel: pounds(expectOffer), renewalLabel: pounds(expectRenewal),
+  });
+  check('the yearly message names the trial, the first year and the RENEWAL',
+    yearly === `Nothing to pay for ${s.trial_days} days. Then ${pounds(expectOffer)} for your first year, renewing at ${pounds(expectRenewal)} a year. Cancel before 4 March 2027 and you pay nothing.`,
+    yearly);
+  check('  …and with no offer it names ONE figure rather than repeating it',
+    TW.checkoutCustomText({ plan: 'annual', days: s.trial_days, endsAt: when, profile: prof,
+      firstChargeLabel: pounds(expectRenewal), renewalLabel: pounds(expectRenewal) })
+      === `Nothing to pay for ${s.trial_days} days. Then ${pounds(expectRenewal)} a year. Cancel before 4 March 2027 and you pay nothing.`,
+    'a garage paying the list price should not read "then £750, renewing at £750"');
+  const monthly = TW.checkoutCustomText({
+    plan: 'monthly', days: s.trial_days, endsAt: when, profile: prof,
+    firstChargeLabel: pounds(MONTHLY_P), renewalLabel: null,
+  });
+  check('  …and the monthly message names the month price and the date',
+    monthly === `Nothing to pay for ${s.trial_days} days. Then ${pounds(MONTHLY_P)} a month. Cancel before 4 March 2027 and you pay nothing.`,
+    monthly);
+  check('  …and neither says "free"', !FREE.test(yearly) && !FREE.test(monthly),
+    'Stripe\u2019s own headline above the card form is theirs and cannot be changed; ours must not read as a contradiction');
+  check('  …and both fit Stripe\u2019s 1200-character cap on custom_text',
+    yearly.length <= 1200 && monthly.length <= 1200, `${yearly.length} / ${monthly.length}`);
+
+  // THE COUPON NAME, derived from the amount and formatted through the money chokepoint.
+  const BPg = await import(`${R}/lib/billing-plans.ts`);
+  const spec = BPg.firstYearCouponSpec(expectRenewal - expectOffer, 'gbp');
+  check('a new first-year coupon is NAMED for what it is, with the amount',
+    spec.name === `Referral offer: first year ${pounds(expectRenewal - expectOffer)} off`,
+    String(spec.name));
+  check('  …and its id is unchanged, so existing coupons keep theirs',
+    spec.id === `gd-first-year-${expectRenewal - expectOffer}-gbp`,
+    `${spec.id} — live subscriptions point at this; ensureFirstYearCoupon only ever CREATES a missing one`);
+  check('  …and pence appear only when there are pence',
+    String(BPg.firstYearCouponSpec(12345, 'gbp').name).endsWith('\u00a3123.45 off')
+      && String(BPg.firstYearCouponSpec(15000, 'gbp').name).endsWith('\u00a3150 off'),
+    `${BPg.firstYearCouponSpec(12345, 'gbp').name} / ${BPg.firstYearCouponSpec(15000, 'gbp').name}`);
+
   // ── 7. SAVING THE SETTINGS REFRESHES THE PUBLIC COPY, AND READS IT BACK ───────────────────
   console.log('\n— revalidation on save —');
   // THE EXTRACTOR IS THE ORACLE for every verification clause, so it is proved on planted cases

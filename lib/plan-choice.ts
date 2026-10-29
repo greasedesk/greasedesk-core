@@ -140,13 +140,19 @@ export const publicReferralSentence = (code: string, monthsGiven: number, months
 export async function planChoiceFor(
   db: Db = defaultDb,
   groupId: string,
-  opts: { country?: string | null; sites?: number; trialEndsAt?: Date | null; settingsId?: string } = {},
+  opts: {
+    country?: string | null; sites?: number; trialEndsAt?: Date | null; settingsId?: string;
+    /** Already read by the caller. checkout.ts resolves both before it needs the labels, and a
+     *  second read here is how a price from one read lands beside a month count from another. */
+    settings?: PlanSettings;
+    offer?: Awaited<ReturnType<typeof offerFor>>;
+  } = {},
 ): Promise<PlanChoice> {
   // ONE READ, PASSED ON (owner, 2026-10-29). This used to read the settings and then let offerFor
   // read them again, so a price from the first read could appear beside a month count from the
   // second. The window is small and the symptom is a screen that contradicts itself.
-  const settings = await planSettings(db, { settingsId: opts.settingsId, country: opts.country });
-  const offer = await offerFor(db, groupId, { settingsId: opts.settingsId, settings });
+  const settings = opts.settings ?? await planSettings(db, { settingsId: opts.settingsId, country: opts.country });
+  const offer = opts.offer ?? await offerFor(db, groupId, { settingsId: opts.settingsId, settings });
   return buildChoice(settings, offer, opts);
 }
 

@@ -55,7 +55,9 @@ typically one to five locations. Not currently available outside the UK.
 
 ${perMonth} per location, per month, or ${perYear} per location per year
 (${perYearEquiv} a month, paid yearly). One price — no tiers, no setup fees.
-${trial}-day free trial on either plan; a payment card is required to start it. Cancel any time.
+${trial}-day trial on either plan: nothing to pay for the first ${trial} days, and a payment card
+is required to start it. The card is charged when the trial ends unless it is cancelled before
+then. Cancel any time.
 
 ## Links
 

@@ -33,7 +33,7 @@ function FooterNav() {
 }
 
 // Render a config nav link — internal (next/link) or external (plain <a>, safe rel). Nav content comes
-// from the Content system (NavProvider); the auth CTAs (Sign in / Start free trial) stay structural.
+// from the Content system (NavProvider); the auth CTAs (Sign in / Start a trial) stay structural.
 function navLink(l: PublicNavLink, className: string, onClick?: () => void) {
   return l.external
     ? <a key={l.label + l.href} href={l.href} target="_blank" rel="noopener noreferrer" onClick={onClick} className={className}>{l.label}</a>
@@ -81,7 +81,7 @@ function Header() {
           {main.map((l) => navLink(l, 'text-muted hover:text-ink transition-colors'))}
           <span className="w-px h-5 bg-line" aria-hidden="true" />
           <Link href="/admin/login" className="text-muted hover:text-ink transition-colors">Sign in</Link>
-          <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2 transition-colors">Start free trial</Link>
+          <Link href="/register" className="inline-block bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2 transition-colors">Start a trial</Link>
         </div>
 
         {/* Mobile: one 44px hamburger — nothing crushed, and it still works as the nav grows. */}
@@ -101,7 +101,7 @@ function Header() {
             <Link href="/admin/login" onClick={() => setOpen(false)} className="py-3.5 text-base text-ink border-b border-line">Sign in</Link>
             <Link href="/register" onClick={() => setOpen(false)}
               className="my-3 bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-4 py-3 text-center transition-colors">
-              Start free trial
+              Start a trial
             </Link>
           </div>
         </div>
