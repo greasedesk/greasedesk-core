@@ -273,6 +273,128 @@ try {
   check('  …and the stamp the handler wrote is what ends the offer',
     oRec.plan === 'annual_renewal' && /paid/i.test(oRec.refusal ?? ''), oRec.refusal);
 
+  // ── 5c. TWO WEBHOOKS RACING ON ONE SUBSCRIPTION ─────────────────────────────────────────────
+  // Checkout B put two identical annual_renewal rows on GB-GD2491: this handler runs for
+  // `checkout.session.completed` AND `customer.subscription.created`, they arrived 168ms apart,
+  // both read `monthly`, and both wrote. The compare has moved inside writePlanTerms, under a
+  // FOR UPDATE on the garage's Group row, so the loser blocks and then finds nothing to do.
+  console.log('\n— two webhooks racing on one subscription —');
+  const raceGarage = await mkGarage('race');
+  const RACE_CUST = `cus_${PREFIX}RACE`;
+  await prisma.groupBilling.update({ where: { group_id: raceGarage }, data: { stripe_customer_id: RACE_CUST } });
+  await BP.writePlanTerms(prisma, raceGarage, BP.planFor('monthly', S));
+  const subOf = (shape) => ({
+    id: `sub_${PREFIX}RACE`, status: 'trialing', customer: RACE_CUST,
+    current_period_end: null, trial_end: null, metadata: { gd_plan: shape },
+    items: { data: [{ quantity: 1, price: { id: `price_${PREFIX}RACE`, product: CORE } }] },
+  });
+
+  // ── WHY THERE IS A WARM-UP, AND WHY THE CLAUSE AFTER IT IS NOT THE PROOF ────────────────────
+  // MEASURED, 2026-10-29: two interactive transactions on this client get DISTINCT backend pids
+  // but do not overlap — two 400ms statements took 733ms wall, because opening the second pooled
+  // connection costs ~300ms, which is longer than the whole first transaction. So a "fire two and
+  // count the rows" clause passes with the lock REMOVED: the second writer genuinely reads after
+  // the first has committed. It is a true statement about the outcome and it proves nothing about
+  // the lock. The warm-up opens both connections first so the race at least has a window; the
+  // clause that actually discriminates is the blocking one further down.
+  await Promise.all([
+    prisma.$queryRaw`SELECT 1 AS warm`,
+    prisma.$queryRaw`SELECT 2 AS warm`,
+    prisma.$queryRaw`SELECT 3 AS warm`,
+  ]);
+
+  const beforeDirect = await prisma.tenantPlanTerms.count({ where: { group_id: raceGarage } });
+  const direct = await Promise.allSettled([
+    BP.writePlanTerms(prisma, raceGarage, BP.planFor('annual_renewal', S)),
+    BP.writePlanTerms(prisma, raceGarage, BP.planFor('annual_renewal', S)),
+  ]);
+  const afterDirect = await prisma.tenantPlanTerms.count({ where: { group_id: raceGarage } });
+  check('two concurrent writers append exactly ONE row', afterDirect - beforeDirect === 1, `${beforeDirect} → ${afterDirect}`);
+  check('  …and NEITHER of them throws', direct.every((r) => r.status === 'fulfilled'),
+    direct.map((r) => r.status === 'rejected' ? describeError(r.reason) : 'ok').join(' | '));
+  check('  …and both are handed the same row back, so a caller cannot tell which one won',
+    direct.every((r) => r.status === 'fulfilled') && direct[0].value?.id === direct[1].value?.id,
+    `${direct[0].value?.id} vs ${direct[1].value?.id} — the loser returns the tail it found, not null`);
+
+  // AND THROUGH THE HANDLER, which is where it actually happened.
+  const switchGarage = await mkGarage('switch');
+  const SW_CUST = `cus_${PREFIX}SWITCH`;
+  await prisma.groupBilling.update({ where: { group_id: switchGarage }, data: { stripe_customer_id: SW_CUST } });
+  await BP.writePlanTerms(prisma, switchGarage, BP.planFor('monthly', S));
+  const swSub = { ...subOf('annual_renewal'), id: `sub_${PREFIX}SWITCH`, customer: SW_CUST };
+  const viaHandler = await Promise.allSettled([
+    CACHE.applyStripeSubscriptionToCache(swSub, switchGarage),
+    CACHE.applyStripeSubscriptionToCache(swSub, switchGarage),
+  ]);
+  const swRows = await prisma.tenantPlanTerms.findMany({ where: { group_id: switchGarage }, orderBy: { effective_from: 'asc' }, select: { plan: true } });
+  check('the two REAL handlers, fired together, leave one monthly row and one annual row',
+    swRows.length === 2 && swRows[0].plan === 'monthly' && swRows[1].plan === 'annual_renewal',
+    JSON.stringify(swRows.map((r) => r.plan)));
+  check('  …and neither handler throws', viaHandler.every((r) => r.status === 'fulfilled'),
+    viaHandler.map((r) => r.status === 'rejected' ? describeError(r.reason) : 'ok').join(' | '));
+
+  // ── THE CLAUSE THAT ACTUALLY TESTS THE LOCK ─────────────────────────────────────────────────
+  // Rather than hoping the scheduler interleaves, this holds the lock open and watches the second
+  // writer WAIT for it. The first half is hand-rolled — it has to keep its transaction open, which
+  // the real function deliberately does not — but the second half is the real writePlanTerms, and
+  // what is asserted is that it blocks and then finds nothing to do. Remove the FOR UPDATE and the
+  // first of these two clauses goes red immediately: nothing makes the second writer wait.
+  console.log('\n— and the second writer WAITS for the lock —');
+  const lockGarage = await mkGarage('lock');
+  await BP.writePlanTerms(prisma, lockGarage, BP.planFor('monthly', S));
+  let releaseHolder; const holderMayCommit = new Promise((r) => { releaseHolder = r; });
+  let lockTaken; const lockIsHeld = new Promise((r) => { lockTaken = r; });
+  let loserSettled = false;
+
+  const holder = prisma.$transaction(async (tx) => {
+    // THE SAME MODE THE WRITER USES. With FOR UPDATE here the clause below passed even when the
+    // writer's own lock was removed: the loser blocked on the foreign key's FOR KEY SHARE instead,
+    // which FOR UPDATE conflicts with and FOR NO KEY UPDATE does not. Matching the writer is what
+    // makes the clause measure the lock rather than the FK.
+    await tx.$queryRaw`SELECT 1 FROM "Group" WHERE id = ${lockGarage} FOR NO KEY UPDATE`;
+    const inserted = await tx.tenantPlanTerms.create({
+      data: { group_id: lockGarage, plan: 'annual_renewal', months_paid: 10, months_given: 12,
+              paid_now_pennies: 75000, trial_days: 30, effective_from: new Date() },
+      select: { id: true },
+    });
+    lockTaken(inserted.id);          // the loser may start now; the lock is genuinely held
+    await holderMayCommit;           // …and is held until this resolves
+    return inserted.id;
+  }, { timeout: 20000, maxWait: 20000 });
+
+  const winnerId = await lockIsHeld;
+  const loser = BP.writePlanTerms(prisma, lockGarage, BP.planFor('annual_renewal', S))
+    .then((r) => { loserSettled = true; return r; }, (e) => { loserSettled = true; throw e; });
+  await new Promise((r) => setTimeout(r, 1200));
+  check('a second writer BLOCKS while the first holds the lock', loserSettled === false,
+    loserSettled ? 'it returned while the lock was still held — nothing serialised it' : 'still waiting after 1.2s, as it must');
+
+  releaseHolder();
+  await holder;
+  const loserRow = await loser;
+  const lockRows = await prisma.tenantPlanTerms.count({ where: { group_id: lockGarage } });
+  check('  …and once the winner commits, the loser writes NOTHING', lockRows === 2, `${lockRows} rows (monthly + one annual)`);
+  check('  …and is handed the winner\'s row', loserRow?.id === winnerId, `${loserRow?.id} vs ${winnerId}`);
+
+  // ── 5d. THE CHOKEPOINT IS THE ONLY DOOR ─────────────────────────────────────────────────────
+  // The lock protects writePlanTerms. Any other module writing TenantPlanTerms directly walks
+  // straight past it, and the race comes back somewhere nobody is looking — so the SET of writers
+  // is asserted, not just the behaviour of the one that was fixed.
+  const fsx = await import('node:fs'); // `const fs` below is declared LATER; const does not hoist
+  const strip = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join('\n');
+  const walk = (dir) => fsx.readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
+  const sourceFiles = [...walk('lib'), ...walk('pages')].filter((f) => f !== 'lib/billing-plans.ts');
+  const WRITE = /tenantPlanTerms\s*\.\s*(create|createMany|update|updateMany|upsert|delete|deleteMany)/;
+  const outsideWriters = sourceFiles.filter((f) => WRITE.test(strip(fsx.readFileSync(f, 'utf8'))));
+  check('nothing outside lib/billing-plans WRITES TenantPlanTerms', outsideWriters.length === 0,
+    outsideWriters.join(', ') || 'none — every append goes through the locked chokepoint');
+  // THE DISCRIMINATOR: a scan that finds nothing proves nothing unless the term it scans for would
+  // have found the real thing. lib/billing-plans itself must match.
+  check('  …and the scan would have found one — billing-plans itself matches',
+    WRITE.test(strip(fsx.readFileSync('lib/billing-plans.ts', 'utf8'))),
+    'otherwise the clause above passes against a regex that matches nothing anywhere');
+
   // ── 6. THE TERMS ROW RECORDS BOTH, WHICH THE OLD CHECK FORBADE ──────────────────────────────
   console.log('\n— what the timeline records —');
   const termsGarage = await mkGarage('terms');

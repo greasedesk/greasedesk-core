@@ -141,17 +141,21 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   // APPEND-ONLY and only on a CHANGE: TenantPlanTerms is a timeline, so re-writing the same shape
   // on every subscription.updated would bury the one row that says what they signed up under
   // under hundreds that say nothing new.
+  //
+  // THE COMPARE USED TO BE HERE, and that is exactly how GB-GD2491 got two identical rows: this
+  // handler runs for `checkout.session.completed` AND `customer.subscription.created`, they
+  // arrived 168ms apart, both read `monthly` and both wrote. Reading then writing with nothing in
+  // between is not a check. writePlanTerms now does the compare itself, under a lock on the
+  // garage's Group row, so the second caller blocks and then finds nothing to do. Deciding here
+  // whether to call it would put the race straight back.
   const shape = (sub.metadata as Record<string, string> | null)?.gd_plan;
   if (shape) {
     try {
-      const { planFor, planSettings, writePlanTerms, currentPlanTerms } = await import('@/lib/billing-plans');
-      const current = await currentPlanTerms(prisma, groupId);
-      if (current?.plan !== shape) {
-        const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true } });
-        const sites = Math.max(1, (sub.items?.data ?? []).reduce((n, i) => n + (i.quantity ?? 1), 0));
-        const settings = await planSettings(prisma, { country: group?.country_code });
-        await writePlanTerms(prisma, groupId, planFor(shape as any, settings, sites));
-      }
+      const { planFor, planSettings, writePlanTerms } = await import('@/lib/billing-plans');
+      const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true } });
+      const sites = Math.max(1, (sub.items?.data ?? []).reduce((n, i) => n + (i.quantity ?? 1), 0));
+      const settings = await planSettings(prisma, { country: group?.country_code });
+      await writePlanTerms(prisma, groupId, planFor(shape as any, settings, sites));
     } catch (e: any) {
       // NON-FATAL, and loudly so. The billing cache is what decides access; the terms row is the
       // record of what was agreed. Losing the second must never cost the tenant the first.

@@ -138,6 +138,35 @@ export async function planSettings(
  * schema), so the earliest row is what they signed up under and the latest is what they are on.
  * Rewriting a row would erase the terms somebody agreed to, which is the whole reason the table
  * stopped being one row per garage.
+ *
+ * ── AND ONLY ON A CHANGE, UNDER A LOCK (2026-10-29, after a duplicate reached a real garage) ───
+ * The compare used to live in the CALLER — lib/stripe-billing-cache read currentPlanTerms, found
+ * a different shape, and called this function, which created unconditionally. Checkout B exposed
+ * what that costs: `checkout.session.completed` and `customer.subscription.created` arrived 168ms
+ * apart, both read `monthly`, both decided the shape had changed, and GB-GD2491 ended up with two
+ * identical annual_renewal rows. Nothing summed them, so it cost records rather than money — but
+ * it is a money timeline, and a read followed by a write with nothing in between is not a check.
+ *
+ * So the compare moved in here, where it can be done under a lock on the garage's own Group row:
+ * the second writer BLOCKS on the lock, and when it gets it the tail is the row the first writer
+ * inserted, so it finds no change and writes nothing. One row, from two racing webhooks, enforced
+ * by the database rather than by both callers hoping.
+ *
+ * THREE THINGS A READER WILL WANT TO KNOW:
+ *  - Two of the four call sites (register-garage, onboarding/setup) pass an interactive
+ *    transaction client, which has no `$transaction` of its own. So a transaction is opened only
+ *    when we were handed a root client; inside a caller's transaction the lock simply joins it and
+ *    is held until they commit, which is what we want anyway.
+ *  - The pooled Neon endpoint is safe for this. PgBouncer in transaction mode pins one server
+ *    connection for the life of a transaction, so BEGIN/SELECT FOR UPDATE/INSERT/COMMIT all run on
+ *    the same connection. A SESSION-scoped advisory lock would NOT survive that, which is why the
+ *    lock is a row lock and not pg_advisory_lock.
+ *  - FOR UPDATE on a row that does not exist locks nothing and serialises nothing. Every caller
+ *    holds a real group (the insert's foreign key would fail otherwise), so this is a premise of
+ *    the callers rather than a hole here — but it is a premise, and it is written down.
+ *
+ * Returns the row the garage is on afterwards: the one just inserted, or the existing tail when
+ * the shape had not changed. A caller therefore always gets terms back, never null.
  */
 export async function writePlanTerms(
   db: Db,
@@ -145,19 +174,43 @@ export async function writePlanTerms(
   plan: Plan,
   opts: { at?: Date } = {},
 ) {
-  return db.tenantPlanTerms.create({
-    data: {
-      group_id: groupId,
-      plan: plan.kind,
-      months_paid: plan.monthsPaid,
-      months_given: plan.monthsGiven,
-      // NULL on monthly, and that is a meaningful absence rather than zero: nothing is taken at
-      // signup, and a zero would read as a payment of nothing having been collected.
-      paid_now_pennies: plan.payNowPennies > 0 ? plan.payNowPennies : null,
-      trial_days: plan.trialDays > 0 ? plan.trialDays : null,
-      effective_from: opts.at ?? new Date(),
-    },
-  });
+  const body = async (tx: Db) => {
+    // THE LOCK, FIRST. Parameterised through the tagged template — never interpolated.
+    //
+    // FOR NO KEY UPDATE, NOT FOR UPDATE, AND THE DIFFERENCE IS NOT COSMETIC. Inserting any row
+    // that references a Group takes a FOR KEY SHARE lock on that Group row — every job card,
+    // customer, booking and invoice for the tenant. FOR UPDATE conflicts with FOR KEY SHARE, so
+    // locking the row that way would stall unrelated writes across the whole garage for as long as
+    // this transaction lived (and for as long as the CALLER's transaction lives, at the two call
+    // sites that hand us one — signup, which does plenty afterwards). FOR NO KEY UPDATE conflicts
+    // with itself and with FOR UPDATE, so two of these writers still serialise, while a job card
+    // being saved at the same moment does not wait for us.
+    //
+    // Found by a red-proof: with FOR UPDATE the "second writer blocks" clause passed even with the
+    // lock removed, because the loser was blocking on the foreign key instead. The clause was
+    // measuring the wrong thing, and the wrong thing was also a product defect.
+    await tx.$queryRaw`SELECT 1 FROM "Group" WHERE id = ${groupId} FOR NO KEY UPDATE`;
+    const tail = await currentPlanTerms(tx, groupId);
+    // ONLY ON A CHANGE. Re-writing the same shape on every subscription.updated would bury the one
+    // row that says what they signed up under beneath hundreds that say nothing new.
+    if (tail?.plan === plan.kind) return tail;
+    return tx.tenantPlanTerms.create({
+      data: {
+        group_id: groupId,
+        plan: plan.kind,
+        months_paid: plan.monthsPaid,
+        months_given: plan.monthsGiven,
+        // NULL on monthly, and that is a meaningful absence rather than zero: nothing is taken at
+        // signup, and a zero would read as a payment of nothing having been collected.
+        paid_now_pennies: plan.payNowPennies > 0 ? plan.payNowPennies : null,
+        trial_days: plan.trialDays > 0 ? plan.trialDays : null,
+        effective_from: opts.at ?? new Date(),
+      },
+    });
+  };
+  // A root client can open a transaction; a transaction client cannot, and asking it to would
+  // throw. Either way the lock and the insert end up in ONE transaction.
+  return typeof (db as any)?.$transaction === 'function' ? db.$transaction((tx: Db) => body(tx)) : body(db);
 }
 
 /**
