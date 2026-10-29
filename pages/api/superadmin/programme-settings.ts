@@ -145,14 +145,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (!Object.keys(changes).length) { res.status(400).json({ message: 'Nothing to change.' }); return; }
     try {
-      const result = await savePlanSettings(prisma, { changes, actorId: actor.userId });
-      const n = Object.keys(result.changed).length;
-      res.status(200).json({
-        message: n === 0
-          ? 'Nothing changed — the values sent were the values already stored.'
-          : `Saved ${n} setting${n === 1 ? '' : 's'}. This applies to garages signing up from now on; terms already frozen are untouched.`,
-        ...result,
+      // THESE NUMBERS ARE ON THE PUBLIC SITE NOW (2026-10-29), so the save refreshes it and then
+      // reads it back — the same two-step the trial length uses, and for the same reason: on
+      // 2026-10-25 res.revalidate() resolved for both pages while neither moved.
+      const result = await savePlanSettings(prisma, {
+        changes, actorId: actor.userId,
+        revalidate: (p) => res.revalidate(p),
+        origin: originFor(req),
       });
+      const n = Object.keys(result.changed).length;
+      // THE MESSAGE SAYS WHICH OF THE THREE OUTCOMES HAPPENED. "Saved" alone was honest while no
+      // plan setting reached a public page; it would now be the same half-truth the trial length
+      // told for an hour.
+      const scope = 'This applies to garages signing up from now on; terms already frozen are untouched.';
+      const message = n === 0
+        ? 'Nothing changed — the values sent were the values already stored.'
+        : result.verified
+          ? `Saved ${n} setting${n === 1 ? '' : 's'}, and the public site now shows the new prices. ${scope}`
+          : result.revalidateError
+            ? `Saved ${n} setting${n === 1 ? '' : 's'}. THE PUBLIC SITE WAS NOT REFRESHED — ${result.revalidateError}. It corrects itself within the minute, or save again to retry. ${scope}`
+            : `Saved ${n} setting${n === 1 ? '' : 's'}. The refresh was accepted but the public site has not caught up yet — ${result.note ?? 'not confirmed'}. It corrects itself within the minute. ${scope}`;
+      res.status(200).json({ message, ...result });
     } catch (e: any) {
       // The refusal text names the field and what is wrong with it, so it can be shown as-is.
       res.status(400).json({ message: String(e?.message ?? e) });

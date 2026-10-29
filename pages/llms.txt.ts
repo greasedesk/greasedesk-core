@@ -15,10 +15,10 @@
  */
 import type { GetServerSideProps } from 'next';
 import { COMPANY } from '@/lib/company-info';
-import { MONTHLY_PRICE_POUNDS } from '@/lib/billing-pricing';
 import { trialDays } from '@/lib/programme-settings';
+import { publicPlanChoice } from '@/lib/plan-choice';
 
-function body(trial: number): string {
+function body(trial: number, perMonth: string, perYear: string, perYearEquiv: string): string {
   const u = (p: string) => `${COMPANY.siteUrl}${p}`;
   return `# ${COMPANY.tradingName}
 
@@ -53,8 +53,9 @@ typically one to five locations. Not currently available outside the UK.
 
 ## Pricing
 
-£${MONTHLY_PRICE_POUNDS} per location, per month. One price — no tiers, no setup fees.
-${trial}-day free trial; a payment card is required to start it. Cancel any time.
+${perMonth} per location, per month, or ${perYear} per location per year
+(${perYearEquiv} a month, paid yearly). One price — no tiers, no setup fees.
+${trial}-day free trial on either plan; a payment card is required to start it. Cancel any time.
 
 ## Links
 
@@ -79,7 +80,23 @@ export const getServerSideProps: GetServerSideProps = async ({ res }) => {
   // that can change is a copy of it, whatever the comment claims.
   // must-revalidate, matching the marketing pages: the CDN may hold it, and must check first.
   res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
-  res.write(body(await trialDays()));
+  // ── SERVER-RENDERED, SO NOTHING REVALIDATES IT ────────────────────────────────────────────
+  // This page has no ISR cache to refresh: it is computed per request, so an Engine Room save is
+  // reflected on the next fetch with nothing to invalidate. Said out loud because the pricing and
+  // home pages DO need res.revalidate() and the three are easy to lump together — handing
+  // res.revalidate('/llms.txt') a path that was never prerendered would throw, and the save would
+  // report a failure that is not one.
+  //
+  // THE FIGURES COME FROM THE SETTINGS (2026-10-29), not from the MONTHLY_PRICE_POUNDS constant
+  // this used to read. The facts page is the one surface most likely to be quoted back at us, so
+  // it must not be able to disagree with what signup charges.
+  const [trial, choice] = await Promise.all([trialDays(), publicPlanChoice(undefined, { referred: false })]);
+  res.write(body(
+    trial,
+    choice.monthly.perLocationLabel,
+    choice.annual.renewalPerLocationLabel,
+    choice.annual.perMonthEquivLabel,
+  ));
   res.end();
   return { props: {} };
 };

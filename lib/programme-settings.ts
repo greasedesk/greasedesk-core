@@ -20,6 +20,7 @@
  */
 import { prisma as defaultDb } from '@/lib/db';
 import { COMPANY } from '@/lib/company-info';
+import { getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
 // @ts-ignore — JS config (no type declarations); the shape is ASSERTED on the next line rather
 // than assumed, so the compiler keeps checking every use of it below.
 // WITH THE .js EXTENSION, unlike lib/gssp-i18n's copy of this import. That one is only ever loaded
@@ -84,6 +85,8 @@ export function renderedTrialDays(html: string): number | null {
 }
 
 export type CopyCheck = { url: string; shows: number | null; agrees: boolean };
+/** The same three fields for a figure that is a STRING — the yearly price as the page prints it. */
+export type CopyCheckText = { url: string; shows: string | null; agrees: boolean };
 
 /**
  * WHAT THE PUBLIC SITE IS ACTUALLY SHOWING. This is the whole point of the rewrite: `res.revalidate`
@@ -101,6 +104,48 @@ export async function readPublicCopy(origin: string, want: number): Promise<Copy
         signal: AbortSignal.timeout(4000),
       });
       const shows = renderedTrialDays(await r.text());
+      return { url, shows, agrees: shows === want };
+    } catch {
+      return { url, shows: null, agrees: false };
+    }
+  }));
+}
+
+/**
+ * THE YEARLY PRICE A RENDERED PAGE IS ACTUALLY SHOWING, or null when it names none or more than
+ * one. The plan-settings analogue of renderedTrialDays, and it strips scripts for the same
+ * reason: `__NEXT_DATA__` carries BOTH figure sets as JSON — including the referral one, which is
+ * never server-rendered — so a grep of the raw HTML would find figures no visitor can see.
+ *
+ * A SAVING IS NOT A PRICE, and both end in "a year". /pricing prints "Billed £750 a year, per
+ * site." beside "Save £150 a year · Save 17%", so a naive /£X a year/ finds TWO figures, answers
+ * null, and the save reports "the page shows no yearly price" about a page plainly showing one —
+ * which reads as a failed refresh and sends somebody hunting the wrong defect. The lookbehind
+ * excludes the saving BY NAME rather than by position, so a reordered panel does not break it.
+ *
+ * WHY THE YEARLY FIGURE AND NOT THE MONTHLY ONE. It is the one string both public pages state in
+ * so many words ("Billed £750 a year, per site." and "or £750 a year"), it moves whenever any of
+ * the three plan settings that feed it moves, and it is the figure that did not exist on either
+ * page before today. The monthly headline on /pricing is a monthly EQUIVALENT of it, so a page
+ * showing the right yearly figure and the wrong equivalent is an arithmetic fault in one shared
+ * resolver rather than a stale cache — a different failure, with its own clauses.
+ */
+export function renderedYearlyPrice(html: string): string | null {
+  const noScript = html.replace(/<script[^>]*>[\s\S]*?<\/script>/g, ' ').replace(/<!--[\s\S]*?-->/g, '');
+  const text = noScript.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const found = [...new Set([...text.matchAll(/(?<!Save\s)(£[\d,]+(?:\.\d{2})?) a year/g)].map((m) => m[1]))];
+  return found.length === 1 ? found[0] : null;
+}
+
+/** As readPublicCopy, for the yearly price. Same two pages, same bounded fetch, same three states. */
+export async function readPublicPlanCopy(origin: string, want: string): Promise<CopyCheckText[]> {
+  return Promise.all(publicCopyUrls(origin).map(async (url) => {
+    try {
+      const r = await fetch(url, {
+        headers: { 'cache-control': 'no-cache', pragma: 'no-cache' },
+        signal: AbortSignal.timeout(4000),
+      });
+      const shows = renderedYearlyPrice(await r.text());
       return { url, shows, agrees: shows === want };
     } catch {
       return { url, shows: null, agrees: false };
@@ -256,7 +301,40 @@ export type SavePlanSettingsResult = {
   changed: Partial<Record<PlanSettingField, { from: number | boolean; to: number | boolean }>>;
   /** The row AS READ BACK after the write — not what was sent. */
   after: Record<PlanSettingField, number | boolean>;
+  /** The paths res.revalidate() was given. ATTEMPTED — not evidence that anything changed. */
+  attempted: string[];
+  /** A throw from res.revalidate(). Null does NOT mean the page changed; see `verified`. */
+  revalidateError: string | null;
+  /** THE ONLY THING THAT MEANS THE PUBLIC SITE AGREES: it was read back and shows this price. */
+  verified: boolean;
+  /** What each public URL was actually showing when it was read back. */
+  checks: CopyCheckText[];
+  /** Why it is not verified, when it is not. Null when verified, and null when nothing changed. */
+  note: string | null;
 };
+
+/**
+ * THE YEARLY PRICE AS A PAGE PRINTS IT. One expression, used by the read-back above.
+ *
+ * DELIBERATELY AN INDEPENDENT ROUTE to the same number: the page gets there through
+ * publicPlanChoice, and a read-back that called the page's own resolver would agree with it
+ * however wrong both were ([[independent-oracle-finds-copies]] in long form).
+ *
+ * THE TWO HALVES COME FROM DIFFERENT PLACES, and that is worth knowing before anybody edits this.
+ * The MONTHS are an Engine Room setting on this row. The MONTHLY PRICE is not a setting at all —
+ * it lives on the country profile in lib/locale-profiles (GB £75) and changing it needs a deploy.
+ * So the yearly price an operator can move is `months × a constant`, and this function reads the
+ * constant from the profile rather than from a column, because there is no column.
+ *
+ * It must NOT import lib/billing-plans to get there: billing-plans imports this module, and the
+ * cycle would be a real one. lib/locale-profiles is a leaf and is the same source planSettings
+ * uses one layer up.
+ */
+export function yearlyPriceLabelFor(s: { renewal_annual_months_paid: number }, country?: string | null): string {
+  const monthlyPennies = Math.round(getProfile(country ?? DEFAULT_COUNTRY).monthlyPrice * 100);
+  const pennies = s.renewal_annual_months_paid * monthlyPennies;
+  return `£${(pennies / 100).toLocaleString('en-GB', { maximumFractionDigits: 0 })}`;
+}
 
 /**
  * Change the plan and reward settings. THE write chokepoint: validation, the audit row and the
@@ -273,9 +351,33 @@ export type SavePlanSettingsResult = {
  * screen says so, because a settings form that does not is a form somebody will use to try to
  * reprice an existing garage.
  */
+/**
+ * ── AND NOW THESE NUMBERS ARE ON THE PUBLIC SITE (owner, 2026-10-29) ───────────────────────────
+ * Until today no plan setting appeared on a public page, so this function wrote the row, audited
+ * it, and stopped — correctly. `/pricing` and the home page now state the yearly price and the
+ * saving, both derived from these settings, and both are ISR-cached. So this inherits the trial
+ * length's machinery in full: attempt the refresh, then READ THE PAGE BACK, because
+ * res.revalidate() resolving is not evidence of anything (it resolved for both pages on
+ * 2026-10-25 while greasedesk.com kept the old number for an hour).
+ *
+ * `/llms.txt` is NOT in the list and must not be: it is server-rendered, so it has no cache to
+ * invalidate and already answers from the settings on the next request. Handing res.revalidate()
+ * a path that was never prerendered throws, and the save would report a failure that is not one.
+ *
+ * `revalidate` is OPTIONAL here, unlike saveTrialDays. The gate and any future caller that only
+ * means to change a number without a NextApiResponse to hand can omit it; the result then says
+ * `attempted: []` and `verified: false`, which is the truth rather than a silent skip.
+ */
 export async function savePlanSettings(
   db: Db,
-  opts: { changes: Partial<Record<PlanSettingField, number | boolean>>; actorId: string | null; settingsId?: string },
+  opts: {
+    changes: Partial<Record<PlanSettingField, number | boolean>>;
+    actorId: string | null;
+    settingsId?: string;
+    revalidate?: (path: string) => Promise<unknown>;
+    /** The origin to READ BACK. The apex in production; the gate and dev pass their own. */
+    origin?: string;
+  },
 ): Promise<SavePlanSettingsResult> {
   const id = opts.settingsId ?? SETTINGS_ID;
   const entries = Object.entries(opts.changes) as [PlanSettingField, number | boolean][];
@@ -323,9 +425,41 @@ export async function savePlanSettings(
   }
 
   const after = await getProgrammeSettings(db, { settingsId: id });
+
+  // ── REFRESH THE PUBLIC COPY, THEN GO AND READ IT ────────────────────────────────────────────
+  // Only when something actually changed: a save that moved nothing has no page to refresh, and
+  // reporting "not verified" for it would teach the operator to ignore the line.
+  let attempted: string[] = [];
+  let revalidateError: string | null = null;
+  let checks: CopyCheckText[] = [];
+  let verified = false;
+  let note: string | null = null;
+
+  if (Object.keys(data).length && opts.revalidate) {
+    for (const p of revalidationTargets()) {
+      try { await opts.revalidate(p); attempted.push(p); }
+      catch (e: any) { revalidateError = `${p}: ${describe(e)}`.slice(0, 300); }
+    }
+    // WHAT THE PAGE MUST NOW SAY, computed the way the page computes it rather than from the raw
+    // column: the yearly price is renewal_annual_months_paid × monthly_price_pennies, and
+    // re-deriving it here with a different expression is how a read-back starts agreeing with
+    // itself instead of with the page.
+    const want = yearlyPriceLabelFor(after);
+    checks = await readPublicPlanCopy(opts.origin ?? publicOrigin(), want);
+    if (!checks.every((c) => c.agrees)) {
+      await new Promise((r) => setTimeout(r, 2000));
+      checks = await readPublicPlanCopy(opts.origin ?? publicOrigin(), want);
+    }
+    verified = checks.length > 0 && checks.every((c) => c.agrees);
+    note = verified ? null
+      : revalidateError ? null
+      : `the refresh was accepted but ${checks.filter((c) => !c.agrees).map((c) => `${c.url} still shows ${c.shows ?? 'no yearly price'}`).join('; ')}`.slice(0, 300);
+  }
+
   return {
     changed,
     after: Object.fromEntries(PLAN_SETTING_FIELDS.map((f) => [f, after[f]])) as Record<PlanSettingField, number | boolean>,
+    attempted, revalidateError, verified, checks, note,
   };
 }
 

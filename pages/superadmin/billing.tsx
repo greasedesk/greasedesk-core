@@ -202,6 +202,21 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
               already referred keep what was frozen when they signed up; nothing on this screen can
               alter it.
             </p>
+            {/* ── THESE NUMBERS ARE PUBLIC NOW (2026-10-29) ─────────────────────────────────────
+                They were internal until today: /pricing quoted one monthly figure from a code
+                constant and said nothing about yearly. It now shows the yearly price, the monthly
+                equivalent and the saving, all derived from THIS row, and so does the home page's
+                price line and /llms.txt. An operator typing a number here is changing the
+                shop window, not only what checkout charges, and must be told so BEFORE typing. */}
+            <p className="text-xs text-muted mb-4" data-testid="plan-settings-public-note">
+              <span className="text-ink font-semibold">These figures are on the public site.</span>{' '}
+              The yearly price, the monthly equivalent and the saving on{' '}
+              <span className="text-ink">/pricing</span> and the home page all come from this row,
+              as does <span className="text-ink">/llms.txt</span>. Saving here refreshes the two
+              cached pages and then reads them back — the message will say whether the public site
+              actually moved, not just that a refresh was attempted. /llms.txt is server-rendered
+              and needs no refresh.
+            </p>
             <form onSubmit={savePlan} className="space-y-3">
               {Object.keys(s.planSettings).map((f) => (
                 <div key={f} className="flex flex-wrap items-center gap-3">

@@ -28,7 +28,10 @@
  * then be charged £2,250", and the number that leaves its bank is never the illustrative one.
  */
 import { prisma as defaultDb } from '@/lib/db';
-import { planSettings, type PlanKind } from '@/lib/billing-plans';
+import {
+  planSettings, renewalAnnualPennies, firstYearDiscountPennies,
+  type PlanKind, type PlanSettings,
+} from '@/lib/billing-plans';
 import { offerFor } from '@/lib/affiliate';
 import { formatMoney } from '@/lib/format-money';
 import { getProfile, DEFAULT_COUNTRY, formatProfileDate, type CountryProfile } from '@/lib/locale-profiles';
@@ -59,6 +62,10 @@ export type AnnualOption = PlanOption & {
   renewalPerLocationLabel: string;
   /** Months of service minus months charged, for the year being bought. Null when there is no saving to claim. */
   monthsFree: number | null;
+  /** The two numbers the difference above came from. Exposed because the PUBLIC page states them
+   *  ("12 months for the price of 8") and must not re-derive either from a literal. */
+  monthsPaid: number;
+  monthsGiven: number;
   /**
    * WHOSE offer this is, and what it buys — in one sentence, for the garage reading the panel.
    * Null when no offer applies. The NAME comes from the attribution (offerFor resolves it from the
@@ -94,17 +101,96 @@ const money = (pennies: number, p: CountryProfile): string =>
 const moneyExact = (pennies: number, p: CountryProfile): string =>
   formatMoney(pennies, { currency: p.currency, locale: p.locale, maximumFractionDigits: pennies % 100 === 0 ? 0 : 2 });
 
+/**
+ * Everything the arithmetic below needs to know about the offer — the subset of offerFor's answer
+ * that decides a price. Named so the PUBLIC page can supply one without a garage to resolve it
+ * against; see publicPlanChoice.
+ */
+type ResolvedOffer = {
+  plan: PlanKind;
+  annualPennies: number;
+  discountPennies: number;
+  monthsPaid: number;
+  monthsGiven: number;
+  referrerName: string | null;
+};
+
+/**
+ * THE REFERRAL LINE ON THE PUBLIC PAGE, by CODE rather than by name.
+ *
+ * Signed in, a garage is told whose offer it is: "Referral offer from G B Jones — …". Signed out,
+ * naming the affiliate would publish who they are to anyone who guesses a code, so the public line
+ * echoes the code the visitor already arrived with and nothing we know about its owner.
+ *
+ * The two month figures are PASSED IN from the resolved choice, never typed here: the day
+ * months_given moves in the Engine Room this sentence moves with it.
+ *
+ * The code is echoed only after /api/affiliate/check-code has said it is one we know, and it is
+ * normalised first — an arbitrary query string rendered back to a visitor is somebody else's
+ * sentence printed in our voice.
+ */
+export const PUBLIC_REF_MAX = 32;
+export const normaliseRefCode = (raw: string | null | undefined): string | null => {
+  const v = (raw ?? '').trim().toUpperCase();
+  return /^[A-Z0-9][A-Z0-9-]{0,31}$/.test(v) ? v : null;
+};
+export const publicReferralSentence = (code: string, monthsGiven: number, monthsPaid: number): string =>
+  `Referral code ${code}: your first year is ${monthsGiven} months for the price of ${monthsPaid}.`;
+
 export async function planChoiceFor(
   db: Db = defaultDb,
   groupId: string,
   opts: { country?: string | null; sites?: number; trialEndsAt?: Date | null; settingsId?: string } = {},
 ): Promise<PlanChoice> {
-  const profile = getProfile(opts.country ?? DEFAULT_COUNTRY);
   // ONE READ, PASSED ON (owner, 2026-10-29). This used to read the settings and then let offerFor
   // read them again, so a price from the first read could appear beside a month count from the
   // second. The window is small and the symptom is a screen that contradicts itself.
   const settings = await planSettings(db, { settingsId: opts.settingsId, country: opts.country });
   const offer = await offerFor(db, groupId, { settingsId: opts.settingsId, settings });
+  return buildChoice(settings, offer, opts);
+}
+
+/**
+ * ── THE SAME FIGURES, WITH NO GARAGE TO RESOLVE THEM AGAINST (owner, 2026-10-29) ───────────────
+ * The public pricing page shows what a visitor would pay, and a visitor has no group id, no
+ * attribution row and no frozen terms. So the offer is SYNTHESISED from today's settings rather
+ * than looked up — which is the honest answer for someone who has not signed up: nothing is
+ * frozen yet, and the live setting is exactly what they will be quoted when they do.
+ *
+ * `referred` is the only input, and it is a BOOLEAN, never an amount or a code. Validity is
+ * decided elsewhere (the signup path resolves the code against the database; the public page asks
+ * /api/affiliate/check-code); this function is told yes or no and prices accordingly. A page that
+ * could pass in its own discount would be a page that sets the price.
+ *
+ * NO NAME, EVER. `referrerName: null` is not an omission — the public page must not publish who an
+ * affiliate is (an unauthenticated page naming them is a way to enumerate the affiliate list), so
+ * offerReason comes out as the nameless sentence by construction rather than by the page
+ * remembering to hide it.
+ */
+export async function publicPlanChoice(
+  db: Db = defaultDb,
+  opts: { country?: string | null; sites?: number; referred?: boolean; settingsId?: string } = {},
+): Promise<PlanChoice> {
+  const settings = await planSettings(db, { settingsId: opts.settingsId, country: opts.country });
+  const referred = !!opts.referred;
+  const offer: ResolvedOffer = {
+    plan: referred ? 'annual_offer' : 'annual_renewal',
+    annualPennies: renewalAnnualPennies(settings),
+    // ONE LOCATION, matching offerFor, which also answers per location. buildChoice multiplies.
+    discountPennies: referred ? firstYearDiscountPennies(settings, 1) : 0,
+    monthsPaid: referred ? settings.offerMonthsPaid : settings.renewalAnnualMonthsPaid,
+    monthsGiven: settings.monthsGiven,
+    referrerName: null,
+  };
+  return buildChoice(settings, offer, opts);
+}
+
+function buildChoice(
+  settings: PlanSettings,
+  offer: ResolvedOffer,
+  opts: { country?: string | null; sites?: number; trialEndsAt?: Date | null } = {},
+): PlanChoice {
+  const profile = getProfile(opts.country ?? DEFAULT_COUNTRY);
   const sites = Math.max(1, Math.trunc(opts.sites ?? 1));
 
   // THE TRIAL END. Passed in when the trial is already running (Group.trial_ends_at, which
@@ -175,6 +261,8 @@ export async function planChoiceFor(
       renewalTotalLabel: money(renewalTotal, profile),
       renewalPerLocationLabel: money(offer.annualPennies, profile),
       monthsFree,
+      monthsPaid,
+      monthsGiven,
       // A NAME WE NO LONGER HAVE IS NOT A REASON TO HIDE THE OFFER. If the rep row has gone the
       // sentence drops the "from X" clause and still explains the price, because the price is the
       // part the garage is about to be charged.

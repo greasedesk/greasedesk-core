@@ -9,7 +9,10 @@ import type { GetStaticProps } from 'next';
 import Seo from '@/components/marketing/Seo';
 import SiteChrome from '@/components/marketing/SiteChrome';
 import { PAGE_TITLE } from '@/lib/brand';
-import { perLocationLabel } from '@/lib/billing-pricing';
+// getStaticProps only — a module-scope reference would ship lib/db to the browser.
+// (lib/billing-pricing's perLocationLabel is gone from this file: the hero's price now comes
+//  from the settings through publicPlanChoice, like every other public figure.)
+import { publicPlanChoice } from '@/lib/plan-choice';
 // ALIASED, because this page's PROP is also called trialDays. One label, two subjects: the
 // client half of the file then reads as a use of the server import, and client-bundle-gate
 // correctly cannot tell the difference. The alias is the distinction, not a workaround.
@@ -66,7 +69,7 @@ const HERO_TILES = [
 const HERO_UNSOLD = (HERO.sellableHours - HERO.hoursSold - HERO.reworkHours).toFixed(2); // 168.40 − 87.25 − 12.00 = 69.15
 const HERO_RATE_GAP = HERO.postedRate - HERO.effRate; // 75.00 − 38.86 = 36.14 (posted − real: the per-hour shortfall)
 
-export default function HomePage({ trialDays: trial }: { trialDays: number }) {
+export default function HomePage({ trialDays: trial, perSite, perYear }: { trialDays: number; perSite: string; perYear: string }) {
   return (
     <>
       <Seo
@@ -114,7 +117,15 @@ export default function HomePage({ trialDays: trial }: { trialDays: number }) {
                   Talk to us
                 </Link>
               </div>
-              <p className="mt-4 text-sm text-muted">{perLocationLabel()} per site, per month · payment card required · cancel anytime.</p>
+              {/* NOT A TOGGLE HERE. The hero's job is one line, and a billing-period control in a
+                  caption is a decision asked of someone who has not yet read what the product is.
+                  It names BOTH prices and sends the comparison to /pricing, where the toggle is.
+                  Both figures come from publicPlanChoice — the same resolver and the same settings
+                  as that page and as signup — so the hero cannot quote a price the rest of the
+                  site has moved on from. */}
+              <p className="mt-4 text-sm text-muted" data-testid="home-price-line">
+                {`${perSite} per site, per month, or ${perYear} a year`} · payment card required · cancel anytime.
+              </p>
             </div>
 
             {/* Amendment 1 — dashboard-extract tile group (static marketing markup; app tile styling
@@ -193,11 +204,19 @@ export default function HomePage({ trialDays: trial }: { trialDays: number }) {
 // not: the save reported success and nothing happened, so the backstop WAS the mechanism and
 // nobody knew. Sixty seconds bounds the worst case to something nobody is harmed by, and the save
 // now reads this page back rather than believing the refresher.
-export const getStaticProps: GetStaticProps<{ trialDays: number }> = async () => {
+export const getStaticProps: GetStaticProps<{ trialDays: number; perSite: string; perYear: string }> = async () => {
   // A BLOCK BODY, not `=> ({ … })`. client-bundle-gate models tree-shaking by cutting the BRACED
   // body of each server data function; an expression-bodied arrow has no braced body, so the
   // import stays visible in the page's client half and reads as a leak. The gate is blind to that
   // shape — written up for its own fix — and in the meantime this is the form every other page
   // in the codebase already uses.
-  return { props: { trialDays: await readTrialDays() }, revalidate: 60 };
+  const [trialDays, choice] = await Promise.all([readTrialDays(), publicPlanChoice(undefined, { referred: false })]);
+  return {
+    props: {
+      trialDays,
+      perSite: choice.monthly.perLocationLabel,
+      perYear: choice.annual.renewalPerLocationLabel,
+    },
+    revalidate: 60,
+  };
 };
