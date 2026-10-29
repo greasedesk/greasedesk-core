@@ -22,10 +22,11 @@ import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, stripePriceId, appBaseUrl } from '@/lib/stripe';
 import { trialDays } from '@/lib/programme-settings';
 import {
-  planFor, planSettings, subscriptionLineFor, renewalAnnualPennies,
-  firstYearCouponId, firstYearCouponSpec, type PlanKind,
+  planSettings, subscriptionLineFor, renewalAnnualPennies,
+  type PlanKind,
 } from '@/lib/billing-plans';
-import { offerFor } from '@/lib/affiliate';
+import { offerFor, planForGarage } from '@/lib/affiliate';
+import { ensureFirstYearCoupon } from '@/lib/first-year-coupon';
 import { coreProductId } from '@/lib/modules';
 import { createHash } from 'node:crypto';
 import type Stripe from 'stripe';
@@ -163,7 +164,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // The settings this request already read — one read per request (owner, 2026-10-29).
   const offer = wantsAnnual ? await offerFor(prisma, groupId, { settings }) : null;
   const planKind: PlanKind = wantsAnnual ? (offer!.plan) : 'monthly';
-  const plan = planFor(planKind, settings, quantity);
+  // THROUGH THE FROZEN-AWARE RESOLVER, passing the offer this request already resolved so the
+  // months come from the garage's own terms rather than from today's settings.
+  const { plan } = await planForGarage(prisma, groupId, wantsAnnual ? planKind : 'monthly',
+    { settings, sites: quantity, offer: offer ?? undefined });
 
   let coreProduct: string | null = null;
   if (wantsAnnual) {
@@ -192,18 +196,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // rather than mutating a coupon that live subscriptions already point at. 409 is the ordinary
   // case (it exists), not an error. A failure to create it must not sell the offer at full price
   // silently, so it refuses.
+  // ONE HELPER, TWO ENDPOINTS (2026-10-29). change-plan needs exactly this when a garage switches
+  // to Yearly mid-trial, and a second copy would be a second place to forget that a failure must
+  // never quietly sell the offer at full price.
   let couponId: string | null = null;
   if (offer && offer.discountPennies > 0) {
-    const spec = firstYearCouponSpec(offer.discountPennies, wantCurrency);
-    couponId = firstYearCouponId(offer.discountPennies, wantCurrency);
-    try {
-      await stripe.coupons.create(spec as any);
-    } catch (e: any) {
-      if (e?.code !== 'resource_already_exists') {
-        console.error('[stripe] first-year coupon could not be created —', e?.message);
-        return res.status(503).json({ message: 'The referral offer is being set up — please try again shortly.' });
-      }
-    }
+    couponId = await ensureFirstYearCoupon(stripe, offer.discountPennies, wantCurrency);
+    if (!couponId) return res.status(503).json({ message: 'The referral offer is being set up — please try again shortly.' });
   }
 
   try {

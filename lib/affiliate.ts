@@ -21,7 +21,7 @@
 import { prisma as defaultDb } from '@/lib/db';
 import { getProgrammeSettings, type SettingsOpts } from '@/lib/programme-settings';
 import {
-  planFor, planSettings, writePlanTerms, currentPlanTerms, type PlanSettings,
+  planFor, planSettings, writePlanTerms, currentPlanTerms, type PlanSettings, type Plan,
   renewalAnnualPennies, firstYearDiscountPennies, type PlanKind,
 } from '@/lib/billing-plans';
 import { attributeGroup, type RefMatch } from '@/lib/attribution';
@@ -330,8 +330,18 @@ export async function offerFor(
   const everPaid = !!billing?.first_paid_at
     || (!!billing?.stripe_subscription_id && BILLED_STATES.includes(String(billing.subscription_status ?? '')));
 
-  // ALREADY TOOK IT = a TenantPlanTerms row naming the offer (owner definition, 2026-10-28).
-  const taken = await db.tenantPlanTerms.findFirst({ where: { group_id: groupId, plan: 'annual_offer' }, select: { id: true } });
+  // ── ALREADY TOOK IT = PAID UNDER IT (owner ruling, 2026-10-29) ───────────────────────────────
+  // Was: "a TenantPlanTerms row naming the offer exists". That made holding the offer for an hour
+  // during a trial the same as having spent it, so Yearly → Monthly → Yearly inside one trial cost
+  // the garage £300 for pressing a button twice. Nothing had been collected. The offer is spent
+  // when money moves under it: an annual_offer row AND a non-zero invoice actually paid.
+  //
+  // NOTE FOR A LATER READER: under the companion ruling (hasNeverPaid) this is now almost always
+  // subsumed — a garage with first_paid_at set is refused before reaching here. It is kept as a
+  // separate rule because the two answer different questions, and the day "never paid" is relaxed
+  // (say, monthly payers become eligible) this one becomes load-bearing again on its own.
+  const heldOffer = await db.tenantPlanTerms.findFirst({ where: { group_id: groupId, plan: 'annual_offer' }, select: { id: true } });
+  const taken = !!heldOffer && !!billing?.first_paid_at;
 
   // The attribution IS the code, resolved: refuseOffer's `code`/`codeValid` pair asks "was a code
   // given" and "was it real", and at this point both are answered by whether a referrer is on
@@ -372,6 +382,47 @@ export async function offerFor(
     monthsGiven: resolvedPlan === 'annual_offer' ? effective.monthsGiven : s.monthsGiven,
     offerFrozen: frozenOffer !== null,
   };
+}
+
+/**
+ * ── THE PLAN THIS GARAGE IS ON, WITH ITS OWN MONTHS (owner ruling, 2026-10-29) ──────────────────
+ * `planFor` is pure and reads whatever settings it is handed. That is the right shape for it, and
+ * it is exactly why three callers quietly got the wrong answer: each handed it TODAY's settings
+ * for a garage whose offer was frozen months ago. Checkout C charged £450 from offerFor while the
+ * webhook wrote `paid_now_pennies 60000 / months_paid 8` into TenantPlanTerms from the live
+ * setting — the record of what a garage agreed to contradicting the money it was charged.
+ *
+ * So this is the one place that answers "what plan is this garage on, and for how many months".
+ * It resolves the SHAPE through offerFor (frozen-aware) and hands planFor settings whose offer
+ * months are the ones actually being charged for. planFor stays pure; what changes is that nobody
+ * passes it live settings for a garage whose offer is frozen.
+ *
+ * The RENEWAL months are deliberately not overridden — they are the list price (same ruling), so
+ * an annual_renewal plan is priced from today's settings, which is correct.
+ *
+ * Pass `offer` when the caller has already resolved it, and `settings` when it has already read
+ * them: one read per request is the companion rule, and this function must not undo it.
+ */
+export async function planForGarage(
+  db: Db,
+  groupId: string,
+  shape: 'monthly' | PlanKind,
+  opts: {
+    settings?: PlanSettings;
+    sites?: number;
+    settingsId?: string;
+    offer?: Awaited<ReturnType<typeof offerFor>>;
+  } = {},
+): Promise<{ plan: Plan; offer: Awaited<ReturnType<typeof offerFor>> | null }> {
+  const settings = opts.settings ?? await planSettings(db, { settingsId: opts.settingsId });
+  const sites = Math.max(1, Math.trunc(opts.sites ?? 1));
+  if (shape === 'monthly') return { plan: planFor('monthly', settings, sites), offer: null };
+
+  const offer = opts.offer ?? await offerFor(db, groupId, { settings, settingsId: opts.settingsId });
+  // THE MONTHS offerFor ACTUALLY CHARGED FOR. For annual_offer that is the frozen figure; for
+  // annual_renewal planFor reads renewalAnnualMonthsPaid, which this leaves alone on purpose.
+  const effective: PlanSettings = { ...settings, offerMonthsPaid: offer.monthsPaid, monthsGiven: offer.monthsGiven };
+  return { plan: planFor(offer.plan, effective, sites), offer };
 }
 
 const norm = (v: string | null | undefined) => (v ?? '').trim().toLowerCase();

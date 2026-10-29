@@ -191,12 +191,24 @@ try {
     (await prisma.tenantAttribution.count({ where: { group_id: referred, ended_at: null } })) === 1);
   await AF.saveSettings(prisma, { signupsOpen: true }, { settingsId: SETTINGS });
 
+  // ── REVERSED 2026-10-29 ─────────────────────────────────────────────────────────────────────
+  // This asserted that merely HOLDING an annual_offer terms row spent the offer. Under that rule
+  // a referred garage that switched Yearly → Monthly → Yearly inside its trial lost £300 for
+  // pressing a button twice, with nothing collected. The offer is spent when money moves under
+  // it. (The refusal that now fires names PAYMENT rather than "already": hasNeverPaid and
+  // alreadyTaken both read first_paid_at, so the first one reached answers. That subsumption is
+  // deliberate and written down in offerFor.)
   const taken = await mkGarage('taken');
   await refer(taken);
   await BP.writePlanTerms(prisma, taken, BP.planFor('annual_offer', S));
+  const o4held = await AF.offerFor(prisma, taken, { settingsId: SETTINGS });
+  check('HOLDING the offer with nothing paid does not spend it',
+    o4held.plan === 'annual_offer' && o4held.refusal === null,
+    `${o4held.plan} / ${o4held.refusal ?? 'no refusal'} — this clause asserted the OPPOSITE until today`);
+  await prisma.groupBilling.update({ where: { group_id: taken }, data: { first_paid_at: new Date() } });
   const o4 = await AF.offerFor(prisma, taken, { settingsId: SETTINGS });
-  check('a garage that ALREADY took the offer cannot take it twice',
-    o4.plan === 'annual_renewal' && /already/i.test(o4.refusal), o4.refusal);
+  check('  …and a garage that has PAID under it cannot take it twice',
+    o4.plan === 'annual_renewal' && !!o4.refusal && o4.discountPennies === 0, o4.refusal);
 
   // ── WHAT ENDS THE OFFER IS MONEY, NOT A TRIAL (owner ruling, 2026-10-29) ────────────────────
   // This block asserted the 2026-10-28 definition until today: a subscription that had ever
@@ -297,6 +309,73 @@ try {
     `first year ${afterRenewal.annualPennies - afterRenewal.discountPennies}p, expected ${S.offerMonthsPaid * S.monthlyPricePennies}p — the COUPON absorbs the renewal change`);
   await prisma.programmeSettings.update({ where: { id: SETTINGS },
     data: { renewal_annual_months_paid: S.renewalAnnualMonthsPaid } });
+
+  // ── 5a-ii. THE RECORD AGREES WITH THE MONEY ─────────────────────────────────────────────────
+  // Checkout C: Stripe charged £450 under a six-month freeze while the webhook wrote
+  // `paid_now_pennies 60000 / months_paid 8` into TenantPlanTerms from TODAY's settings. The
+  // document of what a garage agreed to contradicted what it was being charged. The webhook now
+  // builds its plan through planForGarage, so the frozen months reach the timeline too.
+  console.log('\n— the terms row records the FROZEN months, not today\'s —');
+  const recGarage2 = await mkGarage('terms-frozen');
+  await refer(recGarage2);
+  await AF.freezeTermsAtSignup(prisma, recGarage2, {
+    affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000,
+  }, { settingsId: SETTINGS });
+  const FROZEN_AT = S.offerMonthsPaid;                 // 8 at signup
+  await AF.saveSettings(prisma, { offerMonthsPaid: FROZEN_AT - 2 }, { settingsId: SETTINGS });
+
+  const pfg = await AF.planForGarage(prisma, recGarage2, 'annual_offer', { settingsId: SETTINGS });
+  check('planForGarage charges the FROZEN months after the setting moved',
+    pfg.plan.monthsPaid === FROZEN_AT && pfg.plan.payNowPennies === FROZEN_AT * S.monthlyPricePennies,
+    `months ${pfg.plan.monthsPaid} (frozen ${FROZEN_AT}) | payNow ${pfg.plan.payNowPennies}p`);
+  // THE DISCRIMINATOR: planFor on today's settings gives the OTHER answer, so the clause above is
+  // not passing because both happen to agree.
+  const naive = BP.planFor('annual_offer', { ...S, offerMonthsPaid: FROZEN_AT - 2 });
+  check('  …and the naive answer really is different', naive.monthsPaid !== pfg.plan.monthsPaid,
+    `naive ${naive.monthsPaid} vs frozen ${pfg.plan.monthsPaid}`);
+  await AF.saveSettings(prisma, { offerMonthsPaid: S.offerMonthsPaid }, { settingsId: SETTINGS });
+
+  // ── 5a-iii. THE COUPON MOVES WITH THE PLAN, BOTH WAYS ───────────────────────────────────────
+  // Read off the PARAMETERS a switch sends to Stripe (lib/plan-switch), not off the source. A
+  // gate never calls Stripe; this is the object that would be sent.
+  console.log('\n— the coupon attaches going to yearly and comes OFF going to monthly —');
+  const PS = await import(`${R}/lib/plan-switch.ts`);
+  const line = { price_data: { product: CORE, currency: 'gbp', unit_amount: 75000, recurring: { interval: 'year' } } };
+  const toYearly = PS.planSwitchParams({ itemId: 'si_ZZ', line, quantity: 1, trialEnd: 1800000000,
+    metadata: { gd_plan: 'annual_offer' }, couponId: 'gd-first-year-15000-gbp' });
+  const toMonthly = PS.planSwitchParams({ itemId: 'si_ZZ', line: { price: 'price_ZZ' }, quantity: 1, trialEnd: 1800000000,
+    metadata: { gd_plan: 'monthly' }, couponId: null });
+  check('switching to YEARLY sends the coupon',
+    JSON.stringify(toYearly.discounts) === JSON.stringify([{ coupon: 'gd-first-year-15000-gbp' }]),
+    JSON.stringify(toYearly.discounts));
+  check('  …and switching to MONTHLY sends an EMPTY discounts list, which is what removes it',
+    Array.isArray(toMonthly.discounts) && toMonthly.discounts.length === 0,
+    `${JSON.stringify(toMonthly.discounts)} — omitting the field would LEAVE a once-only £150 to come off the first £75 invoice`);
+  check('  …and neither switch moves the trial end',
+    toYearly.trial_end === 1800000000 && toMonthly.trial_end === 1800000000,
+    'a switch changes what a garage is charged, never the date it was told it would be charged');
+  check('  …and both state proration explicitly', toYearly.proration_behavior === 'none' && toMonthly.proration_behavior === 'none');
+
+  // ── 5a-iv. A TRIAL SWITCH IS NOT TAKING THE OFFER ───────────────────────────────────────────
+  // Holding the offer for an hour during a trial used to spend it: Yearly → Monthly → Yearly cost
+  // £300 for pressing a button twice, with nothing collected. The offer is spent when money moves.
+  console.log('\n— a switch during the trial does not spend the offer —');
+  const switcher = await mkGarage('switcher');
+  await refer(switcher);
+  await AF.freezeTermsAtSignup(prisma, switcher, {
+    affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000,
+  }, { settingsId: SETTINGS });
+  await BP.writePlanTerms(prisma, switcher, BP.planFor('annual_offer', S));   // took it…
+  await BP.writePlanTerms(prisma, switcher, BP.planFor('monthly', S));        // …switched away…
+  const stillOffered = await AF.offerFor(prisma, switcher, { settingsId: SETTINGS });
+  check('a garage that HELD the offer but paid nothing keeps it',
+    stillOffered.plan === 'annual_offer' && stillOffered.refusal === null && stillOffered.discountPennies > 0,
+    `${stillOffered.plan} / ${stillOffered.refusal ?? 'no refusal'}`);
+  await prisma.groupBilling.update({ where: { group_id: switcher }, data: { first_paid_at: new Date() } });
+  const afterPaying = await AF.offerFor(prisma, switcher, { settingsId: SETTINGS });
+  check('  …and loses it the moment a non-zero invoice is PAID under it',
+    afterPaying.plan === 'annual_renewal' && !!afterPaying.refusal, afterPaying.refusal);
+  await prisma.groupBilling.update({ where: { group_id: switcher }, data: { first_paid_at: null } });
 
   // ── 5b. THE WRITER OF THE EVIDENCE ──────────────────────────────────────────────────────────
   // The clauses above read first_paid_at. This block is about who PUTS it there — without it the

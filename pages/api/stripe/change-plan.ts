@@ -21,8 +21,10 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, stripePriceId } from '@/lib/stripe';
-import { planFor, planSettings, subscriptionLineFor, renewalAnnualPennies, type PlanKind } from '@/lib/billing-plans';
-import { offerFor } from '@/lib/affiliate';
+import { planSettings, subscriptionLineFor, renewalAnnualPennies, type PlanKind } from '@/lib/billing-plans';
+import { offerFor, planForGarage } from '@/lib/affiliate';
+import { ensureFirstYearCoupon } from '@/lib/first-year-coupon';
+import { planSwitchParams } from '@/lib/plan-switch';
 import { coreProductId } from '@/lib/modules';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { writeAudit } from '@/lib/audit';
@@ -78,7 +80,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // The settings this request already read — one read per request (owner, 2026-10-29).
   const offer = want === 'annual' ? await offerFor(prisma, groupId, { settings }) : null;
   const planKind: PlanKind = want === 'annual' ? offer!.plan : 'monthly';
-  const plan = planFor(planKind, settings, quantity);
+  // FROZEN-AWARE (2026-10-29). This read planFor(planKind, settings) — today's settings — so a
+  // garage whose offer was frozen at six months was told, and audited at, the live figure.
+  const { plan } = await planForGarage(prisma, groupId, planKind, { settings, sites: quantity, offer: offer ?? undefined });
+
+  // ── THE COUPON MOVES WITH THE PLAN, IN BOTH DIRECTIONS (owner ruling, 2026-10-29) ────────────
+  // Attaching it was simply missing: change-plan resolved the offer, reported discountPennies in
+  // its JSON, and never told Stripe — so a garage quoted £450 on the licences screen would have
+  // been charged £750 at trial end. REMOVING it matters just as much and is easier to miss: a
+  // duration:'once' coupon left on a subscription that has switched to MONTHLY comes off the
+  // first £75 invoice instead, which is the offer being spent on a month.
+  let couponId: string | null = null;
+  if (want === 'annual' && offer && offer.discountPennies > 0) {
+    couponId = await ensureFirstYearCoupon(stripe, offer.discountPennies, currency);
+    if (!couponId) return res.status(503).json({ message: 'The referral offer is being set up — please try again shortly.' });
+  }
 
   let coreProduct: string | null = null;
   if (want === 'annual') {
@@ -95,14 +111,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   try {
-    await stripe.subscriptions.update(sub.id, {
-      items: [{ id: item.id, ...(line as any), quantity }],
-      proration_behavior: 'none',   // stated, not inherited — see the file header
-      // The trial end is NOT touched. Switching plan must not move the date the garage was told
-      // it would be charged; it changes only what it is charged.
-      trial_end: (sub as any).trial_end ?? undefined,
+    // BUILT IN lib/plan-switch, where a gate can read the object without calling Stripe. The
+    // trial end is carried through untouched: a switch changes what a garage is charged, never
+    // the date it was told it would be charged.
+    await stripe.subscriptions.update(sub.id, planSwitchParams({
+      itemId: item.id, line: line as any, quantity,
+      trialEnd: (sub as any).trial_end,
       metadata: { ...(sub.metadata ?? {}), gd_plan: planKind },
-    });
+      couponId,
+    }));
   } catch (e: any) {
     console.error('[stripe] change-plan: update failed —', e?.message);
     await writeAudit(prisma as any, {

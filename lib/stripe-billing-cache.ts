@@ -151,11 +151,16 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   const shape = (sub.metadata as Record<string, string> | null)?.gd_plan;
   if (shape) {
     try {
-      const { planFor, planSettings, writePlanTerms } = await import('@/lib/billing-plans');
+      const { planSettings, writePlanTerms } = await import('@/lib/billing-plans');
+      const { planForGarage } = await import('@/lib/affiliate');
       const group = await prisma.group.findUnique({ where: { id: groupId }, select: { country_code: true } });
       const sites = Math.max(1, (sub.items?.data ?? []).reduce((n, i) => n + (i.quantity ?? 1), 0));
       const settings = await planSettings(prisma, { country: group?.country_code });
-      await writePlanTerms(prisma, groupId, planFor(shape as any, settings, sites));
+      // FROZEN-AWARE (2026-10-29). This called planFor with TODAY's settings, so checkout C
+      // recorded `paid_now_pennies 60000 / months_paid 8` for a garage Stripe was charging £450
+      // under a six-month freeze: the document of what was agreed contradicting the money.
+      const { plan } = await planForGarage(prisma, groupId, shape as any, { settings, sites });
+      await writePlanTerms(prisma, groupId, plan);
     } catch (e: any) {
       // NON-FATAL, and loudly so. The billing cache is what decides access; the terms row is the
       // record of what was agreed. Losing the second must never cost the tenant the first.
