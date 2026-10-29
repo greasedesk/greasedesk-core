@@ -2059,6 +2059,22 @@ model GroupBilling {
   grace_started_at DateTime?
   grace_reason     String? // 'trial_ended' | 'payment_failed'
 
+  // ── THE FIRST MONEY THAT EVER ARRIVED (owner ruling, 2026-10-29) ───────────────────────────
+  // Written ONCE by the invoice.paid handler, the first time a NON-ZERO invoice is paid, and
+  // never overwritten. A £0 trial invoice is not a payment and does not set it.
+  //
+  // It exists because "is this a new garage?" had no honest answer. The affiliate offer used to
+  // ask whether a subscription had ever reached trialing — which made a referred garage that
+  // signed up monthly and switched to yearly mid-trial ineligible, while the same garage
+  // choosing yearly at signup got the £300. The question the offer actually means is whether we
+  // have ever been paid, and nothing in this database recorded that: the commission accrual is
+  // about a REP, writes nothing when there is no attribution, and writes zero during the trial.
+  //
+  // NULL means "no non-zero payment recorded", which for a garage that paid before this column
+  // landed is not the same as "never paid" — see offerFor, which reads the subscription status
+  // alongside for exactly that population.
+  first_paid_at DateTime?
+
   group Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
 }
 

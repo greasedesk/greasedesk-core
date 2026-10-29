@@ -161,3 +161,43 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
 
   return groupId;
 }
+
+// ── THE FIRST MONEY, RECORDED ONCE (owner ruling, 2026-10-29) ───────────────────────────────────
+// "Is this a new garage?" used to be answered by "has a subscription ever reached trialing", which
+// made the affiliate offer depend on which button was pressed at signup rather than on whether we
+// had ever been paid. The ruling is that the offer survives a switch during the trial, so the
+// question has to be the real one — and nothing in this database answered it. The commission
+// accrual is the nearest thing and is about a REP: it writes nothing when there is no attribution
+// and writes zero during the trial, so reading it would be reading a different subject.
+//
+// A £0 trial invoice is NOT a payment. That is the whole distinction the ruling turns on, so it is
+// the first thing this checks.
+const unixToDateC = (s: number | null | undefined): Date | null => (s ? new Date(s * 1000) : null);
+const idOfC = (v: string | { id: string } | null | undefined): string | null =>
+  (typeof v === 'string' ? v : v?.id) ?? null;
+
+export type FirstPaymentResult = 'recorded' | 'already recorded' | 'not a payment' | 'unknown customer';
+
+/**
+ * Stamp GroupBilling.first_paid_at the first time a non-zero invoice is paid. WRITTEN ONCE and
+ * never overwritten: this is the date we were FIRST paid, so a later invoice must not move it.
+ * Idempotent, so a re-delivered webhook is a no-op.
+ */
+export async function recordFirstPayment(db: typeof prisma, invoice: Stripe.Invoice): Promise<FirstPaymentResult> {
+  const inv = invoice as any;
+  const amountPaid: number = inv.amount_paid ?? 0;
+  if (amountPaid <= 0) return 'not a payment';
+
+  const customerId = idOfC(inv.customer);
+  if (!customerId) return 'unknown customer';
+  const billing = await db.groupBilling.findUnique({
+    where: { stripe_customer_id: customerId },
+    select: { group_id: true, first_paid_at: true },
+  });
+  if (!billing) return 'unknown customer';
+  if (billing.first_paid_at) return 'already recorded';
+
+  const paidAt = unixToDateC(inv.status_transitions?.paid_at) ?? unixToDateC(inv.created) ?? new Date();
+  await db.groupBilling.update({ where: { group_id: billing.group_id }, data: { first_paid_at: paidAt } });
+  return 'recorded';
+}

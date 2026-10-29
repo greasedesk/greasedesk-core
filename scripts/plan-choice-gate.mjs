@@ -280,20 +280,32 @@ try {
   check('  …showing the SAME chooser, derived the same way', licTrial.html.includes('data-testid="plan-choice"')
     && licTrial.html.includes('data-testid="plan-toggle-annual"'),
     'one resolver and one renderer, or the figures a garage switches on are not the figures it was quoted');
-  // THE OFFER IS SPENT THE MOMENT A SUBSCRIPTION EXISTS, and this fixture IS referred — so the
-  // RENEWAL figures here are not an oversight, they are refuseOffer's `isNewGarage: !everLive`
-  // reaching the screen. A trialing garage has `everLive` true, so a referred garage that signed
-  // up on monthly and switches to yearly mid-trial is quoted (and charged) the renewal price,
-  // while the same garage choosing yearly at signup pays the offer price. That is the owner's
-  // 2026-10-28 definition read literally; it is asserted here rather than assumed so that the day
-  // anybody decides a trial switch should keep the offer, this clause goes red and says where.
-  check('  …and the offer is NOT re-quoted to a garage that already has a subscription',
-    textOf(licTrial.html, 'plan-headline-annual') === poundsExact(expectRenewalEquiv)
-    && textOf(licTrial.html, 'plan-saving-pct') === `Save ${expectRenewalPct}%`,
-    `${textOf(licTrial.html, 'plan-headline-annual')} / ${textOf(licTrial.html, 'plan-saving-pct')} vs ${poundsExact(expectRenewalEquiv)} / Save ${expectRenewalPct}% — referred, but everLive, so offerFor returns annual_renewal`);
-  check('  …and the charge sentence agrees with the headline', (textOf(licTrial.html, 'plan-trial-annual') ?? '').includes(pounds(expectRenewal))
-    && !(textOf(licTrial.html, 'plan-trial-annual') ?? '').includes(pounds(expectOffer)),
+  // THE OFFER SURVIVES A SWITCH DURING THE TRIAL (owner ruling, 2026-10-29). This asserted the
+  // OPPOSITE yesterday: the fixture is referred and trialing, and under the 2026-10-28 definition
+  // a trialing subscription made it "not a new garage", so the screen quoted the renewal price.
+  // The £300 therefore turned on which button was pressed at signup. It no longer does — what
+  // ends the offer is having paid — so the OFFER figures must reach this screen, which is the
+  // whole of the ruling and the one place it is visible to a garage.
+  check('  …and a referred garage that has NOT paid is quoted the OFFER here too',
+    textOf(licTrial.html, 'plan-headline-annual') === poundsExact(expectOfferEquiv)
+    && textOf(licTrial.html, 'plan-saving-pct') === `Save ${expectOfferPct}%`,
+    `${textOf(licTrial.html, 'plan-headline-annual')} / ${textOf(licTrial.html, 'plan-saving-pct')} vs ${poundsExact(expectOfferEquiv)} / Save ${expectOfferPct}%`);
+  check('  …with BOTH prices, because a switch is as much a mis-sale risk as a signup',
+    (textOf(licTrial.html, 'plan-renewal-annual') ?? '').includes(pounds(expectOffer))
+    && (textOf(licTrial.html, 'plan-renewal-annual') ?? '').includes(pounds(expectRenewal)),
+    textOf(licTrial.html, 'plan-renewal-annual'));
+  check('  …and the charge sentence agrees with the headline', (textOf(licTrial.html, 'plan-trial-annual') ?? '').includes(pounds(expectOffer)),
     textOf(licTrial.html, 'plan-trial-annual'));
+
+  // AND THE MOMENT MONEY ARRIVES, IT IS GONE. The same fixture, one column later: this is the
+  // clause that stops "the offer survives a trial switch" quietly becoming "the offer never ends".
+  await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: new Date() } });
+  const licPaid = await get('/admin/settings/licences');
+  check('  …but a garage that has PAID is back to the renewal price',
+    textOf(licPaid.html, 'plan-headline-annual') === poundsExact(expectRenewalEquiv)
+    && !licPaid.html.includes('data-testid="plan-renewal-annual"'),
+    `${textOf(licPaid.html, 'plan-headline-annual')} vs ${poundsExact(expectRenewalEquiv)}`);
+  await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: null } });
 
   await prisma.groupBilling.update({ where: { group_id: groupId }, data: { subscription_status: 'active' } });
   const licActive = await get('/admin/settings/licences');

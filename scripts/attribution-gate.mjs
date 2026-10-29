@@ -343,10 +343,10 @@ try {
     await prisma.group.delete({ where: { id: g.id } }).catch(() => {});
   }
   check('  …while the OFFER itself is refused',
-    !!AF.refuseOffer({ code: `${PREFIX}AFF`, codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: false }));
+    !!AF.refuseOffer({ code: `${PREFIX}AFF`, codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }));
   check('  …and the refusal says what it actually closed',
-    /offer/i.test(AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: false }))
-      && !/programme is closed to new signups/i.test(AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: false })),
+    /offer/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }))
+      && !/programme is closed to new signups/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false })),
     'the old wording read as though affiliates could no longer join, which nothing here controls');
   check('  …and the Engine Room label says the same thing',
     /offer/i.test((await import(`${R}/lib/programme-settings.ts`)).PLAN_SETTING_LABEL.affiliate_signups_open));

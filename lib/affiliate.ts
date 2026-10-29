@@ -229,7 +229,7 @@ export async function rewardTrialStarted(_db: Db, _args: { groupId: string }): P
 }
 
 /** Why this garage may not take the affiliate offer, or null when it may. */
-export function refuseOffer(a: { code: string | null; codeValid: boolean; isNewGarage: boolean; alreadyTaken: boolean; signupsOpen: boolean }): string | null {
+export function refuseOffer(a: { code: string | null; codeValid: boolean; hasNeverPaid: boolean; alreadyTaken: boolean; signupsOpen: boolean }): string | null {
   // THE SWITCH GATES THE OFFER, NEVER THE ATTRIBUTION (owner, 2026-10-28). It decides whether a new
   // garage may have the 12-for-8 price, not whether affiliates may join and not whether a referral
   // is recorded — a garage that arrives on a link is credited to the affiliate either way, because
@@ -239,7 +239,12 @@ export function refuseOffer(a: { code: string | null; codeValid: boolean; isNewG
   if (!a.signupsOpen) return 'The affiliate offer is not available to new garages at the moment.';
   if (!a.code) return 'The affiliate offer needs a referral code.';
   if (!a.codeValid) return 'That referral code is not one we recognise.';
-  if (!a.isNewGarage) return 'The affiliate offer is for a new garage only.';
+  // NOT "has never been trialing" (owner ruling, 2026-10-29 — THIS REVERSES 2026-10-28). The old
+  // flag was named isNewGarage and meant "no subscription has ever reached trialing", so the offer
+  // was lost by pressing Monthly at signup and switching to Yearly an hour later, while the garage
+  // that left the toggle alone kept £300. A trial is not a purchase. What ends the offer is money
+  // having changed hands — and `alreadyTaken` still stops a second one.
+  if (!a.hasNeverPaid) return 'The affiliate offer is for a garage that has not yet paid for GreaseDesk.';
   if (a.alreadyTaken) return 'This garage has already taken the affiliate offer.';
   return null;
 }
@@ -285,13 +290,24 @@ export async function offerFor(
   const attribution = await affiliateFor(db, groupId);
   const frozen = attribution ? await termsFor(db, groupId) : null;
 
-  // NEVER HAD A SUBSCRIPTION THAT REACHED active OR trialing (owner definition, 2026-10-28).
-  // Read from the billing cache, which is Stripe's truth projected, not from our own guess at it.
+  // HAS THIS GARAGE EVER PAID US? (owner ruling, 2026-10-29, REVERSING the 2026-10-28 definition
+  // of "never had a subscription that reached active OR trialing".) Read from the billing cache,
+  // which is Stripe's truth projected, not from our own guess at it.
   const billing = await db.groupBilling.findUnique({
-    where: { group_id: groupId }, select: { subscription_status: true, stripe_subscription_id: true },
+    where: { group_id: groupId },
+    select: { subscription_status: true, stripe_subscription_id: true, first_paid_at: true },
   });
-  const everLive = !!billing?.stripe_subscription_id
-    && ['active', 'trialing', 'past_due', 'canceled', 'unpaid', 'paused'].includes(String(billing.subscription_status ?? ''));
+  // TWO SOURCES, BECAUSE ONE OF THEM ONLY STARTS ON 2026-10-29. first_paid_at is the real answer
+  // and is written by the invoice.paid handler the first time a non-zero invoice is paid. A garage
+  // that paid us before that column existed has none, and reading it alone would hand the offer to
+  // an established paying tenant the day an affiliate link finally resolved against its signup_ref.
+  // So the subscription status is read alongside, limited to the states a subscription can only be
+  // in AFTER its trial produced a chargeable invoice. 'trialing' is deliberately NOT among them —
+  // that is the whole of the ruling. Nor are 'canceled' and 'paused', which a trial reaches
+  // without ever being billed.
+  const BILLED_STATES = ['active', 'past_due', 'unpaid'];
+  const everPaid = !!billing?.first_paid_at
+    || (!!billing?.stripe_subscription_id && BILLED_STATES.includes(String(billing.subscription_status ?? '')));
 
   // ALREADY TOOK IT = a TenantPlanTerms row naming the offer (owner definition, 2026-10-28).
   const taken = await db.tenantPlanTerms.findFirst({ where: { group_id: groupId, plan: 'annual_offer' }, select: { id: true } });
@@ -304,7 +320,7 @@ export async function offerFor(
   const refusal = refuseOffer({
     code: referrer,
     codeValid: !!attribution,
-    isNewGarage: !everLive,
+    hasNeverPaid: !everPaid,
     alreadyTaken: !!taken,
     signupsOpen: terms.signupsOpen,
   });

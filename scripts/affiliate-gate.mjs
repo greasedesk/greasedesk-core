@@ -194,13 +194,13 @@ try {
 
   // ── 7. WHO MAY TAKE THE OFFER ───────────────────────────────────────────────────────────────
   console.log('\n— who may take the offer —');
-  check('no code, no offer', !!AF.refuseOffer({ code: null, codeValid: false, isNewGarage: true, alreadyTaken: false, signupsOpen: true }));
-  check('an unknown code is refused', !!AF.refuseOffer({ code: 'NOPE', codeValid: false, isNewGarage: true, alreadyTaken: false, signupsOpen: true }));
-  check('an EXISTING garage is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: false, alreadyTaken: false, signupsOpen: true }));
-  check('a garage that already took it is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: true, signupsOpen: true }));
+  check('no code, no offer', !!AF.refuseOffer({ code: null, codeValid: false, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }));
+  check('an unknown code is refused', !!AF.refuseOffer({ code: 'NOPE', codeValid: false, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }));
+  check('an EXISTING garage is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: false, alreadyTaken: false, signupsOpen: true }));
+  check('a garage that already took it is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: true, signupsOpen: true }));
   // THE DISCRIMINATOR: all four above pass against a function that refuses everything.
   check('  …and a NEW garage with a valid code is ALLOWED',
-    AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: true }) === null,
+    AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }) === null,
     'otherwise the four refusals above prove only that the door is nailed shut');
 
   // ── REVERSED 2026-10-28 ─────────────────────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ try {
   console.log('\n— closing signups —');
   await AF.saveSettings(prisma, { signupsOpen: false }, { settingsId: SETTINGS });
   check('a closed programme refuses a new signup',
-    !!AF.refuseOffer({ code: 'X', codeValid: true, isNewGarage: true, alreadyTaken: false, signupsOpen: false }));
+    !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }));
   const earnedBefore = (await prisma.commissionEntry.aggregate({ where: { group_id: g3 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
   check('  …and leaves what was already EARNED alone', earnedBefore === 12000, `£${(earnedBefore / 100).toFixed(2)}`);
   const g6 = await mkGarage(6);

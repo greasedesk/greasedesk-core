@@ -198,12 +198,80 @@ try {
   check('a garage that ALREADY took the offer cannot take it twice',
     o4.plan === 'annual_renewal' && /already/i.test(o4.refusal), o4.refusal);
 
-  const live = await mkGarage('live');
-  await refer(live);
-  await prisma.groupBilling.update({ where: { group_id: live }, data: { stripe_subscription_id: 'sub_ZZANN', subscription_status: 'active' } });
-  const o5 = await AF.offerFor(prisma, live, { settingsId: SETTINGS });
-  check('a garage that has HAD a subscription is not a new garage',
-    /new garage/i.test(o5.refusal ?? ''), o5.refusal);
+  // ── WHAT ENDS THE OFFER IS MONEY, NOT A TRIAL (owner ruling, 2026-10-29) ────────────────────
+  // This block asserted the 2026-10-28 definition until today: a subscription that had ever
+  // reached `trialing` made the garage "not new" and cost it the offer. That made the £300 turn
+  // on which button was pressed at signup — a referred garage that chose monthly and switched to
+  // yearly an hour later lost it, while the one that left the toggle alone kept it. The three
+  // clauses below are the reversal, and the first of them is the one that was red before it.
+  const trialing = await mkGarage('trialing');
+  await refer(trialing);
+  await prisma.groupBilling.update({ where: { group_id: trialing }, data: { stripe_subscription_id: 'sub_ZZANNT', subscription_status: 'trialing' } });
+  const o5 = await AF.offerFor(prisma, trialing, { settingsId: SETTINGS });
+  check('a TRIALING garage has not paid, so it keeps the offer',
+    o5.plan === 'annual_offer' && o5.refusal === null && o5.discountPennies > 0,
+    `${o5.plan} / ${o5.refusal ?? 'no refusal'} / ${o5.discountPennies}p — a trial is not a purchase`);
+
+  const paid = await mkGarage('paid');
+  await refer(paid);
+  await prisma.groupBilling.update({ where: { group_id: paid }, data: { stripe_subscription_id: 'sub_ZZANNP', subscription_status: 'trialing', first_paid_at: new Date('2026-06-01T00:00:00Z') } });
+  const o6 = await AF.offerFor(prisma, paid, { settingsId: SETTINGS });
+  check('  …and a garage that HAS paid loses it, whatever its status says',
+    o6.plan === 'annual_renewal' && /paid/i.test(o6.refusal ?? ''), o6.refusal);
+
+  // THE UNRECORDED PAST. first_paid_at only starts on 2026-10-29, so a garage that paid before it
+  // existed has none; an 'active' subscription is the evidence that stands in for it. Without this
+  // limb the offer would be handed to an established paying tenant the day an affiliate link
+  // finally resolved against its signup_ref.
+  const legacy = await mkGarage('legacy');
+  await refer(legacy);
+  await prisma.groupBilling.update({ where: { group_id: legacy }, data: { stripe_subscription_id: 'sub_ZZANNL', subscription_status: 'active' } });
+  const o7 = await AF.offerFor(prisma, legacy, { settingsId: SETTINGS });
+  check('  …and an ACTIVE garage with no recorded payment is still treated as having paid',
+    o7.plan === 'annual_renewal' && /paid/i.test(o7.refusal ?? ''),
+    `${o7.refusal} — active is only reachable THROUGH a chargeable invoice`);
+
+  // ── 5b. THE WRITER OF THE EVIDENCE ──────────────────────────────────────────────────────────
+  // The clauses above read first_paid_at. This block is about who PUTS it there — without it the
+  // whole rule rests on a column that nothing is proved to write, which is how a rule becomes a
+  // permanently-NULL field that silently grants the offer for ever. No Stripe call: the handler
+  // takes an invoice-shaped object, so the gate hands it one.
+  console.log('\n— recording the first payment —');
+  const CACHE = await import(`${R}/lib/stripe-billing-cache.ts`);
+  const recGarage = await mkGarage('rec');
+  const CUST = `cus_${PREFIX}REC`;
+  await prisma.groupBilling.update({ where: { group_id: recGarage }, data: { stripe_customer_id: CUST } });
+  const invoiceOf = (amountPaid, paidAtIso) => ({
+    id: `in_${PREFIX}_${amountPaid}_${paidAtIso}`, customer: CUST, amount_paid: amountPaid,
+    status_transitions: { paid_at: Math.floor(new Date(paidAtIso).getTime() / 1000) },
+  });
+  const paidAtOf = async () => (await prisma.groupBilling.findUnique({ where: { group_id: recGarage }, select: { first_paid_at: true } }))?.first_paid_at ?? null;
+
+  // THE £0 TRIAL INVOICE. Every garage gets one at checkout, and treating it as a payment would
+  // make every garage ineligible the instant it signed up — the old bug with a new cause.
+  const zero = await CACHE.recordFirstPayment(prisma, invoiceOf(0, '2026-03-01T00:00:00Z'));
+  check('a ZERO invoice is not a payment', zero === 'not a payment' && (await paidAtOf()) === null, zero);
+
+  const first = await CACHE.recordFirstPayment(prisma, invoiceOf(75000, '2026-04-01T00:00:00Z'));
+  const afterFirst = await paidAtOf();
+  check('  …and a non-zero one is stamped, at the time it was PAID',
+    first === 'recorded' && afterFirst?.toISOString() === '2026-04-01T00:00:00.000Z', `${first} / ${afterFirst?.toISOString()}`);
+
+  // WRITTEN ONCE. This is the date we were FIRST paid; a later invoice moving it would turn the
+  // column into "last paid" under the same name, and a re-delivered webhook must be a no-op.
+  const second = await CACHE.recordFirstPayment(prisma, invoiceOf(75000, '2026-09-01T00:00:00Z'));
+  check('  …and a LATER payment does not move it',
+    second === 'already recorded' && (await paidAtOf())?.toISOString() === '2026-04-01T00:00:00.000Z', second);
+
+  const stranger = await CACHE.recordFirstPayment(prisma, { id: 'in_nobody', customer: 'cus_NOBODY', amount_paid: 50000, status_transitions: { paid_at: 1 } });
+  check('  …and an invoice for a customer we do not know is skipped, not thrown',
+    stranger === 'unknown customer', stranger);
+
+  // AND IT REACHES THE RULE. Proving the writer and the reader separately leaves the join untested.
+  await refer(recGarage);
+  const oRec = await AF.offerFor(prisma, recGarage, { settingsId: SETTINGS });
+  check('  …and the stamp the handler wrote is what ends the offer',
+    oRec.plan === 'annual_renewal' && /paid/i.test(oRec.refusal ?? ''), oRec.refusal);
 
   // ── 6. THE TERMS ROW RECORDS BOTH, WHICH THE OLD CHECK FORBADE ──────────────────────────────
   console.log('\n— what the timeline records —');

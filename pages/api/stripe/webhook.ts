@@ -19,7 +19,7 @@ import { prisma } from '@/lib/db';
 import { recordTopUpFromSession } from '@/lib/sms-topup';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { sendTrialEndingReminder } from '@/lib/trial-reminder';
-import { applyStripeSubscriptionToCache } from '@/lib/stripe-billing-cache';
+import { applyStripeSubscriptionToCache, recordFirstPayment } from '@/lib/stripe-billing-cache';
 import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
 import { countryMismatch } from '@/lib/billing-country';
 import { writeAudit } from '@/lib/audit';
@@ -153,8 +153,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       }
       case 'invoice.paid': {
-        const r = await accrueFromInvoicePaid(prisma, event.data.object as Stripe.Invoice);
-        console.log('[stripe] invoice.paid →', JSON.stringify(r));
+        const invoice = event.data.object as Stripe.Invoice;
+        // THE MONEY FIRST. Recording that we have been paid is the simpler, unconditional write;
+        // the accrual below resolves attributions, runs the commission engine and can legitimately
+        // refuse. If the accrual threw first, the payment would go unrecorded and the garage would
+        // still look like it had never paid us — and the affiliate offer reads exactly that.
+        const paid = await recordFirstPayment(prisma, invoice);
+        const r = await accrueFromInvoicePaid(prisma, invoice);
+        console.log('[stripe] invoice.paid → first payment:', paid, '| accrual:', JSON.stringify(r));
         break;
       }
       case 'charge.refunded': {
