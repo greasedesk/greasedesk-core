@@ -29,18 +29,50 @@ import { attributeGroup, type RefMatch } from '@/lib/attribution';
 type Db = any; // a PrismaClient or an interactive-transaction client
 
 /**
- * ── TODO, AWAITING AN OWNER RULING (raised 2026-10-26) ─────────────────────────────────────────
- * WHAT HAPPENS TO A REWARD WHEN THE INVOICE THAT EARNED IT IS REFUNDED OR CHARGED BACK?
+ * ── THE REWARD FOLLOWS THE MONEY (owner ruling, 2026-10-29) ────────────────────────────────────
+ * This replaces REFUND_POLICY_UNDECIDED, a flag that was true, had no reader, and existed to make
+ * an unanswered question visible. The question is answered.
  *
- * Nothing here handles it, deliberately, rather than guessing. The mechanism already exists —
- * CommissionEntry.kind is 'accrual' | 'clawback' and the reseller side wires charge.refunded to a
- * clawback — so this is a policy question, not a plumbing one. Two things the ruling has to
- * separate, because they are not the same event: a REFUND is us giving money back, a CHARGEBACK
- * is the bank taking it, and they differ in timing, cost and who decided. Until it is answered, a
- * refunded invoice leaves its reward standing, which is a choice this comment makes visible
- * rather than one the code makes quietly.
+ *   A reward becomes PAYABLE 14 days after the invoice that earned it was paid.
+ *   If that money goes back, the reward is REVERSED.
+ *   If the reward had already been paid out, the reversal stands against FUTURE rewards.
+ *
+ * ── A REFUND AND A CHARGEBACK ARE NOT ONE EVENT, AND ONLY ONE IS WIRED ─────────────────────────
+ * A refund is us giving money back; a chargeback is the bank taking it, and they differ in timing,
+ * cost and who decided. The POLICY above covers both and is written into the affiliate terms. The
+ * PLUMBING covers the refund half only: `reverseAffiliateReward` is called from
+ * lib/commission-billing on charge.refunded. Nothing in this codebase handles charge.dispute.* —
+ * the Dispute model is designed and unbuilt — so the chargeback half is on the board against that
+ * work rather than claimed here. Said plainly because "the reward follows the money" reads as
+ * complete, and today it is complete for one of the two ways money leaves.
  */
-export const REFUND_POLICY_UNDECIDED = true;
+
+/**
+ * THE HOLD, IN DAYS. Fourteen, from the paid date of the invoice.
+ *
+ * DERIVED, NEVER STORED (owner, 2026-10-29). CommissionEntry.status already has a `held` value,
+ * but it is an area manager's hold from lib/rep-pay-run::HOLD_REASONS, paired to `held_reason` by
+ * a CHECK. A time hold is a different fact, and putting it in those two columns would make a
+ * released line indistinguishable from a matured one.
+ *
+ * A CONSTANT rather than a setting, also deliberately. If the hold length were live and an
+ * operator shortened it, money already earned would become payable earlier than the terms the
+ * affiliate accepted said — so if it ever needs to move, it belongs in the FROZEN terms
+ * (TenantAffiliateTerms), not in ProgrammeSettings. One number here until that day.
+ */
+export const AFFILIATE_HOLD_DAYS = 14;
+
+/** When a reward earned by an invoice paid at `paidAt` becomes payable. */
+export const rewardPayableFrom = (paidAt: Date): Date =>
+  new Date(paidAt.getTime() + AFFILIATE_HOLD_DAYS * 24 * 60 * 60 * 1000);
+
+/**
+ * Is it payable yet? Three states, not two, and the caller must keep them apart: ACCRUED (earned,
+ * inside the hold), PAYABLE (matured), and REVERSED (the money went back). "Not payable" alone
+ * would merge the first and the last, and the portal shows them as different things.
+ */
+export const rewardIsPayable = (a: { paidAt: Date; now?: Date }): boolean =>
+  (a.now ?? new Date()).getTime() >= rewardPayableFrom(a.paidAt).getTime();
 
 /** The programme-wide reward terms as they stand today, for a garage signing up now. */
 export async function currentTerms(db: Db = defaultDb, opts?: SettingsOpts) {
@@ -170,20 +202,100 @@ export type RewardOutcome =
  * ── AND THE CAP IS READ INSIDE THE TRANSACTION ─────────────────────────────────────────────────
  * Two webhooks arriving together would both see "under the cap" if it were read outside.
  */
+/**
+ * ── IS THIS CODE ACTIVE YET, AND WAS IT ACTIVE WHEN THE MONEY ARRIVED? ─────────────────────────
+ * Every garage signup mints a personal affiliate code INACTIVE (owner, 2026-10-29). The dashboard
+ * carries a one-click "Activate your referral code" that records real acceptance of the terms in
+ * Rep.terms_accepted_at — so NULL there means "has accepted nothing", which is exactly what that
+ * column has always meant for a rep.
+ *
+ * THE RULE, AND IT IS A DATE COMPARISON NOT A BOOLEAN: a referral made before activation is still
+ * ATTRIBUTED, and is credited FROM ACTIVATION ONWARDS. So an invoice paid before the code was
+ * activated earns nothing, and the next one earns normally. `rewardPaidInvoice` is therefore given
+ * the date the invoice was PAID rather than reading the clock — with the clock, a webhook
+ * re-delivered after activation would pay out a month that happened before it.
+ *
+ * The activation screen states this rule. It has to: the alternative is an affiliate learning it
+ * from a reward that never arrived.
+ */
+export function refuseUnactivated(a: { termsAcceptedAt: Date | null | undefined; paidAt: Date }): string | null {
+  if (!a.termsAcceptedAt) return 'this referral code has not been activated, so it earns nothing yet';
+  if (a.paidAt.getTime() < a.termsAcceptedAt.getTime()) {
+    return `this invoice was paid before the code was activated (${a.paidAt.toISOString().slice(0, 10)} < ${a.termsAcceptedAt.toISOString().slice(0, 10)}), and rewards run from activation onwards`;
+  }
+  return null;
+}
+
+/**
+ * ── NO EARNING ON A GARAGE YOU OWN OR WORK FOR — CHECKED AT ACCRUAL (owner, 2026-10-29) ────────
+ * refuseSelfReferral already runs at SIGNUP, against what was typed into the form. That is not
+ * enough: the relationship can change afterwards. Somebody refers a garage, and six months later
+ * joins it as staff — at which point every further invoice would pay them for working where they
+ * work. The signup check cannot see that, because it ran before it happened.
+ *
+ * So this asks the question again, at the moment money would move, against the CURRENT users of
+ * the garage.
+ *
+ * ── EMAIL ONLY, AND THE PHONE COMPARISON IS DELIBERATELY ABSENT ────────────────────────────────
+ * The first draft also compared `Rep.phone_e164` against `User.phone_e164`. There is no such
+ * column: `User.phone` is a free-text HR profile field an admin can edit, and the VERIFIED number
+ * lives on `TwoFactorSecret.phone_e164`, keyed by subject — a table that answers "what handset did
+ * this person prove for a second factor", which is a different question. Reaching through it for
+ * an ownership test would be a weaker signal pulled from a table that means something else, and
+ * the draft would have thrown a Prisma validation error at the moment money moves.
+ *
+ * So the test is the affiliate's LOGIN ADDRESS against the garage's users' login addresses. Both
+ * are `@unique`, both are credentials, and the same person using the same address on both sides is
+ * the ordinary case this is for. (refuseSelfReferral at signup does compare a phone, because there
+ * it is comparing what was typed into one form against another — not two stored columns.)
+ *
+ * WHAT IT CANNOT SEE, stated rather than implied: a person using a different email at the garage
+ * than on their affiliate account, and ownership not expressed as a user account at all. Those are
+ * a judgement, and the Engine Room's suspend is the answer to them.
+ */
+export async function refuseOwnOrWorkFor(
+  db: Db,
+  a: { groupId: string; partyId: string },
+): Promise<string | null> {
+  const rep = await db.rep.findUnique({ where: { id: a.partyId }, select: { email: true } });
+  if (!rep) return null; // no partner row to compare; affiliateFor already found an attribution
+  const users = await db.user.findMany({ where: { group_id: a.groupId }, select: { email: true } });
+  const repEmail = norm(rep.email);
+  if (!repEmail) return null;
+  return users.some((u: { email: string | null }) => norm(u.email) === repEmail)
+    ? 'the affiliate is a user of this garage, and nobody earns on a garage they own or work for'
+    : null;
+}
+
 export async function rewardPaidInvoice(
   db: Db,
-  args: { groupId: string; invoiceId: string; paidPennies: number; status: string },
+  args: { groupId: string; invoiceId: string; paidPennies: number; status: string; paidAt: Date },
 ): Promise<RewardOutcome> {
   if (!args.status) throw new Error('rewardPaidInvoice: status is required — a reward is paid on evidence, not on assumption');
   if (args.status !== 'paid') return { paid: false, why: `invoice is ${args.status}, not paid` };
   if (!Number.isInteger(args.paidPennies) || args.paidPennies <= 0) {
     return { paid: false, why: `invoice took ${args.paidPennies} pennies — a reward is a share of money actually taken` };
   }
+  // REQUIRED, not defaulted to now (2026-10-29). Two rules below are date comparisons against it —
+  // the activation cut-off and the period this entry belongs to — and a webhook re-delivered a
+  // month later would answer both of them wrongly from the clock.
+  if (!(args.paidAt instanceof Date) || Number.isNaN(args.paidAt.getTime())) {
+    throw new Error('rewardPaidInvoice: paidAt is required — the activation rule and the period are both dated from when the money arrived, not from now');
+  }
 
   const terms = await termsFor(db, args.groupId);
   if (!terms) return { paid: false, why: 'this garage was not referred by an affiliate' };
   const attribution = await affiliateFor(db, args.groupId);
   if (!attribution) return { paid: false, why: 'no live affiliate attribution for this garage' };
+
+  // ── TWO GATES BEFORE THE CAP ARITHMETIC (owner rulings, 2026-10-29) ─────────────────────────
+  // Both answer "may THIS affiliate earn on THIS garage", and both can only be answered now:
+  // activation may have happened after the referral, and employment may have happened after both.
+  const rep = await db.rep.findUnique({ where: { id: attribution.party_id }, select: { terms_accepted_at: true, suspended_at: true } });
+  const unactivated = refuseUnactivated({ termsAcceptedAt: rep?.terms_accepted_at ?? null, paidAt: args.paidAt });
+  if (unactivated) return { paid: false, why: unactivated };
+  const ownOrWorkFor = await refuseOwnOrWorkFor(db, { groupId: args.groupId, partyId: attribution.party_id });
+  if (ownOrWorkFor) return { paid: false, why: ownOrWorkFor };
 
   const plan = await currentPlanTerms(db, args.groupId);
   const isOffer = plan?.plan === 'annual_offer';
@@ -205,7 +317,10 @@ export async function rewardPaidInvoice(
         group_id: args.groupId,
         party_type: 'affiliate',
         party_id: attribution.party_id,
-        period: new Date().toISOString().slice(0, 7),
+        // THE MONTH THE MONEY ARRIVED, not the month this code ran. A webhook re-delivered across a
+        // month boundary would otherwise file the same invoice's reward under two different periods
+        // and a pay run would read one of them as new work.
+        period: args.paidAt.toISOString().slice(0, 7),
         kind: 'accrual',
         tier: 'affiliate',
         revenue_stream: 'subscription',
@@ -217,6 +332,7 @@ export async function rewardPaidInvoice(
         currency: 'GBP',
         source_ref: args.invoiceId,
         payment_ref: args.invoiceId,
+        status: 'pending',   // explicit, for the reason above
         // NULL = THERE IS NO VISIT IN THIS PROGRAMME. Not false, which would claim a visit was
         // expected and did not happen; an affiliate never visits anybody.
         shown_as_visited: null,
@@ -227,6 +343,101 @@ export async function rewardPaidInvoice(
   } catch (e: any) {
     // P2002 on [source_ref, party_id, kind] — this invoice has already paid. The normal case.
     if (e?.code === 'P2002') return { paid: false, why: 'this invoice has already earned its reward' };
+    throw e;
+  }
+}
+
+/**
+ * ── THE REWARD FOLLOWS THE MONEY BACK (owner ruling, 2026-10-29) ───────────────────────────────
+ * Money we took has been given back, so the reward it earned is reversed. One clawback entry per
+ * refund, carrying the NEGATIVE of what was accrued for that invoice — never the refunded amount,
+ * which is a different number: a £75 month earns £30, and refunding the £75 reverses the £30.
+ *
+ * PARTIAL REFUNDS ARE REVERSED IN FULL, and that is a decision rather than an oversight. The
+ * reward is a flat sum for a paid month, not a share of it, so there is no fraction of it that
+ * corresponds to a fraction of the invoice. A garage refunded £20 of a £75 month did not pay for
+ * that month on the terms the reward was for. If that ever needs to be proportional it needs the
+ * owner, not a rule invented here.
+ *
+ * ALREADY PAID OUT? The entry still goes in. CommissionEntry is a ledger and a clawback against a
+ * paid accrual is exactly how "set against future rewards" is expressed — the pay run sums the
+ * ledger, so a negative line reduces the next payout rather than demanding money back. Nothing
+ * here chases anybody.
+ *
+ * IDEMPOTENT on the REFUND id, not the invoice id: one invoice can be refunded twice, and the
+ * unique index is on [source_ref, party_id, kind] so two refunds of one invoice are two rows while
+ * a re-delivered event is none.
+ */
+export async function reverseAffiliateReward(
+  db: Db,
+  args: { groupId: string; refundId: string; invoiceId: string; refundedAt: Date },
+): Promise<{ reversed: false; why: string } | { reversed: true; amountPennies: number; entryId: string }> {
+  // DATED FROM THE REFUND, not the clock — the same rule as paidAt on the accrual. lib/commission
+  // does `periodOf(r.refunded_at)` for exactly this reason, and a reversal filed in the wrong
+  // month is a pay run that reads it as new work.
+  if (!(args.refundedAt instanceof Date) || Number.isNaN(args.refundedAt.getTime())) {
+    throw new Error('reverseAffiliateReward: refundedAt is required — the period is the month the money went back');
+  }
+  const attribution = await affiliateFor(db, args.groupId);
+  if (!attribution) return { reversed: false, why: 'no live affiliate attribution for this garage' };
+
+  // WHAT WAS ACCRUED FOR THIS INVOICE, by this affiliate. Summed rather than read as one row: the
+  // monthly shape writes one entry per invoice, but summing is correct for both shapes and cannot
+  // be wrong if a second accrual for one invoice ever becomes legitimate.
+  const accrued = (await db.commissionEntry.aggregate({
+    where: {
+      group_id: args.groupId, party_type: 'affiliate', party_id: attribution.party_id,
+      kind: 'accrual', source_ref: args.invoiceId,
+    },
+    _sum: { amount_pennies: true },
+  }))._sum.amount_pennies ?? 0;
+  if (accrued <= 0) return { reversed: false, why: 'this invoice earned no affiliate reward, so there is nothing to reverse' };
+
+  // ALREADY REVERSED, by an earlier refund of the same invoice? Sum what the clawbacks have taken
+  // back and never take back more than went out.
+  const clawed = Math.abs((await db.commissionEntry.aggregate({
+    where: {
+      group_id: args.groupId, party_type: 'affiliate', party_id: attribution.party_id,
+      kind: 'clawback', payment_ref: args.invoiceId,
+    },
+    _sum: { amount_pennies: true },
+  }))._sum.amount_pennies ?? 0);
+  const remaining = accrued - clawed;
+  if (remaining <= 0) return { reversed: false, why: 'this invoice’s reward has already been reversed in full' };
+
+  try {
+    const entry = await db.commissionEntry.create({
+      data: {
+        group_id: args.groupId,
+        party_type: 'affiliate',
+        party_id: attribution.party_id,
+        // THE MONTH THE MONEY WENT BACK, which is when this reversal belongs in a pay run — not
+        // the month it was earned, which has very likely already been paid.
+        period: args.refundedAt.toISOString().slice(0, 7),
+        kind: 'clawback',
+        tier: 'affiliate',
+        revenue_stream: 'subscription',
+        rate_id: null,
+        share_bp: attribution.share_bp,
+        // NEGATIVE, because the ledger is summed. A positive clawback would read as a second
+        // reward on every screen that adds the column up.
+        amount_pennies: -remaining,
+        currency: 'GBP',
+        // THE REFUND is the identity, so two refunds of one invoice are two rows and a re-delivered
+        // event is none. payment_ref stays the INVOICE, which is what ties the pair together.
+        source_ref: args.refundId,
+        payment_ref: args.invoiceId,
+        shown_as_visited: null,
+        // EXPLICIT, not left to the column default, matching lib/commission's own reasoning: the
+        // writer should say which state it is creating, so a changed default is a new value here
+        // rather than a silent one.
+        status: 'pending',
+      },
+      select: { id: true },
+    });
+    return { reversed: true, amountPennies: -remaining, entryId: entry.id };
+  } catch (e: any) {
+    if (e?.code === 'P2002') return { reversed: false, why: 'this refund has already reversed its reward' };
     throw e;
   }
 }

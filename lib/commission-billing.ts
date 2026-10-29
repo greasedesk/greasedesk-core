@@ -5,6 +5,13 @@
  * Payment/Refund and hands it to lib/commission (accruePayment / clawbackRefund). One engine, many
  * readers; this is a reader that happens to be fed by Stripe.
  *
+ * ── TWO PROGRAMMES, ONE ADAPTER (2026-10-29) ───────────────────────────────────────────────────
+ * It maps onto the RESELLER engine (lib/commission, rates and tapers) and onto the AFFILIATE
+ * programme (lib/affiliate, a flat sum frozen at signup). They are different rules over one ledger
+ * table, and they are both here for the reason this file exists: so there is one place a Stripe
+ * payment event becomes a ledger entry. The affiliate half was written in full and never called
+ * from anywhere but a gate — the functions below are what reached it.
+ *
  * Called only from the signature-verified, event-id-deduped webhook (pages/api/stripe/webhook). The
  * money path deliberately reads everything from the EVENT PAYLOAD + the DB — no live Stripe API calls —
  * so it is fast, resilient to Stripe outages, and testable with synthetic signed events.
@@ -19,6 +26,7 @@
 import type Stripe from 'stripe';
 import type { PrismaClient } from '@prisma/client';
 import { accruePayment, clawbackRefund, isCommissionError } from '@/lib/commission';
+import { rewardPaidInvoice, reverseAffiliateReward } from '@/lib/affiliate';
 import { listChargeRefunds, refundCounts } from '@/lib/stripe-refunds';
 import { resolveAttribution } from '@/lib/attribution';
 
@@ -161,6 +169,78 @@ export async function clawbackFromChargeRefunded(db: Db, charge: Stripe.Charge):
       written += r.written; noop += r.noop;
     } catch (e: any) {
       console.error('[commission-billing] clawback refused for', groupId, refundId, e?.message);
+    }
+  }
+  return { status: 'clawed', groupId, written, noop };
+}
+
+
+// ── THE AFFILIATE HALF ──────────────────────────────────────────────────────────────────────────
+// lib/affiliate holds the rules — £30 a paid month for the first four, a £120 cap, a single £120 on
+// a paid annual offer invoice, nothing for an unactivated code, nothing on a garage you work for.
+// These two functions are the ONLY production callers of them.
+
+/** A paid invoice may earn an affiliate reward. Never throws into the webhook: a refusal is data. */
+export async function rewardFromInvoicePaid(db: Db, invoice: Stripe.Invoice): Promise<BillingResult> {
+  const inv = invoice as any;
+  const invoiceId: string | null = inv.id ?? null;
+  const paidPennies: number = inv.amount_paid ?? 0;
+  const status: string = String(inv.status ?? '');
+  // THE DATE THE MONEY ARRIVED, from Stripe's own transition, falling back to the invoice's
+  // creation only when the transition is absent. NOT the clock: rewardPaidInvoice dates the
+  // activation rule and the ledger period from it, and a re-delivered webhook must answer both
+  // the same way the first delivery did.
+  const paidAt = unixToDate(inv.status_transitions?.paid_at) ?? unixToDate(inv.created);
+  if (!invoiceId || !paidAt) return { status: 'skipped', reason: 'invoice carries no id or no paid date' };
+
+  const groupId = await groupIdForCustomer(db, idOf(inv.customer));
+  if (!groupId) return { status: 'skipped', reason: 'unknown Stripe customer' };
+
+  try {
+    const r = await rewardPaidInvoice(db as any, { groupId, invoiceId, paidPennies, status, paidAt });
+    return r.paid
+      ? { status: 'accrued', groupId, written: 1, noop: 0 }
+      // THE TENANT IN THE REASON, because BillingResult's `skipped` carries no groupId and the
+      // webhook logs this line verbatim. "not referred by an affiliate" about nobody in particular
+      // is a log entry that cannot be followed up.
+      : { status: 'skipped', reason: `${groupId}: ${r.why}` };
+  } catch (e: any) {
+    // RECORDED, NOT RETHROWN. A throw here would 500 the webhook, Stripe would retry, and the
+    // FIRST PAYMENT write that runs before it has already committed — so the retry would be about
+    // a reward while everything else about the payment was already correct. The refusal is money
+    // an affiliate is owed and did not get, so it is logged loudly rather than swallowed.
+    console.error('[commission-billing] affiliate reward refused for', groupId, invoiceId, e?.message);
+    return { status: 'skipped', reason: `${groupId}: affiliate reward threw: ${String(e?.message ?? e).slice(0, 160)}` };
+  }
+}
+
+/**
+ * Money given back reverses the reward it earned. The REFUND half of the policy in lib/affiliate;
+ * the chargeback half waits on the Dispute work, and nothing here pretends otherwise.
+ *
+ * The refunds are ASKED OF STRIPE rather than read off the event, for the reason the rep clawback
+ * above records: `refunds` has not been included on a Charge by default since API 2022-11-15, and
+ * reading it off the event is how the card-refund path came to write nothing at all.
+ */
+export async function reverseAffiliateFromChargeRefunded(db: Db, charge: Stripe.Charge): Promise<BillingResult> {
+  const c = charge as any;
+  const invoiceId: string | null = idOf(c.invoice);
+  if (!invoiceId) return { status: 'skipped', reason: 'charge not tied to an invoice' };
+
+  const groupId = await groupIdForCustomer(db, idOf(c.customer));
+  if (!groupId) return { status: 'skipped', reason: 'unknown Stripe customer' };
+
+  const refunds = (await listChargeRefunds(c.id, {})).filter(refundCounts);
+  let written = 0, noop = 0;
+  for (const rf of refunds) {
+    const refundId: string | null = rf.id ?? null;
+    if (!refundId) continue;
+    const refundedAt = rf.created ?? unixToDate(c.created) ?? new Date();
+    try {
+      const r = await reverseAffiliateReward(db as any, { groupId, refundId, invoiceId, refundedAt });
+      r.reversed ? written++ : noop++;
+    } catch (e: any) {
+      console.error('[commission-billing] affiliate reversal refused for', groupId, refundId, e?.message);
     }
   }
   return { status: 'clawed', groupId, written, noop };

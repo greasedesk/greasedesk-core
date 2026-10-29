@@ -20,7 +20,10 @@ import { recordTopUpFromSession } from '@/lib/sms-topup';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { sendTrialEndingReminder } from '@/lib/trial-reminder';
 import { applyStripeSubscriptionToCache, recordFirstPayment } from '@/lib/stripe-billing-cache';
-import { accrueFromInvoicePaid, clawbackFromChargeRefunded } from '@/lib/commission-billing';
+import {
+  accrueFromInvoicePaid, clawbackFromChargeRefunded,
+  rewardFromInvoicePaid, reverseAffiliateFromChargeRefunded,
+} from '@/lib/commission-billing';
 import { countryMismatch } from '@/lib/billing-country';
 import { writeAudit } from '@/lib/audit';
 
@@ -160,12 +163,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // still look like it had never paid us — and the affiliate offer reads exactly that.
         const paid = await recordFirstPayment(prisma, invoice);
         const r = await accrueFromInvoicePaid(prisma, invoice);
-        console.log('[stripe] invoice.paid → first payment:', paid, '| accrual:', JSON.stringify(r));
+        // ── AND THE AFFILIATE REWARD (2026-10-29) ───────────────────────────────────────────────
+        // lib/affiliate::rewardPaidInvoice implemented the whole affiliate reward and had NO
+        // production caller: the line above is the RESELLER engine, with rates and tapers. So no
+        // affiliate had ever accrued anything, and nothing said so. This is the call that reaches
+        // it. AFTER the rep accrual and after the first-payment write, in the same order and for
+        // the same reason: the simpler unconditional writes first, then the ones that resolve
+        // attributions and can legitimately refuse.
+        const aff = await rewardFromInvoicePaid(prisma, invoice);
+        console.log('[stripe] invoice.paid → first payment:', paid, '| accrual:', JSON.stringify(r), '| affiliate:', JSON.stringify(aff));
         break;
       }
       case 'charge.refunded': {
-        const r = await clawbackFromChargeRefunded(prisma, event.data.object as Stripe.Charge);
-        console.log('[stripe] charge.refunded →', JSON.stringify(r));
+        const charge = event.data.object as Stripe.Charge;
+        const r = await clawbackFromChargeRefunded(prisma, charge);
+        // THE REWARD FOLLOWS THE MONEY BACK (owner ruling, 2026-10-29). The refund half of the
+        // policy; the chargeback half needs charge.dispute.*, which nothing here handles yet —
+        // the Dispute model is designed and unbuilt, and it is on the board against that work.
+        const aff = await reverseAffiliateFromChargeRefunded(prisma, charge);
+        console.log('[stripe] charge.refunded →', JSON.stringify(r), '| affiliate:', JSON.stringify(aff));
         break;
       }
       default:

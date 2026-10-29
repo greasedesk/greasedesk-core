@@ -67,7 +67,16 @@ const sweep = async () => {
   if (!prisma) return 0;
   const reps = (await prisma.rep.findMany({ where: { ref_code: { startsWith: PREFIX } }, select: { id: true } })).map((r) => r.id);
   const groups = (await prisma.group.findMany({ where: { group_name: { startsWith: PREFIX } }, select: { id: true } })).map((g) => g.id);
+  // USERS FIRST, and keyed on the EMAIL rather than the group (2026-10-29). Section 10 adds the
+  // affiliate as a user of a garage to prove the own-or-work-for refusal, and the first run of it
+  // left two User rows behind: the sweep took the groups and the Users went with them only where
+  // the cascade reached, so the next run collided on User.email @unique and the gate THREW before
+  // any clause ran. A sweep must take everything its gate makes, not everything it remembers.
+  const userEmails = { startsWith: `${PREFIX.toLowerCase()}` };
+  await prisma.user.deleteMany({ where: { email: userEmails } }).catch(() => {});
   if (groups.length) {
+    await prisma.user.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
+    await prisma.groupBilling.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.tenantAffiliateTerms.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.commissionEntry.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.tenantAttribution.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
@@ -111,9 +120,16 @@ try {
   // THE AFFILIATE COMES FIRST. TenantAffiliateTerms.affiliate_id is a required FK: terms about a
   // referral must name who referred. The first draft created the affiliate in section 6, after the
   // terms in section 5 that cannot exist without it.
+  // ACTIVATED, AND THE DATE MATTERS (2026-10-29). A code now earns nothing until its owner has
+  // accepted the terms, and a reward runs from activation ONWARDS — so this fixture is activated
+  // well in the past, and every `pay()` below uses a paid date after it. Without that, every
+  // reward clause in this gate would be silently measuring the new refusal instead of the cap, the
+  // idempotency and the instalments it was written for.
+  const ACTIVATED = new Date('2026-01-01T00:00:00Z');
   const aff = await prisma.rep.create({ data: {
     email: `${PREFIX.toLowerCase()}@example.invalid`, name: `${PREFIX} affiliate`,
-    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'affiliate' }, select: { id: true } });
+    ref_code: `${PREFIX}CODE`, country_code: 'GB', party_type: 'affiliate',
+    terms_accepted_at: ACTIVATED }, select: { id: true } });
   const g1 = await mkGarage(1);
   const frozen = await AF.freezeTermsAtSignup(prisma, g1, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 8, monthsGiven: 12 });
   check('the terms are written once, at signup', !!frozen && frozen.total_reward_pennies === 12000);
@@ -131,7 +147,10 @@ try {
   await AF.freezeTermsAtSignup(prisma, g3, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
   await prisma.tenantAttribution.create({ data: { group_id: g3, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
 
-  const pay = (invoiceId) => AF.rewardPaidInvoice(prisma, { groupId: g3, invoiceId, paidPennies: 7500, status: 'paid' });
+  // A FIXED PAID DATE, after activation: the reward rules are date comparisons now, and a clock
+  // here would make these clauses pass or fail by when the suite happened to run.
+  const PAID_AT = new Date('2026-06-01T00:00:00Z');
+  const pay = (invoiceId) => AF.rewardPaidInvoice(prisma, { groupId: g3, invoiceId, paidPennies: 7500, status: 'paid', paidAt: PAID_AT });
   await pay('in_ZZAFF_1');
   const after1 = await prisma.commissionEntry.count({ where: { group_id: g3 } });
   check('a successful payment writes ONE instalment', after1 === 1, `${after1}`);
@@ -161,7 +180,7 @@ try {
     const g = await mkGarage(n);
     await AF.freezeTermsAtSignup(prisma, g, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
     await prisma.tenantAttribution.create({ data: { group_id: g, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
-    await AF.rewardPaidInvoice(prisma, { groupId: g, invoiceId, ...args }).catch(() => {});
+    await AF.rewardPaidInvoice(prisma, { groupId: g, invoiceId, paidAt: new Date('2026-06-01T00:00:00Z'), ...args }).catch(() => {});
     return prisma.commissionEntry.count({ where: { group_id: g } });
   };
   check('an UNPAID invoice earns nothing', (await noMoney(10, 'in_ZZAFF_OPEN', { paidPennies: 7500, status: 'open' })) === 0,
@@ -184,11 +203,11 @@ try {
   const g5 = await mkGarage(5);
   await AF.freezeTermsAtSignup(prisma, g5, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'annual_offer', offerMonthsPaid: 8, monthsGiven: 12 });
   await prisma.tenantAttribution.create({ data: { group_id: g5, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
-  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL', paidPennies: 60000, status: 'paid' });
+  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL', paidPennies: 60000, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
   const annual = await prisma.commissionEntry.findMany({ where: { group_id: g5 }, select: { amount_pennies: true } });
   check('the offer payment earns the FULL reward in one entry',
     annual.length === 1 && annual[0].amount_pennies === 12000, JSON.stringify(annual));
-  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL_2', paidPennies: 60000, status: 'paid' });
+  await AF.rewardPaidInvoice(prisma, { groupId: g5, invoiceId: 'in_ZZAFF_ANNUAL_2', paidPennies: 60000, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
   check('  …and a second payment on an annual tenant earns nothing more',
     (await prisma.commissionEntry.count({ where: { group_id: g5 } })) === 1);
 
@@ -238,7 +257,7 @@ try {
   const g6 = await mkGarage(6);
   await AF.freezeTermsAtSignup(prisma, g6, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
   await prisma.tenantAttribution.create({ data: { group_id: g6, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
-  await AF.rewardPaidInvoice(prisma, { groupId: g6, invoiceId: 'in_ZZAFF_AFTERCLOSE', paidPennies: 7500, status: 'paid' });
+  await AF.rewardPaidInvoice(prisma, { groupId: g6, invoiceId: 'in_ZZAFF_AFTERCLOSE', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
   check('  …and a garage signed up BEFORE closing keeps earning its instalments',
     (await prisma.commissionEntry.count({ where: { group_id: g6 } })) === 1,
     'closing the door is not a clawback — the terms were frozen when they signed');
@@ -247,6 +266,208 @@ try {
   check('an affiliate entry records no visit, rather than claiming one',
     (await prisma.commissionEntry.findFirst({ where: { group_id: g3 }, select: { shown_as_visited: true } }))?.shown_as_visited === null,
     'NULL = an affiliate entry; there is no visit in this programme');
+  // ── 9. THE ACTIVATION RULE (owner ruling, 2026-10-29) ───────────────────────────────────────
+  // Every garage signup mints a personal code INACTIVE; one click on the dashboard records real
+  // acceptance in Rep.terms_accepted_at. A referral made before activation is still ATTRIBUTED and
+  // is credited FROM ACTIVATION ONWARDS — so this is a date comparison, not a boolean, and an
+  // invoice paid before the click earns nothing while the next one earns normally.
+  console.log('\n— an unactivated code earns nothing —');
+  const dormant = await prisma.rep.create({ data: {
+    email: `${PREFIX.toLowerCase()}-dormant@example.invalid`, name: `${PREFIX} dormant`,
+    ref_code: `${PREFIX}DORMANT`, country_code: 'GB', party_type: 'affiliate',
+    terms_accepted_at: null }, select: { id: true } });
+  const g20 = await mkGarage(20);
+  await AF.freezeTermsAtSignup(prisma, g20, { affiliateId: dormant.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await prisma.tenantAttribution.create({ data: { group_id: g20, party_type: 'affiliate', party_id: dormant.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
+
+  const dormantPay = await AF.rewardPaidInvoice(prisma, { groupId: g20, invoiceId: 'in_ZZAFF_DORMANT', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
+  check('an UNACTIVATED code earns nothing from a paid invoice',
+    dormantPay.paid === false && /not been activated/.test(dormantPay.why ?? ''), dormantPay.why);
+  check('  …and writes no ledger row at all',
+    (await prisma.commissionEntry.count({ where: { group_id: g20 } })) === 0,
+    'a refusal that still wrote a £0 entry would show in the portal as a reward of nothing');
+  // AND THE REFERRAL IS STILL THERE. "Attributed but not yet earning" is the whole point of the
+  // ruling: the garage is recorded against them, so activation turns earnings on rather than
+  // sending them back to find the garage again.
+  check('  …while the ATTRIBUTION survives, so activation turns earning on',
+    (await prisma.tenantAttribution.count({ where: { group_id: g20, party_id: dormant.id, ended_at: null } })) === 1,
+    'attributed before activation, credited from activation onwards');
+
+  // ACTIVATE, and the cut-off is the activation instant.
+  const ACTIVATED_LATE = new Date('2026-07-01T00:00:00Z');
+  await prisma.rep.update({ where: { id: dormant.id }, data: { terms_accepted_at: ACTIVATED_LATE } });
+  const beforeClick = await AF.rewardPaidInvoice(prisma, { groupId: g20, invoiceId: 'in_ZZAFF_BEFORE', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-30T23:59:59Z') });
+  check('an invoice paid the day BEFORE activation still earns nothing',
+    beforeClick.paid === false && /before the code was activated/.test(beforeClick.why ?? ''), beforeClick.why);
+  const afterClick = await AF.rewardPaidInvoice(prisma, { groupId: g20, invoiceId: 'in_ZZAFF_AFTER', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-07-01T00:00:01Z') });
+  check('  …and one paid a second AFTER it earns normally',
+    afterClick.paid === true && afterClick.amountPennies === 3000,
+    `${afterClick.paid} / ${afterClick.amountPennies}p — the rule is a date, not a switch`);
+
+  // ── 10. NOBODY EARNS ON A GARAGE THEY WORK FOR, CHECKED AT ACCRUAL ──────────────────────────
+  // refuseSelfReferral runs at SIGNUP against typed form values. It cannot see a relationship that
+  // begins afterwards: refer a garage, join it six months later as staff, and every further
+  // invoice would pay you for working where you work.
+  console.log('\n— and not on a garage you work for —');
+  const g21 = await mkGarage(21);
+  await AF.freezeTermsAtSignup(prisma, g21, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await prisma.tenantAttribution.create({ data: { group_id: g21, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
+  const cleanPay = await AF.rewardPaidInvoice(prisma, { groupId: g21, invoiceId: 'in_ZZAFF_CLEAN', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
+  check('a garage with no connection to the affiliate earns normally',
+    cleanPay.paid === true, cleanPay.paid ? '' : cleanPay.why);
+
+  // NOW THEY JOIN IT. The affiliate's login address becomes a user of the garage.
+  await prisma.user.create({ data: {
+    email: `${PREFIX.toLowerCase()}+staff@example.invalid`,
+    name: `${PREFIX} staff`, group_id: g21 } });
+  const stillFine = await AF.rewardPaidInvoice(prisma, { groupId: g21, invoiceId: 'in_ZZAFF_OTHERSTAFF', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-02T00:00:00Z') });
+  check('  …and a DIFFERENT person joining the garage changes nothing',
+    stillFine.paid === true, `${stillFine.paid} — the test is the affiliate, not any staff member`);
+
+  const joined = await prisma.user.create({ data: {
+    email: `${PREFIX.toLowerCase()}@example.invalid`, name: `${PREFIX} now staff`, group_id: g21 } }).catch(() => null);
+  if (!joined) {
+    check('the affiliate could be added as a user of the garage', false,
+      'User.email is @unique and this address is already taken — the clause below cannot run');
+  } else {
+    const afterJoin = await AF.rewardPaidInvoice(prisma, { groupId: g21, invoiceId: 'in_ZZAFF_AFTERJOIN', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-03T00:00:00Z') });
+    check('once the AFFILIATE is a user of the garage, it earns nothing more',
+      afterJoin.paid === false && /own or work for/.test(afterJoin.why ?? ''), afterJoin.why);
+    check('  …and the earlier rewards are LEFT ALONE',
+      (await prisma.commissionEntry.count({ where: { group_id: g21, kind: 'accrual' } })) === 2,
+      'money already earned on a garage they did not then work for is still theirs');
+  }
+
+  // ── 11. THE FOURTEEN-DAY HOLD, DERIVED ──────────────────────────────────────────────────────
+  // No column: CommissionEntry.status's `held` is an area manager's hold paired to held_reason by a
+  // CHECK, and a time hold is a different fact. Derived from the invoice's PAID date.
+  console.log('\n— the hold —');
+  check('the hold is fourteen days', AF.AFFILIATE_HOLD_DAYS === 14, String(AF.AFFILIATE_HOLD_DAYS));
+  const paidOn = new Date('2026-06-01T00:00:00Z');
+  const matures = AF.rewardPayableFrom(paidOn);
+  check('  …so a reward matures exactly AFFILIATE_HOLD_DAYS after the money arrived',
+    matures.toISOString() === new Date(paidOn.getTime() + AF.AFFILIATE_HOLD_DAYS * 86400000).toISOString(),
+    matures.toISOString());
+  check('  …it is NOT payable one second before that',
+    AF.rewardIsPayable({ paidAt: paidOn, now: new Date(matures.getTime() - 1000) }) === false);
+  check('  …and IS payable at the instant itself',
+    AF.rewardIsPayable({ paidAt: paidOn, now: matures }) === true,
+    'half-open at the bottom, like every other window in this codebase');
+
+  // ── 12. THE REWARD FOLLOWS THE MONEY BACK ───────────────────────────────────────────────────
+  // Replaces REFUND_POLICY_UNDECIDED, which was a true flag with no reader.
+  console.log('\n— a refund reverses the reward —');
+  const g22 = await mkGarage(22);
+  await AF.freezeTermsAtSignup(prisma, g22, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await prisma.tenantAttribution.create({ data: { group_id: g22, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
+  const earned = await AF.rewardPaidInvoice(prisma, { groupId: g22, invoiceId: 'in_ZZAFF_REFUNDME', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
+  check('a paid month earns its instalment', earned.paid === true && earned.amountPennies === 3000, String(earned.amountPennies));
+
+  const rev = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_1', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-20T00:00:00Z') });
+  check('  …and a refund of that invoice reverses it',
+    rev.reversed === true && rev.amountPennies === -3000,
+    `${rev.reversed} / ${rev.amountPennies} — the NEGATIVE of what was accrued, not the refunded amount`);
+  const net = (await prisma.commissionEntry.aggregate({ where: { group_id: g22 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
+  check('  …so the ledger nets to zero', net === 0, `${net}p`);
+  check('  …filed in the month the money went BACK, not the month it was earned',
+    (await prisma.commissionEntry.findFirst({ where: { group_id: g22, kind: 'clawback' }, select: { period: true } }))?.period === '2026-06',
+    'dated from refundedAt — a reversal in the wrong month reads as new work in a pay run');
+
+  const rowsAfterOne = await prisma.commissionEntry.count({ where: { group_id: g22 } });
+  const again = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_1', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-20T00:00:00Z') });
+  // ASSERTED ON THE LEDGER, not on the message. The first draft matched /already/ against `why`,
+  // which the "reversed in full" guard satisfies — so it passed without ever reaching the P2002
+  // catch it was written for. What a re-delivered webhook must not do is add a row, so that is
+  // what this says. (P2002 on [source_ref, party_id, kind] is still the belt-and-braces for two
+  // deliveries racing past the guard at once, and this clause does NOT reach it.)
+  check('  …and the SAME refund twice adds no further row',
+    again.reversed === false && (await prisma.commissionEntry.count({ where: { group_id: g22 } })) === rowsAfterOne,
+    `${again.why} — ${rowsAfterOne} row(s) before and after`);
+  const second = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_2', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-21T00:00:00Z') });
+  check('  …nor does a SECOND refund of the same invoice take back more than went out',
+    second.reversed === false && /already been reversed in full/.test(second.why ?? ''), second.why);
+  const nothing = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_3', invoiceId: 'in_ZZAFF_NEVERPAID', refundedAt: new Date('2026-06-21T00:00:00Z') });
+  check('  …and a refund of an invoice that earned nothing writes nothing',
+    nothing.reversed === false && /earned no affiliate reward/.test(nothing.why ?? ''), nothing.why);
+
+  // ── 13. AND THE WIRE ITSELF ─────────────────────────────────────────────────────────────────
+  // THE WHOLE POINT OF THIS SLICE. rewardPaidInvoice was complete, gated and correct, and had no
+  // production caller — every clause above would have passed on the day no affiliate could earn
+  // anything. So these drive the ADAPTER the webhook calls, with a synthetic Stripe payload: the
+  // accrual path reads the event and the database and makes no Stripe API call, which is exactly
+  // why it can be asserted here.
+  console.log('\n— the webhook actually reaches it —');
+  const CB = await import(`${R}/lib/commission-billing.ts`);
+  const g23 = await mkGarage(23);
+  const CUST = `cus_${PREFIX}WIRE`;
+  // CREATED, not updated. This gate's mkGarage makes a Group and nothing else — unlike the annual
+  // gate's, which also makes the billing row — so an update here found no record (P2025). The
+  // adapter resolves the tenant through GroupBilling.stripe_customer_id, so the row IS the wire.
+  await prisma.groupBilling.create({ data: {
+    group_id: g23, plan_name: `${PREFIX} plan`, status: 'ok', retention_months: 12, included_sites: 1,
+    stripe_customer_id: CUST } });
+  await AF.freezeTermsAtSignup(prisma, g23, { affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000, plan: 'monthly' });
+  await prisma.tenantAttribution.create({ data: { group_id: g23, party_type: 'affiliate', party_id: aff.id, role: 'referrer', share_bp: 10000, effective_from: new Date(), source: 'ref_param' } });
+
+  const PAID_UNIX = Math.floor(new Date('2026-06-01T00:00:00Z').getTime() / 1000);
+  const invoiceOf = (id, over = {}) => ({
+    id, object: 'invoice', customer: CUST, amount_paid: 7500, status: 'paid',
+    status_transitions: { paid_at: PAID_UNIX }, created: PAID_UNIX, ...over,
+  });
+
+  const wired = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_1`));
+  check('invoice.paid reaches the affiliate reward through the adapter',
+    wired.status === 'accrued' && wired.written === 1, JSON.stringify(wired));
+  check('  …and the entry is dated from the invoice\u2019s PAID date, not the clock',
+    (await prisma.commissionEntry.findFirst({ where: { group_id: g23, kind: 'accrual' }, select: { period: true } }))?.period === '2026-06',
+    'status_transitions.paid_at — a webhook re-delivered next month must file it the same way');
+  const wiredAgain = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_1`));
+  check('  …and a re-delivered event writes nothing more',
+    wiredAgain.status === 'skipped' && (await prisma.commissionEntry.count({ where: { group_id: g23, kind: 'accrual' } })) === 1,
+    JSON.stringify(wiredAgain));
+
+  const unknownCust = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_2`, { customer: 'cus_NOBODY' }));
+  check('  …an invoice for a customer we do not know is SKIPPED, not thrown',
+    unknownCust.status === 'skipped' && /unknown Stripe customer/.test(unknownCust.reason ?? ''), JSON.stringify(unknownCust));
+  const noDate = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_3`, { status_transitions: {}, created: null }));
+  check('  …and one with no paid date is SKIPPED rather than dated from now',
+    noDate.status === 'skipped' && /no paid date/.test(noDate.reason ?? ''), JSON.stringify(noDate));
+  const unpaid = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_4`, { status: 'open', amount_paid: 0 }));
+  check('  …and an UNPAID invoice earns nothing, with the refusal named',
+    unpaid.status === 'skipped' && /not paid|pennies/.test(unpaid.reason ?? ''), JSON.stringify(unpaid));
+
+  // A REFUSAL IS DATA, NEVER A THROW. The webhook calls this after the first-payment write has
+  // already committed; a throw would 500 it, Stripe would retry, and the retry would be about a
+  // reward while everything else about the payment was already correct.
+  const threwNot = await CB.rewardFromInvoicePaid(prisma, invoiceOf(`in_${PREFIX}WIRE_5`, { customer: null }));
+  check('  …and a payload with no customer at all comes back as data, not an exception',
+    threwNot.status === 'skipped', JSON.stringify(threwNot));
+
+  // AND THE REQUIRED-DATE GUARD ITSELF. A red-proof that removed it left every clause green,
+  // because every caller passes a valid date — the guard is for the caller that does not yet
+  // exist, and a guard with no clause is a comment. So this is the clause: a missing or
+  // unparseable paidAt must THROW, loudly, rather than be defaulted to the clock, because the
+  // clock answers both the activation rule and the ledger period wrongly for a re-delivery.
+  const noDateThrew = await AF.rewardPaidInvoice(prisma, { groupId: g23, invoiceId: 'in_ZZAFF_NODATE', paidPennies: 7500, status: 'paid' })
+    .then(() => null, (e) => e);
+  check('rewardPaidInvoice REFUSES to run without a paid date',
+    noDateThrew instanceof Error && /paidAt is required/.test(noDateThrew.message),
+    noDateThrew ? noDateThrew.message.slice(0, 90) : 'it accepted the call and dated the reward from the clock');
+  const badDateThrew = await AF.rewardPaidInvoice(prisma, { groupId: g23, invoiceId: 'in_ZZAFF_BADDATE', paidPennies: 7500, status: 'paid', paidAt: new Date('not a date') })
+    .then(() => null, (e) => e);
+  check('  …and an UNPARSEABLE one too, rather than treating NaN as a moment',
+    badDateThrew instanceof Error && /paidAt is required/.test(badDateThrew.message),
+    badDateThrew ? 'threw' : 'an Invalid Date would have produced period "NaN-aN"');
+  const reversalNoDate = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_NODATE', invoiceId: 'in_ZZAFF_REFUNDME' })
+    .then(() => null, (e) => e);
+  check('  …and the reversal refuses without a refund date for the same reason',
+    reversalNoDate instanceof Error && /refundedAt is required/.test(reversalNoDate.message),
+    reversalNoDate ? 'threw' : 'it would have filed the reversal in whatever month this ran');
+
+  check('REFUND_POLICY_UNDECIDED is gone, because it is decided',
+    AF.REFUND_POLICY_UNDECIDED === undefined,
+    'a flag that was true, had no reader, and existed to make an unanswered question visible');
+
 } catch (e) {
   // describeError, not String(e?.stack ?? e): a PrismaClientKnownRequestError thrown inside the
   // suite printed as a bare class name with nothing after the colon, which said a fault occurred
