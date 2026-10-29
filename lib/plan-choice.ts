@@ -19,6 +19,13 @@
  * SHAPE ('monthly' | 'annual') and never an amount, never an entitlement to the offer — the rule
  * checkout.ts and change-plan.ts already follow, and the reason the screen cannot be trusted to
  * tell the server what it displayed.
+ *
+ * ── TWO KINDS OF FIGURE, AND THE DIFFERENCE MATTERS ────────────────────────────────────────────
+ * Everything named `perLocation` / `perMonthEquiv` / `saving` is SHOP-WINDOW ARITHMETIC for one
+ * location: it makes yearly comparable with monthly on the screen. Everything named `total` is
+ * what the card is actually charged, for every location. The charge sentence uses the totals and
+ * nothing else — so a garage with three sites reads "£62.50 /month per location" above "you'll
+ * then be charged £2,250", and the number that leaves its bank is never the illustrative one.
  */
 import { prisma as defaultDb } from '@/lib/db';
 import { planFor, planSettings, type PlanKind } from '@/lib/billing-plans';
@@ -37,6 +44,9 @@ export type PlanOption = {
   totalPennies: number;
   perLocationLabel: string;
   totalLabel: string;
+  /** THE HEADLINE. One location, one month, whatever the interval — the only way the two plans compare. */
+  perMonthEquivPennies: number;
+  perMonthEquivLabel: string;
   /** States the DATE and the AMOUNT charged when the trial ends (owner ruling, 2026-10-28). */
   trialSentence: string;
 };
@@ -45,9 +55,15 @@ export type AnnualOption = PlanOption & {
   offerApplies: boolean;
   renewalTotalPennies: number;
   renewalTotalLabel: string;
+  /** The renewal figure for ONE location, to sit beside the per-location first-year figure. */
+  renewalPerLocationLabel: string;
   /** Months of service minus months charged, for the year being bought. Null when there is no saving to claim. */
   monthsFree: number | null;
+  /** Against twelve months of monthly, one location. Null when yearly saves nothing. */
+  savingPerYearPennies: number | null;
   savingLabel: string | null;
+  savingPercent: number | null;
+  savingPercentLabel: string | null;
 };
 
 export type PlanChoice = {
@@ -59,9 +75,17 @@ export type PlanChoice = {
   annual: AnnualOption;
 };
 
-/** Whole pounds, through the one money chokepoint — plan prices are never fractional. */
+/** Whole pounds, through the one money chokepoint — plan prices themselves are never fractional. */
 const money = (pennies: number, p: CountryProfile): string =>
   formatMoney(pennies, { currency: p.currency, locale: p.locale, maximumFractionDigits: 0 });
+
+/**
+ * Pence ONLY when there are pence. The monthly equivalent of £750 is £62.50 and writing it "£63"
+ * would overstate the plan by six pounds a year; writing £75 as "£75.00" beside it would make the
+ * two headlines read as different kinds of number.
+ */
+const moneyExact = (pennies: number, p: CountryProfile): string =>
+  formatMoney(pennies, { currency: p.currency, locale: p.locale, maximumFractionDigits: pennies % 100 === 0 ? 0 : 2 });
 
 export async function planChoiceFor(
   db: Db = defaultDb,
@@ -95,6 +119,19 @@ export async function planChoiceFor(
   // that annual saves nothing; claiming "0 months free" would be a worse lie than saying nothing.
   const monthsFree = monthsGiven - monthsPaid > 0 ? monthsGiven - monthsPaid : null;
 
+  // ── THE COMPARISON FIGURES, DERIVED AND NEVER TYPED (owner ruling, 2026-10-29) ────────────────
+  // The percentage is the owner's formula, (months given − months paid) ÷ months given, written
+  // against monthsGiven rather than a literal 12 for the same reason the saving is not typed: the
+  // day months_given moves in the Engine Room, a 12 here becomes a wrong percentage on the signup
+  // screen with nothing to catch it. At months_given = 12 the two are the same arithmetic.
+  //
+  // The headline is ROUNDED to the penny and is an EQUIVALENCE, not a charge: nothing bills
+  // monthly on the yearly plan. The charge sentence below carries the figure that is really taken.
+  const perMonthEquivPennies = Math.round(firstYearPerLocation / monthsGiven);
+  const savingRaw = settings.monthlyPricePennies * monthsGiven - firstYearPerLocation;
+  const savingPerYearPennies = savingRaw > 0 ? savingRaw : null;
+  const savingPercent = monthsFree === null ? null : Math.round((monthsFree / monthsGiven) * 100);
+
   return {
     trialDays: settings.trialDays,
     trialEndsAt: endsAt.toISOString(),
@@ -107,6 +144,8 @@ export async function planChoiceFor(
       totalPennies: monthlyTotal,
       perLocationLabel: money(settings.monthlyPricePennies, profile),
       totalLabel: money(monthlyTotal, profile),
+      perMonthEquivPennies: settings.monthlyPricePennies,
+      perMonthEquivLabel: moneyExact(settings.monthlyPricePennies, profile),
       trialSentence: `Your trial ends on ${endsLabel}. You’ll then be charged ${money(monthlyTotal, profile)} a month.`,
     },
     annual: {
@@ -116,15 +155,17 @@ export async function planChoiceFor(
       totalPennies: firstYearTotal,
       perLocationLabel: money(firstYearPerLocation, profile),
       totalLabel: money(firstYearTotal, profile),
+      perMonthEquivPennies,
+      perMonthEquivLabel: moneyExact(perMonthEquivPennies, profile),
       offerApplies: offer.discountPennies > 0,
       renewalTotalPennies: renewalTotal,
       renewalTotalLabel: money(renewalTotal, profile),
+      renewalPerLocationLabel: money(offer.annualPennies, profile),
       monthsFree,
-      // DERIVED, NEVER TYPED (owner ruling, 2026-10-28). A typed "two months free" becomes a lie
-      // the first time anybody changes renewal_annual_months_paid in the Engine Room.
-      savingLabel: monthsFree === null
-        ? null
-        : `${monthsFree} months free — ${monthsGiven} months for the price of ${monthsPaid}`,
+      savingPerYearPennies,
+      savingLabel: savingPerYearPennies === null ? null : `Save ${money(savingPerYearPennies, profile)} a year`,
+      savingPercent,
+      savingPercentLabel: savingPercent === null || savingPercent <= 0 ? null : `Save ${savingPercent}%`,
       // BOTH PRICES WHEN AN OFFER APPLIES. A first-year price shown alone is a mis-sale: the
       // garage would learn the real figure from its second invoice.
       trialSentence: offer.discountPennies > 0

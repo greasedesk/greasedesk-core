@@ -58,7 +58,10 @@ export default function LicencesSettings(props: PageProps) {
   const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<'monthly' | 'annual'>('monthly');
+  // YEARLY IS THE DEFAULT SELECTION on both doors below (owner, 2026-10-29). On the resubscribe
+  // door that is simply which plan opens; on the trial switch it is also the upsell — a garage on
+  // monthly lands on the yearly figures and the saving, and has to choose monthly to stay there.
+  const [plan, setPlan] = useState<'monthly' | 'annual'>('annual');
   const lapsed = isLapsedStatus(subscriptionStatus); // the ONE vocabulary (lib/billing)
   const subscribed = subscriptionStatus === 'trialing' || subscriptionStatus === 'active' || subscriptionStatus === 'past_due';
   // SWITCHING IS A TRIAL-ONLY DOOR (owner, 2026-10-28). Before the first charge there is no money
@@ -66,7 +69,12 @@ export default function LicencesSettings(props: PageProps) {
   // is ABSENT outside the trial rather than disabled — a disabled button invites a support call
   // asking why, and change-plan would refuse it with TRIAL_OVER anyway.
   const trialing = subscriptionStatus === 'trialing';
-  const switchTo: 'monthly' | 'annual' | null = !trialing || !currentPlan ? null : currentPlan === 'monthly' ? 'annual' : 'monthly';
+  // THE TARGET IS WHAT THE TOGGLE IS SHOWING, not "whichever one they are not on". The block is
+  // present for the whole trial so the pricing can be read either way round; the BUTTON appears
+  // only when the selection differs from the plan they hold, because a button that would change
+  // nothing is a support call asking what it did.
+  const canSwitch = Boolean(trialing && currentPlan);
+  const switchTo: 'monthly' | 'annual' | null = canSwitch && plan !== currentPlan ? plan : null;
 
   async function go(path: string, body?: Record<string, unknown>) {
     setBusy(true); setError(null);
@@ -132,26 +140,32 @@ export default function LicencesSettings(props: PageProps) {
         </div>
       )}
 
-      {/* SWITCHING DURING THE TRIAL. Present only while trialing; see the derivation above. */}
-      {billingConfigured && switchTo && choice && (
+      {/* SWITCHING DURING THE TRIAL. Present only while trialing; see the derivation above. The
+          SAME chooser as the signup screen, so the figures a garage switches on are the figures it
+          was quoted — one resolver, one renderer, no second copy of the arithmetic. */}
+      {billingConfigured && canSwitch && choice && (
         <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-switch">
-          <p className="text-sm text-ink font-medium">
+          <p className="text-sm text-ink font-medium mb-3">
             You’re on the <span data-testid="plan-switch-current">{currentPlan === 'annual' ? 'yearly' : 'monthly'}</span> plan.
           </p>
-          <p className="text-sm text-muted mt-1" data-testid="plan-switch-sentence">
-            {switchTo === 'annual' ? choice.annual.trialSentence : choice.monthly.trialSentence}
-          </p>
-          <p className="text-xs text-muted mt-1">
+          <PlanChooser choice={choice} value={plan} onChange={setPlan} disabled={busy} />
+          <p className="text-xs text-muted mt-2">
             You can change this while your trial is running. Nothing is charged and your trial end date does not move.
           </p>
-          <button
-            onClick={() => go('/api/stripe/change-plan', { plan: switchTo })}
-            disabled={busy}
-            data-testid={`plan-switch-to-${switchTo}`}
-            className="mt-3 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50"
-          >
-            {busy ? 'Changing…' : switchTo === 'annual' ? 'Switch to yearly' : 'Switch to monthly'}
-          </button>
+          {switchTo ? (
+            <button
+              onClick={() => go('/api/stripe/change-plan', { plan: switchTo })}
+              disabled={busy}
+              data-testid={`plan-switch-to-${switchTo}`}
+              className="mt-3 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+            >
+              {busy ? 'Changing…' : switchTo === 'annual' ? 'Switch to yearly' : 'Switch to monthly'}
+            </button>
+          ) : (
+            <p className="text-sm text-muted mt-3" data-testid="plan-switch-already">
+              This is the plan you’re on.
+            </p>
+          )}
         </div>
       )}
 

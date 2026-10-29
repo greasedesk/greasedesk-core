@@ -124,6 +124,7 @@ of a different database.
 | `T` trial days | `ProgrammeSettings.trial_days` | 30 |
 | `R` renewal months charged | `ProgrammeSettings.renewal_annual_months_paid` | 10 |
 | `O` offer months charged | `ProgrammeSettings.offer_months_paid` | **6** |
+| `G` months of service given | `ProgrammeSettings.months_given` | 12 |
 
 Derived:
 
@@ -133,6 +134,16 @@ Derived:
 | affiliate first-year price | `O × M` | **£450** |
 | first-year discount | `(R − O) × M` | **£300** |
 | coupon id | `gd-first-year-<discount pennies>-gbp` | **`gd-first-year-30000-gbp`** |
+
+And the three figures the **screen** shows, which are comparisons and not charges — the monthly
+equivalent exists only so yearly can be read against monthly, and nothing bills monthly on the
+yearly plan:
+
+| quantity | formula | unreferred | referred |
+|---|---|---|---|
+| headline, per location | `year price ÷ G` | **£62.50** /month | **£37.50** /month |
+| money saving, per location | `G × M − year price` | **£150** a year | **£450** a year |
+| percentage on the toggle | `(G − months charged) ÷ G` | **Save 17%** | **Save 50%** |
 
 Read them for yourself before you start:
 
@@ -155,9 +166,10 @@ The path that already worked. Run it first: if A is wrong, B and C tell you noth
    `VerificationToken` instead. Then walk all six wizard steps —
    `country → phone → site → rates → tax → checkout` — granting the phone exemption above when you
    reach step 2.
-2. Reach checkout. The step now offers **two plans**, with **Monthly preselected** — leave it, and
-   confirm the Monthly card reads **`M`** (£75) *per location, per month* and that its trial
-   sentence names the end date and the amount.
+2. Reach checkout. The step opens on **Yearly** (owner, 2026-10-29) — click **Monthly** on the
+   toggle, and confirm the panel follows it: headline **`M`** (£75) */month*, "Billed monthly.
+   Cancel any time.", and a charge sentence naming the end date and **`M`**. If the charge
+   sentence still names the yearly figure, stop: the panel and the toggle have come apart.
 3. Pay with `4242 4242 4242 4242`, any future expiry, any CVC.
 
 **Confirm — in Stripe:** subscription `trialing`; trial ends in 30 days; one item, £75/month; no
@@ -176,11 +188,15 @@ rows written `false` with source `stripe`.
 
 ## B — ANNUAL, UNREFERRED
 
-1. Register a second garage. At the checkout step choose **Yearly**. Confirm the card reads
-   **`R × M`** (£750 today) *per location, per year*, carries the derived saving line
-   (**`months_given − R` months free**, "2 months free" at today's settings), and that its trial
-   sentence reads "…then £750 for 12 months". An unreferred garage must show **no** first-year /
-   renewal split — there is no offer to explain.
+1. Register a second garage. At the checkout step **Yearly is already selected** — touch nothing.
+   Confirm four things:
+   - the toggle's Yearly tab carries **`(G − R) ÷ G`** as a percentage (**Save 17%** today);
+   - the headline is the monthly equivalent **`R × M ÷ G`** (**£62.50** */month*), *per location*;
+   - beneath it, "Billed **`R × M`** a year" (£750) and "Save **`G × M − R × M`** a year" (£150);
+   - the charge sentence reads "…then £750 for 12 months" — the **total**, not £62.50.
+
+   An unreferred garage must show **no** first-year / renewal split — there is no offer to
+   explain.
 2. Pay with `4242 4242 4242 4242`.
 
 **Confirm — in Stripe:** subscription `trialing`, **nothing charged yet**; one item at
@@ -205,10 +221,14 @@ product, one level of access.
    should prefill itself from the URL — no cookie, no consent banner interaction needed.
 3. Confirm the attribution landed before going further:
    `SELECT party_type, party_id, share_bp FROM "TenantAttribution" WHERE group_id = '<id>';`
-4. Choose **Yearly**. Confirm **three** things on the card, because this is the mis-sale case:
-   - the headline price is **`O × M`** (£450 on the gate database, £600 in production);
-   - a second line states **both**: "£450 for the first year, then £750 a year";
-   - the trial sentence also names both figures.
+4. **Yearly is already selected.** Confirm **four** things, because this is the mis-sale case:
+   - the headline is the **first-year** monthly equivalent **`O × M ÷ G`** (**£37.50** */month*);
+   - the line beneath states **both**: "£450 for your first year, then £750 a year" — and the
+     plain "Billed £X a year" line is **gone**, replaced, not shown as well;
+   - the saving is against monthly at the **offer** price: "Save £450 a year", and the toggle
+     reads **`(G − O) ÷ G`** (**Save 50%**);
+   - the charge sentence also names both figures.
+
    If the first-year price appears alone, stop — the garage would learn the real figure from its
    second invoice.
 5. Pay with `4242 4242 4242 4242`.

@@ -34,9 +34,11 @@ export default function BillingPage({ choice }: { choice: PlanChoice }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('idle');
   const [error, setError] = useState<string | null>(null);
-  // MONTHLY IS THE DEFAULT (owner ruling, 2026-10-28) — the cheaper commitment is the one a garage
-  // falls into by not choosing, never the larger one.
-  const [plan, setPlan] = useState<'monthly' | 'annual'>('monthly');
+  // YEARLY IS THE DEFAULT (owner, 2026-10-29 — THIS REVERSES 2026-10-28, when monthly was the
+  // default on the reasoning that a garage should fall into the smaller commitment). The better
+  // price is the one shown first. Nothing is hidden by it: the toggle is one click, and the
+  // charge sentence under the headline states the exact amount and date before the button.
+  const [plan, setPlan] = useState<'monthly' | 'annual'>('annual');
   const trialDays = choice.trialDays;
   const cancelled = router.query.billing === 'cancelled';
   const polls = useRef(0);
