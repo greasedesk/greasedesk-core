@@ -329,6 +329,12 @@ try {
     `${textOf(licPaid.html, 'plan-headline-annual')} vs ${poundsExact(expectRenewalEquiv)}`);
   await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: null } });
 
+  // THE WINDOW'S LENGTH COMES FROM THE MODULE, never from a 14 typed here. date-constant-gate
+  // caught the first draft doing exactly that in a regex, and it was right for a better reason
+  // than its own: a clause restating the number agrees with itself when the constant moves, and
+  // the number is pinned once — in annual-billing-gate, against the rule.
+  const { WINDOW_DAYS } = await import('/Users/hugh/Developer/greasedesk-core/lib/renewal-window.ts');
+
   // ── 6b. A PAID YEAR CLOSES THE SWITCH, AND SAYS SO (owner, 2026-10-29) ────────────────────────
   // NOT covered by "present only while trialing" below: this fixture still reads trialing. A
   // subscription can read trialing with money already taken — a trial extended in the Stripe
@@ -345,7 +351,8 @@ try {
     !licLocked.html.includes('data-testid="plan-switch"') && !/data-testid="plan-switch-to-/.test(licLocked.html),
     'a paid year is not given back a month at a time — that is a credit note and a proration');
   check('  …and the absence is EXPLAINED, not silent',
-    licLocked.html.includes('data-testid="plan-switch-locked"') && /last 14 days before your renewal/.test(licLocked.html),
+    licLocked.html.includes('data-testid="plan-switch-locked"')
+      && new RegExp(`last ${WINDOW_DAYS} days before your renewal`).test(licLocked.html),
     'a yearly garage that looked for the switch and found nothing would ask us where it went');
   // AND WITH NO DATE TO GIVE, IT GIVES NONE. This fixture's subscription id is one Stripe has
   // never heard of and its cache carries no period end, so the renewal date is genuinely unknown
@@ -389,7 +396,7 @@ try {
   // A MONTH OUT: shut, and the copy names the day to come back on.
   await setRenewal(30 * DAY_MS);
   const farRenewal = new Date(Date.now() + 30 * DAY_MS);
-  const farOpens = new Date(farRenewal.getTime() - 14 * DAY_MS);
+  const farOpens = new Date(farRenewal.getTime() - WINDOW_DAYS * DAY_MS);
   const licFar = await get('/admin/settings/licences');
   check('a month before renewal the switch is still shut',
     licFar.html.includes('data-testid="plan-switch-locked"') && !licFar.html.includes('data-testid="plan-window-open"'),
@@ -406,13 +413,13 @@ try {
   // THE BOUNDARY, FROM THE OUTSIDE IN. One second earlier than the window and it is shut; one
   // second later and it is open. Both go through the real screen, so this is the rule REACHING
   // the garage rather than the arithmetic agreeing with itself.
-  await setRenewal(14 * DAY_MS + 60_000);
+  await setRenewal(WINDOW_DAYS * DAY_MS + 60_000);
   const licJustOutside = await get('/admin/settings/licences');
   check('a minute before the window opens, it is shut',
     licJustOutside.html.includes('data-testid="plan-switch-locked"'),
     'the boundary is 14 days to the second, not "about a fortnight"');
 
-  await setRenewal(14 * DAY_MS - 60_000);
+  await setRenewal(WINDOW_DAYS * DAY_MS - 60_000);
   const licJustInside = await get('/admin/settings/licences');
   check('  …and a minute after it opens, the switch is THERE',
     licJustInside.html.includes('data-testid="plan-window-open"')

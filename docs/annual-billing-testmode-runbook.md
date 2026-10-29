@@ -322,6 +322,46 @@ Then advance:
 8. **Advance a year** and confirm the renewal invoice is **`R × M`** (£750.00) and actually
    collected.
 
+### E2 — the fourteen-day window (needs the same clock, between steps 7 and 8)
+
+The window is the only part of the annual design no gate can reach: it needs a real subscription
+with a real renewal date, and the clauses in `annual-billing-gate` prove the arithmetic and the
+schedule parameters while `plan-choice-gate` drives the screen through the CACHED date. The live
+limb — Stripe's own `items.data[0].current_period_end`, and `sub.schedule` — is proved here.
+
+After step 7 the garage is annual, `active`, paid, with a renewal about a year out.
+
+9. **Open Settings → Licence & Subscriptions.** Expect the switch to be ABSENT and a note reading
+   *"You can change to monthly from ‹renewal − 14 days›, the last 14 days before your renewal on
+   ‹renewal›."* Both dates must be real, and **"Renews / next charge" must now show a date** —
+   that row was empty for every garage until 2026-10-29.
+10. **Advance the clock to 20 days before renewal.** The note must still be there, unchanged. Call
+    `POST /api/stripe/change-plan {"plan":"monthly"}` directly: **409 `ANNUAL_PAID`**, carrying
+    `opensAt` and `renewalAt`.
+11. **Advance to 10 days before renewal.** The note is gone and **"Move to monthly at renewal"** is
+    there. Press it. Then in Stripe:
+    - the subscription now carries a **schedule**;
+    - **phase 1 is unchanged**: same price, same quantity, **same end date** — this is the whole
+      promise, and `holdFidelity` refuses the hold if it is not;
+    - **phase 2** is the monthly price × sites from the renewal date, `iterations 1`, metadata
+      `gd_plan=monthly`, **no discount**;
+    - `end_behavior` is **release**;
+    - **no `TenantPlanTerms` row was written** — the garage is still on the yearly plan today.
+12. **Press "Stay on yearly".** The schedule is released, `sub.schedule` is null, phase 1 is still
+    the untouched paid year, and the screen is back to the window block. Then press
+    "Move to monthly at renewal" again to re-arm it for the next step.
+13. **Advance past the renewal date.** Expect:
+    - an invoice for **`monthly × sites`** (£75 × sites), **not** `R × M`;
+    - the subscription is monthly, the schedule has **released** itself, and `sub.schedule` is null;
+    - `gd_plan` on the subscription is now `monthly`, and the webhook has appended **one**
+      `TenantPlanTerms` row with `plan = 'monthly'` — dated the renewal, not fourteen days earlier;
+    - the licences screen shows the monthly plan with no window block.
+
+**One thing to try on purpose while the hold is in place (step 11):** add a location. The quantity
+sync cannot re-rate a scheduled subscription, so expect the site to be added, the Stripe quantity to
+stay as it was, and an **audit row `billing.quantity_sync_blocked`** naming both counts. That is the
+known limit of this design, recorded rather than fixed.
+
 ---
 
 ## What to tear down
