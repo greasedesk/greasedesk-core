@@ -21,6 +21,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireOperatorApi } from '@/lib/operator-auth';
 import { getStripe } from '@/lib/stripe';
+import { renewalAtOf } from '@/lib/stripe-period';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -90,7 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // trial_end is REPORTED, never assumed. A migration that silently ends a trial takes money
         // early from a tenant who was promised a free period.
         trial_end: s.trial_end ? new Date(s.trial_end * 1000).toISOString() : null,
-        current_period_end: s.current_period_end ? new Date(s.current_period_end * 1000).toISOString() : null,
+        // FROM THE ITEM, not the subscription. Basil removed the top-level field, so this read
+        // reported null for every subscription in the account — the same bug as the billing cache,
+        // in the one screen an operator uses to check a garage's renewal date.
+        current_period_end: renewalAtOf(s)?.toISOString() ?? null,
         cancel_at_period_end: s.cancel_at_period_end,
         currency: s.currency,
         customer: typeof s.customer === 'string' ? s.customer : s.customer?.id,

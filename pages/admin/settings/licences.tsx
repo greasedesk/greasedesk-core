@@ -228,8 +228,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   // A DEMO MAY NOT BUY ANYTHING, so it is not offered a price to look at (see the panel above).
   // The trial end comes from Group.trial_ends_at, which lib/stripe-billing-cache mirrors back from
-  // Stripe's own trial_end — GroupBilling.current_period_end is NULL on the Basil API and would
-  // silently compute a date from today instead of the real one.
+  // Stripe's own trial_end. NOT from current_period_end, which is a different question: the end of
+  // the trial and the next renewal coincide on a new subscription and part company at the first
+  // renewal. (That column was ALSO null on every row until 2026-10-29 — the cache was reading a
+  // field Basil removed — which is why this comment used to give that as the reason.)
   const choice = (group as any)?.is_demo
     ? null
     : await planChoiceFor(prisma, groupId, {

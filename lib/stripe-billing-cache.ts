@@ -19,6 +19,7 @@ import { prisma } from '@/lib/db';
 import { billingStatusFromStripe } from '@/lib/billing';
 import { modulesFromProducts, coreProductId, applyStripeModules } from '@/lib/modules';
 import { clearFree, isLiveSubscription } from '@/lib/free-tenant';
+import { renewalAtOf } from '@/lib/stripe-period';
 
 /**
  * THE PRODUCTS A SUBSCRIPTION IS FOR. Exported because it is the step entitlement turns on, and a
@@ -48,7 +49,10 @@ export async function applyStripeSubscriptionToCache(sub: Stripe.Subscription, f
   const groupId = byCustomer?.group_id ?? fallbackGroupId ?? null;
   if (!groupId) return null;
 
-  const periodEnd = (sub as any).current_period_end ? new Date((sub as any).current_period_end * 1000) : null;
+  // THE RENEWAL DATE COMES FROM THE ITEM (2026-10-29). This read used to be
+  // `(sub as any).current_period_end` — a field Basil removed — so every cache write since the
+  // upgrade stored NULL, and the `as any` is why tsc never objected. See lib/stripe-period.
+  const periodEnd = renewalAtOf(sub);
   const trialEnd = (sub as any).trial_end ? new Date((sub as any).trial_end * 1000) : null;
 
   // ENTITLEMENT IS DERIVED HERE, from the SAME subscription object, in the SAME transaction as the

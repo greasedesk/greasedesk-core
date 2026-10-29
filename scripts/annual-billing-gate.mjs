@@ -439,6 +439,7 @@ try {
   // takes an invoice-shaped object, so the gate hands it one.
   console.log('\n— recording the first payment —');
   const CACHE = await import(`${R}/lib/stripe-billing-cache.ts`);
+  const SP = await import(`${R}/lib/stripe-period.ts`);
   const recGarage = await mkGarage('rec');
   const CUST = `cus_${PREFIX}REC`;
   await prisma.groupBilling.update({ where: { group_id: recGarage }, data: { stripe_customer_id: CUST } });
@@ -576,6 +577,73 @@ try {
   const lockRows = await prisma.tenantPlanTerms.count({ where: { group_id: lockGarage } });
   check('  …and once the winner commits, the loser writes NOTHING', lockRows === 2, `${lockRows} rows (monthly + one annual)`);
   check('  …and is handed the winner\'s row', loserRow?.id === winnerId, `${loserRow?.id} vs ${winnerId}`);
+
+  // ── 5e. WHEN DOES IT RENEW? THE DATE, NOT THE COLUMN ────────────────────────────────────────
+  // GroupBilling.current_period_end was NULL on every row in this database, and had been since the
+  // Basil upgrade: the cache read `(sub as any).current_period_end`, a field Basil MOVED onto the
+  // subscription ITEM, and the cast is why tsc said nothing. The only symptom was a silence — the
+  // licences page hides its "Renews" row behind `{currentPeriodEnd && …}`, so a paying garage was
+  // simply never told when it renews, and the Engine Room lookup reported null for every account.
+  //
+  // A clause asserting the column was WRITTEN would have passed throughout: it was written, with
+  // null. So these assert the DATE, and the discriminator puts the right date on the item while
+  // putting a DIFFERENT, WRONG one where the old code looked — a reader that still looks there
+  // goes red with a date rather than passing with a plausible one.
+  console.log('\n— the renewal date comes from the subscription ITEM —');
+  const PERIOD = new Date('2026-11-28T12:19:06.000Z');         // 2026-11-28T12:19:06Z, GB-GD2907's real item period end
+  const WRONG  = new Date('2025-11-28T12:19:06.000Z');          // a year earlier: what the removed top-level field would give
+  const subWithPeriod = (over = {}) => ({
+    id: `sub_${PREFIX}PERIOD`, status: 'active', customer: `cus_${PREFIX}PERIOD`, trial_end: null,
+    items: { data: [{ quantity: 1, price: { id: `price_${PREFIX}P`, product: CORE },
+                      current_period_end: Math.floor(PERIOD.getTime() / 1000) }] },
+    ...over,
+  });
+
+  const fromItem = SP.renewalAtOf(subWithPeriod());
+  check('renewalAtOf reads the item and gives the REAL date',
+    fromItem?.toISOString() === PERIOD.toISOString(), `${fromItem?.toISOString()} vs ${PERIOD.toISOString()}`);
+
+  // THE DISCRIMINATOR. The same subscription with the date only where the OLD code looked.
+  const legacyOnly = SP.renewalAtOf({
+    ...subWithPeriod({ current_period_end: Math.floor(WRONG.getTime() / 1000) }),
+    items: { data: [{ quantity: 1, price: { id: `price_${PREFIX}P`, product: CORE } }] },
+  });
+  check('  …and the removed top-level field gives NOTHING, so no clause here can pass through it',
+    legacyOnly === null, `${legacyOnly?.toISOString() ?? 'null'} — a reader on the old field would answer ${WRONG.toISOString()}`);
+
+  // BOTH PRESENT, DISAGREEING: the item wins. This is the clause that tells the two reads apart
+  // when a payload carries the legacy field as well.
+  const bothPresent = SP.renewalAtOf(subWithPeriod({ current_period_end: Math.floor(WRONG.getTime() / 1000) }));
+  check('  …and when BOTH are present and disagree, the ITEM is the answer',
+    bothPresent?.toISOString() === PERIOD.toISOString(), `${bothPresent?.toISOString()} vs the stale ${WRONG.toISOString()}`);
+
+  // ABSENT IS NOT ZERO. A subscription with no items, or items with no period, is UNKNOWN; a 1970
+  // renewal date is a plausible-looking wrong answer that would survive longer than an empty one.
+  check('  …and a subscription with no period at all is UNKNOWN, not the epoch',
+    SP.renewalAtOf({ items: { data: [] } }) === null && SP.renewalAtOf({}) === null,
+    `${SP.renewalAtOf({ items: { data: [] } })} / ${SP.renewalAtOf({})}`);
+
+  // TWO ITEMS, TWO DATES. The question is "when is money next taken", so the EARLIEST ends it —
+  // items.data[0] is merely the first one Stripe listed, and on a single-interval subscription the
+  // two choices are identical, which is exactly why picking the wrong one would never show.
+  const twoItems = SP.renewalAtOf({ items: { data: [
+    { current_period_end: Math.floor(WRONG.getTime() / 1000) + 86400 * 400 },
+    { current_period_end: Math.floor(PERIOD.getTime() / 1000) },
+  ] } });
+  check('  …and when two items disagree, the EARLIEST is the renewal date',
+    twoItems?.toISOString() === PERIOD.toISOString(), `${twoItems?.toISOString()} vs ${PERIOD.toISOString()}`);
+
+  // AND IT REACHES THE COLUMN. The reader being right is not the bug that happened; the bug was
+  // the cache storing null. This fires the REAL handler and reads the row back.
+  const perGarage = await mkGarage('period');
+  await prisma.groupBilling.update({ where: { group_id: perGarage }, data: { stripe_customer_id: `cus_${PREFIX}PERIOD` } });
+  await CACHE.applyStripeSubscriptionToCache(
+    subWithPeriod({ current_period_end: Math.floor(WRONG.getTime() / 1000) }), perGarage);
+  const cached = await prisma.groupBilling.findUnique({
+    where: { group_id: perGarage }, select: { current_period_end: true } });
+  check('the real cache writer stores THAT date on GroupBilling',
+    cached?.current_period_end?.toISOString() === PERIOD.toISOString(),
+    `${cached?.current_period_end?.toISOString() ?? 'null'} — null is what every row in this database held until today`);
 
   // ── 5d. THE CHOKEPOINT IS THE ONLY DOOR ─────────────────────────────────────────────────────
   // The lock protects writePlanTerms. Any other module writing TenantPlanTerms directly walks
