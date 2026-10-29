@@ -28,7 +28,7 @@
  * then be charged £2,250", and the number that leaves its bank is never the illustrative one.
  */
 import { prisma as defaultDb } from '@/lib/db';
-import { planFor, planSettings, type PlanKind } from '@/lib/billing-plans';
+import { planSettings, type PlanKind } from '@/lib/billing-plans';
 import { offerFor } from '@/lib/affiliate';
 import { formatMoney } from '@/lib/format-money';
 import { getProfile, DEFAULT_COUNTRY, formatProfileDate, type CountryProfile } from '@/lib/locale-profiles';
@@ -59,6 +59,13 @@ export type AnnualOption = PlanOption & {
   renewalPerLocationLabel: string;
   /** Months of service minus months charged, for the year being bought. Null when there is no saving to claim. */
   monthsFree: number | null;
+  /**
+   * WHOSE offer this is, and what it buys — in one sentence, for the garage reading the panel.
+   * Null when no offer applies. The NAME comes from the attribution (offerFor resolves it from the
+   * same referrer the entitlement decision used) and the MONTHS from the settings; neither is typed
+   * here, so an Engine Room edit or a renamed affiliate changes the sentence with nothing to update.
+   */
+  offerReason: string | null;
   /** Against twelve months of monthly, one location. Null when yearly saves nothing. */
   savingPerYearPennies: number | null;
   savingLabel: string | null;
@@ -93,8 +100,11 @@ export async function planChoiceFor(
   opts: { country?: string | null; sites?: number; trialEndsAt?: Date | null; settingsId?: string } = {},
 ): Promise<PlanChoice> {
   const profile = getProfile(opts.country ?? DEFAULT_COUNTRY);
+  // ONE READ, PASSED ON (owner, 2026-10-29). This used to read the settings and then let offerFor
+  // read them again, so a price from the first read could appear beside a month count from the
+  // second. The window is small and the symptom is a screen that contradicts itself.
   const settings = await planSettings(db, { settingsId: opts.settingsId, country: opts.country });
-  const offer = await offerFor(db, groupId, { settingsId: opts.settingsId });
+  const offer = await offerFor(db, groupId, { settingsId: opts.settingsId, settings });
   const sites = Math.max(1, Math.trunc(opts.sites ?? 1));
 
   // THE TRIAL END. Passed in when the trial is already running (Group.trial_ends_at, which
@@ -112,9 +122,12 @@ export async function planChoiceFor(
   const firstYearTotal = firstYearPerLocation * sites;
   const renewalTotal = offer.annualPennies * sites;
 
-  const annualPlan = planFor(offer.plan, settings, sites);
-  const monthsPaid = annualPlan.monthsPaid ?? 0;
-  const monthsGiven = annualPlan.monthsGiven ?? settings.monthsGiven;
+  // THE MONTHS COME FROM THE SAME ANSWER AS THE PRICE. Re-deriving them here through planFor was
+  // how the reason line could say "price of 6" under a £600 headline: planFor reads today's
+  // settings, while the price may be this garage's FROZEN offer. offerFor reports the months it
+  // actually charged for, frozen or live, and that is the only honest source for the sentence.
+  const monthsPaid = offer.monthsPaid;
+  const monthsGiven = offer.monthsGiven;
   // ZERO IS NOT A SAVING AND A NEGATIVE ONE IS NOT A SENTENCE. Settings can legitimately be set so
   // that annual saves nothing; claiming "0 months free" would be a worse lie than saying nothing.
   const monthsFree = monthsGiven - monthsPaid > 0 ? monthsGiven - monthsPaid : null;
@@ -162,6 +175,14 @@ export async function planChoiceFor(
       renewalTotalLabel: money(renewalTotal, profile),
       renewalPerLocationLabel: money(offer.annualPennies, profile),
       monthsFree,
+      // A NAME WE NO LONGER HAVE IS NOT A REASON TO HIDE THE OFFER. If the rep row has gone the
+      // sentence drops the "from X" clause and still explains the price, because the price is the
+      // part the garage is about to be charged.
+      offerReason: offer.discountPennies <= 0
+        ? null
+        : offer.referrerName
+          ? `Referral offer from ${offer.referrerName} — your first year is ${monthsGiven} months for the price of ${monthsPaid}.`
+          : `Referral offer — your first year is ${monthsGiven} months for the price of ${monthsPaid}.`,
       savingPerYearPennies,
       savingLabel: savingPerYearPennies === null ? null : `Save ${money(savingPerYearPennies, profile)} a year`,
       savingPercent,

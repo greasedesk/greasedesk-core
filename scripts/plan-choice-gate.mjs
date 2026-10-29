@@ -219,6 +219,21 @@ try {
     (textOf(onbOffer.html, 'plan-saving-annual') ?? '').includes(pounds(expectOfferSave))
     && textOf(onbOffer.html, 'plan-saving-pct') === `Save ${expectOfferPct}%`,
     `${textOf(onbOffer.html, 'plan-saving-annual')} / ${textOf(onbOffer.html, 'plan-saving-pct')} vs ${pounds(expectOfferSave)} / Save ${expectOfferPct}%`);
+  // ── WHY, AND FROM WHOM (owner, 2026-10-29) ────────────────────────────────────────────────────
+  // A cheaper first year with no stated reason reads as a mistake or a trick. The sentence must
+  // name the affiliate from the ATTRIBUTION and the months from the SETTINGS — so it is checked
+  // against the fixture's own rep name and the settings row, not against a string in the renderer.
+  const reason = textOf(onbOffer.html, 'plan-offer-reason') ?? '';
+  const repName = `${PREFIX} Affiliate`;
+  check('the offer says WHOSE it is, by name from the attribution', reason.includes(repName),
+    `"${reason}" should name ${repName}`);
+  check('  …and what it buys, from the settings and not typed',
+    reason.includes(`${s.months_given} months for the price of ${s.offer_months_paid}`),
+    `"${reason}" should say ${s.months_given} months for the price of ${s.offer_months_paid}`);
+  check('  …and an unreferred garage is given no reason, because there is none',
+    !onb.html.includes('data-testid="plan-offer-reason"'),
+    'an explanation of a discount nobody is getting is a confusing promise');
+
   const aSentOffer = textOf(onbOffer.html, 'plan-trial-annual') ?? '';
   check('  …and the charge sentence states BOTH', aSentOffer.includes(pounds(expectOffer)) && aSentOffer.includes(pounds(expectRenewal)), aSentOffer);
 

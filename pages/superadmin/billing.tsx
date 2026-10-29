@@ -184,15 +184,23 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
               {s.planSettings.months_given} for the price of {s.planSettings.renewal_annual_months_paid}.
               Reward amounts are in <span className="text-ink">pennies</span>.
               {/* ── THE SENTENCE THAT STOPS SOMEBODY REPRICING A LIVE GARAGE ──────────────────
-                  A referred garage's reward terms are COPIED into TenantAffiliateTerms at signup
-                  and its plan into TenantPlanTerms, precisely so these can change without moving
-                  them. A settings form that does not say so is a form somebody will use to try. */}
+                  CORRECTED 2026-10-29, because it was HALF TRUE and read as wholly true. The
+                  reward was frozen at signup; the garage's own first-year offer was not, so moving
+                  offer_months_paid re-priced the first year of every referred garage that had not
+                  yet paid. It was caught in the act mid-rehearsal: a garage referred at 6 months
+                  saw its first year go from £450 to £600 eleven minutes later. Both are frozen
+                  now (TenantAffiliateTerms.offer_months_paid / months_given), so the sentence
+                  names what freezes and what does not instead of implying everything does. */}
               {' '}<span className="text-ink font-semibold">
-                A change here applies to garages signing up from now on only — including at
-                renewal: a live annual subscription keeps the price it was created at.
+                A change here applies to garages signing up from now on only. Two things freeze at
+                signup for a referred garage: what the affiliate earns, and that garage's
+                first-year offer.
               </span>{' '}
-              Garages already referred keep the terms frozen when they signed up; nothing on this
-              screen can alter them.
+              The <span className="text-ink">renewal</span> price is not frozen before a garage
+              subscribes — it is the list price, read at checkout. Once a garage does subscribe it
+              keeps the amount its subscription was created at, including at renewal. Garages
+              already referred keep what was frozen when they signed up; nothing on this screen can
+              alter it.
             </p>
             <form onSubmit={savePlan} className="space-y-3">
               {Object.keys(s.planSettings).map((f) => (

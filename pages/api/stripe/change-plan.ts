@@ -75,7 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const settings = await planSettings(prisma, { country: group.country_code });
   const quantity = Math.max(1, (sub.items?.data ?? []).reduce((n, i) => n + (i.quantity ?? 1), 0));
 
-  const offer = want === 'annual' ? await offerFor(prisma, groupId) : null;
+  // The settings this request already read — one read per request (owner, 2026-10-29).
+  const offer = want === 'annual' ? await offerFor(prisma, groupId, { settings }) : null;
   const planKind: PlanKind = want === 'annual' ? offer!.plan : 'monthly';
   const plan = planFor(planKind, settings, quantity);
 

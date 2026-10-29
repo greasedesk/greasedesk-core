@@ -21,7 +21,7 @@
 import { prisma as defaultDb } from '@/lib/db';
 import { getProgrammeSettings, type SettingsOpts } from '@/lib/programme-settings';
 import {
-  planFor, planSettings, writePlanTerms, currentPlanTerms,
+  planFor, planSettings, writePlanTerms, currentPlanTerms, type PlanSettings,
   renewalAnnualPennies, firstYearDiscountPennies, type PlanKind,
 } from '@/lib/billing-plans';
 import { attributeGroup, type RefMatch } from '@/lib/attribution';
@@ -100,6 +100,16 @@ export async function freezeTermsAtSignup(
   // that did not say who referred the garage.
   if (!terms.affiliateId) throw new Error('freezeTermsAtSignup: affiliateId is required — terms about a referral must name who referred');
   const at = terms.at ?? new Date();
+  // THE SETTINGS IN FORCE AT THIS MOMENT, read ONCE and used for both the freeze and the plan row.
+  // Read unconditionally rather than only when a plan is being written: the offer has to be frozen
+  // whether or not this signup also records a shape, which is the defect this repairs.
+  const base = await planSettings(db, opts);
+  const settings = {
+    ...base,
+    ...(terms.offerMonthsPaid !== undefined ? { offerMonthsPaid: terms.offerMonthsPaid } : {}),
+    ...(terms.monthsGiven !== undefined ? { monthsGiven: terms.monthsGiven } : {}),
+  };
+
   const row = await db.tenantAffiliateTerms.upsert({
     where: { group_id: groupId },
     update: {},   // WRITTEN ONCE. A second signup for the same garage is not a re-pricing.
@@ -109,15 +119,13 @@ export async function freezeTermsAtSignup(
       total_reward_pennies: terms.totalRewardPennies,
       instalment_pennies: terms.instalmentPennies,
       signed_up_at: at,
+      // WHAT THE GARAGE GETS, frozen beside what the affiliate earns (owner, 2026-10-29). The
+      // renewal months are deliberately absent: that is the list price, not a promise.
+      offer_months_paid: settings.offerMonthsPaid,
+      months_given: settings.monthsGiven,
     },
   });
   if (terms.plan) {
-    const base = await planSettings(db, opts);
-    const settings = {
-      ...base,
-      ...(terms.offerMonthsPaid !== undefined ? { offerMonthsPaid: terms.offerMonthsPaid } : {}),
-      ...(terms.monthsGiven !== undefined ? { monthsGiven: terms.monthsGiven } : {}),
-    };
     const existing = await currentPlanTerms(db, groupId);
     if (!existing) await writePlanTerms(db, groupId, planFor(terms.plan, settings), { at });
   }
@@ -275,15 +283,28 @@ export function refusePlanCombination(a: { plan: PlanKind | string; trialDays: n
 export async function offerFor(
   db: Db,
   groupId: string,
-  opts?: SettingsOpts,
+  opts?: SettingsOpts & { settings?: PlanSettings },
 ): Promise<{
   plan: Extract<PlanKind, 'annual_offer' | 'annual_renewal'>;
   annualPennies: number;
   discountPennies: number;
   refusal: string | null;
   attributed: boolean;
+  /** WHO introduced them, resolved HERE so no caller re-derives which party is the referrer. */
+  referrerId: string | null;
+  /** Their name, for telling the garage whose offer it is. Null when the rep row has gone. */
+  referrerName: string | null;
+  /** Months CHARGED for by the plan resolved above — the frozen offer, or the live renewal. */
+  monthsPaid: number;
+  /** Months of service that buys. Frozen with the offer; live otherwise. */
+  monthsGiven: number;
+  /** True when the figures came from this garage's frozen terms rather than today's settings. */
+  offerFrozen: boolean;
 }> {
-  const s = await planSettings(db, { settingsId: opts?.settingsId });
+  // ONE SETTINGS READ PER REQUEST (owner, 2026-10-29). A caller that has already read them passes
+  // them in: plan-choice read them separately, so the screen could show a price from one read
+  // beside a month count from another — a self-contradiction a garage would notice before we did.
+  const s = opts?.settings ?? await planSettings(db, { settingsId: opts?.settingsId });
   const terms = await currentTerms(db, opts);
   const renewal = renewalAnnualPennies(s);
 
@@ -325,13 +346,31 @@ export async function offerFor(
     signupsOpen: terms.signupsOpen,
   });
 
-  const discount = refusal ? 0 : firstYearDiscountPennies(s);
+  // ── FROZEN FIRST (owner ruling, 2026-10-29) ──────────────────────────────────────────────────
+  // The garage's first year is whatever it was referred under. The RENEWAL stays live, by the same
+  // ruling: it is the list price, and Stripe holds the amount once they subscribe. Because the
+  // discount is derived as renewal − first year, a later change to the renewal months moves the
+  // COUPON and leaves the frozen first-year amount exactly where it was.
+  const frozenOffer = frozen?.offer_months_paid ?? null;
+  const effective: PlanSettings = frozenOffer === null ? s : {
+    ...s, offerMonthsPaid: frozenOffer, monthsGiven: frozen?.months_given ?? s.monthsGiven,
+  };
+  const discount = refusal ? 0 : firstYearDiscountPennies(effective);
+  const resolvedPlan: Extract<PlanKind, 'annual_offer' | 'annual_renewal'> = refusal ? 'annual_renewal' : 'annual_offer';
+  // THE NAME, FROM THE SAME `referrer` THE DECISION USED. Looked up only when there is one, and
+  // only ever read for display — a missing rep row makes the name null and changes no entitlement.
+  const rep = referrer ? await db.rep.findUnique({ where: { id: referrer }, select: { name: true } }) : null;
   return {
-    plan: refusal ? 'annual_renewal' : 'annual_offer',
+    plan: resolvedPlan,
     annualPennies: renewal,          // the SUBSCRIPTION amount, always the renewal figure
     discountPennies: discount,       // taken off the FIRST invoice only, via a duration:'once' coupon
     refusal,
     attributed: !!attribution,
+    referrerId: referrer,
+    referrerName: rep?.name ?? null,
+    monthsPaid: resolvedPlan === 'annual_offer' ? effective.offerMonthsPaid : s.renewalAnnualMonthsPaid,
+    monthsGiven: resolvedPlan === 'annual_offer' ? effective.monthsGiven : s.monthsGiven,
+    offerFrozen: frozenOffer !== null,
   };
 }
 

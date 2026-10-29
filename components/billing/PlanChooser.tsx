@@ -110,6 +110,13 @@ export default function PlanChooser({
                 {choice.annual.savingLabel}
               </p>
             )}
+            {/* WHY this garage is being shown a cheaper first year. A discount with no stated reason
+                reads as a mistake or a trick; naming the affiliate makes it a referral. */}
+            {choice.annual.offerReason && (
+              <p className="text-muted mt-2 text-xs" data-testid="plan-offer-reason">
+                {choice.annual.offerReason}
+              </p>
+            )}
           </>
         ) : (
           <p className="text-ink mt-2 text-sm" data-testid="plan-billed-monthly">

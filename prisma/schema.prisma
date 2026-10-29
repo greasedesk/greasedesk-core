@@ -1170,6 +1170,26 @@ model TenantAffiliateTerms {
   instalment_pennies   Int
   signed_up_at         DateTime
 
+  // ── AND WHAT THE GARAGE GETS, FROZEN TOO (owner ruling, 2026-10-29) ────────────────────────
+  // Until today this table froze only what the AFFILIATE earns. The Engine Room promises an
+  // offer change "applies to garages signing up from now on only", and that was true of the
+  // reward and false of the discount: moving offer_months_paid moved the first-year price of
+  // every referred garage that had not yet paid. It was caught in the act — GB-GD2907 was
+  // referred at 6 months and its screen jumped from £450 to £600 eleven minutes later.
+  //
+  // @nulls: offer_months_paid, months_given
+  // NULL means THIS GARAGE'S OFFER WAS NEVER RECORDED — not "no offer" and not zero months. It is
+  // the state of every row written before 2026-10-29, and those rows cannot be given an honest
+  // value: the setting in force at their signup is recorded nowhere. offerFor reads the live
+  // setting when it finds NULL, which is the behaviour those garages have had all along, and
+  // reports offerFrozen:false so a caller can tell a frozen figure from a live one.
+  //
+  // The RENEWAL months are deliberately NOT here (owner ruling, same day): £750 is the list
+  // price, read at checkout, and once a garage subscribes Stripe holds its amount. Freezing it
+  // would promise "£750 for ever" to anyone who ever clicked a referral link.
+  offer_months_paid    Int?
+  months_given         Int?
+
   group     Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
   /// RESTRICT, not Cascade: deleting an affiliate must not silently erase what a garage was
   /// referred under, which is the evidence behind every entry already in the ledger.

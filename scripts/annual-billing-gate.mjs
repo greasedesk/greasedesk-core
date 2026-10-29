@@ -231,6 +231,73 @@ try {
     o7.plan === 'annual_renewal' && /paid/i.test(o7.refusal ?? ''),
     `${o7.refusal} — active is only reachable THROUGH a chargeable invoice`);
 
+  // ── 5a. THE OFFER A GARAGE WAS REFERRED UNDER DOES NOT MOVE ─────────────────────────────────
+  // Owner ruling, 2026-10-29, after the defect was caught live: GB-GD2907 was referred while
+  // offer_months_paid read 6, the setting was changed to 8 eleven minutes later, and the garage's
+  // first year moved from £450 to £600. The Engine Room promises the opposite. Done against this
+  // gate's OWN settings row, so the change is literal rather than simulated.
+  console.log('\n— the offer a garage was referred under does not move —');
+  const frozenGarage = await mkGarage('frozen');
+  await refer(frozenGarage);
+  await AF.freezeTermsAtSignup(prisma, frozenGarage, {
+    affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000,
+  }, { settingsId: SETTINGS });
+  const frozenRow = await prisma.tenantAffiliateTerms.findUnique({ where: { group_id: frozenGarage },
+    select: { offer_months_paid: true, months_given: true } });
+  check('signing up FREEZES the garage\'s own offer, not just the affiliate reward',
+    frozenRow?.offer_months_paid === S.offerMonthsPaid && frozenRow?.months_given === S.monthsGiven,
+    `${JSON.stringify(frozenRow)} vs offer ${S.offerMonthsPaid} / given ${S.monthsGiven}`);
+  const beforeChange = await AF.offerFor(prisma, frozenGarage, { settingsId: SETTINGS });
+
+  // NOW MOVE THE SETTING, exactly as the Engine Room would.
+  const NEW_OFFER = S.offerMonthsPaid - 2;      // 8 → 6: a BIGGER discount, so a mistake shows up as money lost
+  await AF.saveSettings(prisma, { offerMonthsPaid: NEW_OFFER }, { settingsId: SETTINGS });
+  const afterChange = await AF.offerFor(prisma, frozenGarage, { settingsId: SETTINGS });
+  check('  …so changing the setting afterwards moves NEITHER its price NOR its months',
+    afterChange.discountPennies === beforeChange.discountPennies && afterChange.monthsPaid === S.offerMonthsPaid
+      && afterChange.offerFrozen === true,
+    `discount ${beforeChange.discountPennies}p → ${afterChange.discountPennies}p | months ${afterChange.monthsPaid} | frozen ${afterChange.offerFrozen}`);
+
+  // AND A GARAGE REFERRED AFTERWARDS GETS THE NEW VALUE — without this the clause above would pass
+  // against a freeze that had simply stopped reading the settings at all.
+  const laterGarage = await mkGarage('later');
+  await refer(laterGarage);
+  await AF.freezeTermsAtSignup(prisma, laterGarage, {
+    affiliateId: aff.id, totalRewardPennies: 12000, instalmentPennies: 3000,
+  }, { settingsId: SETTINGS });
+  const later = await AF.offerFor(prisma, laterGarage, { settingsId: SETTINGS });
+  check('  …while a garage referred AFTERWARDS gets the new value',
+    later.monthsPaid === NEW_OFFER && later.discountPennies === (S.renewalAnnualMonthsPaid - NEW_OFFER) * S.monthlyPricePennies,
+    `months ${later.monthsPaid} (expected ${NEW_OFFER}) | discount ${later.discountPennies}p`);
+
+  // A GARAGE WITH NO FROZEN ROW STILL READS THE LIVE SETTING. Rows written before the column
+  // existed have no honest value; they must keep the behaviour they have always had.
+  const unfrozen = await mkGarage('unfrozen');
+  await refer(unfrozen);
+  const unf = await AF.offerFor(prisma, unfrozen, { settingsId: SETTINGS });
+  check('  …and a referral with NO frozen terms falls back to the live setting',
+    unf.monthsPaid === NEW_OFFER && unf.offerFrozen === false, `months ${unf.monthsPaid} | frozen ${unf.offerFrozen}`);
+  await AF.saveSettings(prisma, { offerMonthsPaid: S.offerMonthsPaid }, { settingsId: SETTINGS });
+
+  // ── AND THE RENEWAL IS DELIBERATELY NOT FROZEN (owner ruling, 2026-10-29) ───────────────────
+  // £750 is the list price, read at checkout; once a garage subscribes Stripe holds the amount.
+  // Freezing it before anyone subscribes would promise "£750 a year for ever" to everyone who
+  // ever followed a referral link. So this asserts the two halves DISAGREE on purpose: the
+  // renewal moves with the setting while the frozen first year does not.
+  const beforeRenewal = await AF.offerFor(prisma, frozenGarage, { settingsId: SETTINGS });
+  await prisma.programmeSettings.update({ where: { id: SETTINGS },
+    data: { renewal_annual_months_paid: S.renewalAnnualMonthsPaid + 1 } });
+  const afterRenewal = await AF.offerFor(prisma, frozenGarage, { settingsId: SETTINGS });
+  check('the RENEWAL is NOT frozen — it moves with the list price',
+    afterRenewal.annualPennies === (S.renewalAnnualMonthsPaid + 1) * S.monthlyPricePennies
+      && afterRenewal.annualPennies !== beforeRenewal.annualPennies,
+    `${beforeRenewal.annualPennies}p → ${afterRenewal.annualPennies}p`);
+  check('  …while the FROZEN first year does not move with it',
+    afterRenewal.annualPennies - afterRenewal.discountPennies === S.offerMonthsPaid * S.monthlyPricePennies,
+    `first year ${afterRenewal.annualPennies - afterRenewal.discountPennies}p, expected ${S.offerMonthsPaid * S.monthlyPricePennies}p — the COUPON absorbs the renewal change`);
+  await prisma.programmeSettings.update({ where: { id: SETTINGS },
+    data: { renewal_annual_months_paid: S.renewalAnnualMonthsPaid } });
+
   // ── 5b. THE WRITER OF THE EVIDENCE ──────────────────────────────────────────────────────────
   // The clauses above read first_paid_at. This block is about who PUTS it there — without it the
   // whole rule rests on a column that nothing is proved to write, which is how a rule becomes a
@@ -427,7 +494,11 @@ try {
     AM.hasKey(swSrc, 'proration_behavior', /'none'/),
     'a raw /proration_behavior/ would also match the word in a comment saying we do NOT set it');
   check('  …and the body chooses a SHAPE; the price comes from offerFor',
-    /offerFor\(prisma, groupId\)/.test(swSrc) && !/req\.body[^\n]*amount/i.test(swSrc));
+    // TOLERANT OF OPTIONS, STRICT ABOUT THE SUBJECT. This matched `offerFor(prisma, groupId)`
+    // exactly and went red the moment the settings were passed in — a scan failing on a comma
+    // while the behaviour it describes is untouched. (It is a source scan at all only until the
+    // change-plan work replaces it with a clause reading the discount off the subscription.)
+    /offerFor\(prisma, groupId[,)]/.test(swSrc) && !/req\.body[^\n]*amount/i.test(swSrc));
 
   const TPL = await import(`${R}/lib/notification-templates.ts`);
   // NAMED, NOT GUESSED. This read `TPL.TEMPLATES ?? TPL.default ?? {}` and the export is

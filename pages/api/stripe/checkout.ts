@@ -160,7 +160,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // to display. A client that posts 'annual_offer' gets whatever offerFor says it is entitled to.
   const wantsAnnual = (req.body && (req.body as any).plan) === 'annual';
   const settings = await planSettings(prisma, { country: group.country_code });
-  const offer = wantsAnnual ? await offerFor(prisma, groupId) : null;
+  // The settings this request already read — one read per request (owner, 2026-10-29).
+  const offer = wantsAnnual ? await offerFor(prisma, groupId, { settings }) : null;
   const planKind: PlanKind = wantsAnnual ? (offer!.plan) : 'monthly';
   const plan = planFor(planKind, settings, quantity);
 
