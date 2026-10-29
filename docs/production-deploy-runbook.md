@@ -288,14 +288,31 @@ cache rewrites itself on the next `customer.subscription.updated` for each garag
 row stays hidden. **Do not read a blank row as a failed deploy** — 8a is the check that the code is
 right; this one fills in on its own.
 
-### 8c — the pricing page
+### 8c — the plan chooser (NOT the public pricing page)
 
-Open `https://greasedesk.com/pricing` signed out. Expect:
+**Corrected after the deploy, 2026-10-29.** The first draft of this step said to look for the
+toggle on `https://greasedesk.com/pricing` signed out. It is not there and never was.
+`PlanChooser` is mounted in exactly two places, both behind auth: `pages/onboarding/billing.tsx`
+and `pages/admin/settings/licences.tsx`.
+
+The public `/pricing` page is single-tier and monthly-only — "£75 per site, per month", "Start your
+30-day free trial" — and this deploy does not change it. Verified live after the deploy: HTTP 200,
+that exact copy, no annual figure anywhere. **That is the correct current state, not a fault**, but
+see the note at the foot of this section.
+
+So check the chooser where it actually lives, as part of step 8d: register the throwaway garage,
+verify the email, and walk to **`/onboarding/billing`**. Expect:
 
 - a **Monthly | Yearly** toggle, with **Yearly** selected;
 - the yearly headline as a **monthly equivalent** (£62.50), with the yearly price (£750) stated
   beneath it, and the saving derived (£150 against 12 × £75);
-- a charge sentence naming a **date**, not "in 30 days".
+- a charge sentence naming a **date**, not "in 30 days";
+- **stop there.** The next press is Checkout, which takes a card.
+
+> **Worth a decision, not tonight:** annual billing is now live in the product and **invisible to a
+> prospect**. A visitor to `/pricing` sees only £75 a month; the yearly price and the saving appear
+> only after they have registered and reached the billing step. Everything built this week sells
+> annual to someone who has already signed up.
 
 ### 8d — a throwaway garage with a referral code (free, but it sends real email)
 
