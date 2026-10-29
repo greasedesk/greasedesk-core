@@ -348,13 +348,68 @@ try {
   check('switching to YEARLY sends the coupon',
     JSON.stringify(toYearly.discounts) === JSON.stringify([{ coupon: 'gd-first-year-15000-gbp' }]),
     JSON.stringify(toYearly.discounts));
-  check('  …and switching to MONTHLY sends an EMPTY discounts list, which is what removes it',
-    Array.isArray(toMonthly.discounts) && toMonthly.discounts.length === 0,
-    `${JSON.stringify(toMonthly.discounts)} — omitting the field would LEAVE a once-only £150 to come off the first £75 invoice`);
+  check('  …and switching to MONTHLY sends the EMPTY STRING, which is what Stripe documents as the clear',
+    toMonthly.discounts === '',
+    `${JSON.stringify(toMonthly.discounts)} — [] means "leave the discounts unchanged", the exact opposite`);
   check('  …and neither switch moves the trial end',
     toYearly.trial_end === 1800000000 && toMonthly.trial_end === 1800000000,
     'a switch changes what a garage is charged, never the date it was told it would be charged');
   check('  …and both state proration explicitly', toYearly.proration_behavior === 'none' && toMonthly.proration_behavior === 'none');
+
+  // ── 5a-iii-b. WHAT ACTUALLY GOES ON THE WIRE ────────────────────────────────────────────────
+  // THE CLAUSES ABOVE PASSED ON THE DAY THE REMOVAL DID NOT WORK, and they were right to: the
+  // object was `{ discounts: [] }`, which is what they asserted. Rehearsal D1 found a garage
+  // switched to monthly still carrying its £300 once-only coupon, with the first £75 invoice
+  // reading £0.00. Two separate faults sat under that, and an assertion on OUR object could not
+  // see either:
+  //   1. Stripe treats an empty ARRAY as "leave the discounts unchanged" (its own words, in
+  //      node_modules/stripe/cjs/resources/Subscriptions.d.ts). Only the empty STRING clears.
+  //   2. stripe-node form-encodes its parameters, and an empty array encodes to NOTHING. The
+  //      field never left the process: `{ discounts: [] }` serialises to "".
+  //
+  // So this asks stripe-node itself what it would send, through its PUBLIC transport hook, with a
+  // fetch that records the body and answers from memory. No network, no key, no account — the
+  // gate header's "no gate calls Stripe" still holds — but the subject is now the request rather
+  // than our object. Fault 2 alone would have turned this red.
+  const StripeLib = (await import('stripe')).default;
+  let wire = null;
+  const recorder = new StripeLib('sk_test_gate_does_not_call_stripe', {
+    httpClient: StripeLib.createFetchHttpClient(async (_url, init) => {
+      wire = String(init?.body ?? '');
+      return new Response('{"id":"sub_ZZ","object":"subscription"}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }),
+  });
+  const bodyFor = async (params) => { wire = null; await recorder.subscriptions.update('sub_ZZ', params); return wire; };
+  const wireMonthly = await bodyFor(toMonthly);
+  const wireYearly = await bodyFor(toYearly);
+  check('the REMOVAL reaches the wire — stripe-node sends `discounts=`',
+    /(^|&)discounts=(&|$)/.test(wireMonthly ?? ''), wireMonthly);
+  check('  …and the ATTACH reaches it as a coupon',
+    (wireYearly ?? '').includes('discounts[0][coupon]=gd-first-year-15000-gbp'), wireYearly);
+  // THE DISCRIMINATOR. The shape this gate asserted until today, run through the same transport:
+  // it vanishes entirely, which is why D1 failed while every clause was green.
+  const wireOldWay = await bodyFor({ ...toMonthly, discounts: [] });
+  check('  …and the EMPTY ARRAY this replaced sends no discounts field at all',
+    !/discounts/.test(wireOldWay ?? ''),
+    `${wireOldWay} — an assertion on the object could not tell these two apart`);
+
+  // ── 5a-iii-c. A PAID YEAR CANNOT DROP TO MONTHLY ────────────────────────────────────────────
+  // Not the same question as `trialing`, which is what the code leaned on. A subscription can
+  // read trialing with money already taken (a trial extended in the dashboard after a charge, a
+  // pause and resume), and in that gap the switch was offered and change-plan took it.
+  console.log('\n— a garage that has paid for the year cannot switch to monthly —');
+  const PAID = new Date('2026-06-01T00:00:00Z');
+  check('annual + money taken locks the switch',
+    BP.annualPaidIn({ plan: 'annual_offer', firstPaidAt: PAID }) === true);
+  check('  …on every annual shape, not just the offer',
+    BP.PLAN_KINDS.filter((k) => k !== 'monthly').every((k) => BP.annualPaidIn({ plan: k, firstPaidAt: PAID })),
+    BP.PLAN_KINDS.join(','));
+  check('  …but an annual garage still in its trial keeps the door open',
+    BP.annualPaidIn({ plan: 'annual_renewal', firstPaidAt: null }) === false,
+    'nothing is collected during a trial, which is the whole window the switch lives in');
+  check('  …and a MONTHLY garage that has paid is not locked by this rule',
+    BP.annualPaidIn({ plan: 'monthly', firstPaidAt: PAID }) === false,
+    'this is "a paid year is not given back a month at a time", not "paying closes the door"');
 
   // ── 5a-iv. A TRIAL SWITCH IS NOT TAKING THE OFFER ───────────────────────────────────────────
   // Holding the offer for an hour during a trial used to spend it: Yearly → Monthly → Yearly cost
@@ -578,6 +633,21 @@ try {
     // while the behaviour it describes is untouched. (It is a source scan at all only until the
     // change-plan work replaces it with a clause reading the discount off the subscription.)
     /offerFor\(prisma, groupId[,)]/.test(swSrc) && !/req\.body[^\n]*amount/i.test(swSrc));
+  // NO SOURCE SCAN FOR THE PAID-YEAR REFUSAL. There was one, asserting that `annualPaidIn` and
+  // `ANNUAL_PAID` appear and in that order, and a red-proof walked straight through it: changing
+  // the guard to `if (false && …)` left every token in place and the clause green. It lives in
+  // plan-choice-gate instead, as a POST to the real endpoint — which also pins the ORDER, since
+  // a guard below the Stripe retrieve answers 502 on a fixture subscription id instead of 409.
+  // A SOURCE SCAN, AND WHY THAT IS WHAT IS LEFT. D1 left the licences screen saying "you're on
+  // the yearly plan" after a switch to monthly, because the page reads the TAIL of the terms
+  // timeline and only the WEBHOOK wrote it — the browser reloads the instant this handler
+  // returns, a second or so before the event lands. Nothing short of driving the real endpoint
+  // catches that, and the endpoint retrieves a Stripe subscription, which no gate has. So the
+  // handler appends the row itself and this asserts the call exists. It would NOT notice the
+  // call being moved after the response, and that is the limit worth knowing.
+  check('  …and it appends the terms row ITSELF, rather than leaving the screen to wait for the webhook',
+    /writePlanTerms\(prisma, groupId, plan\)/.test(swSrc),
+    'the licences page reads the tail of that timeline; the reader and the writer were on different clocks');
 
   const TPL = await import(`${R}/lib/notification-templates.ts`);
   // NAMED, NOT GUESSED. This read `TPL.TEMPLATES ?? TPL.default ?? {}` and the export is

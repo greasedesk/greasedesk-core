@@ -21,6 +21,9 @@ import { requireAdminPage } from '@/lib/admin-guard';
 import { monthlyPriceLabelFor, perLocationLabelFor } from '@/lib/billing-pricing';
 import { resolveTenantProfile, formatProfileDate } from '@/lib/locale-profiles';
 import { isLapsedStatus } from '@/lib/billing';
+// Used ONLY inside getServerSideProps, so Next strips it (and lib/db behind it) from the client
+// bundle. Keep it that way: a module-scope reference here would ship Prisma to the browser.
+import { annualPaidIn, type PlanKind } from '@/lib/billing-plans';
 import { planChoiceFor, type PlanChoice } from '@/lib/plan-choice';
 import PlanChooser from '@/components/billing/PlanChooser';
 
@@ -38,6 +41,8 @@ type PageProps = {
   choice: PlanChoice | null;
   /** What they are on NOW, from the latest TenantPlanTerms row (the webhook appends one per change). */
   currentPlan: 'monthly' | 'annual' | null;
+  /** On a yearly plan with money already taken: the switch is closed until renewal. */
+  annualLocked: boolean;
 };
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -55,7 +60,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan, annualLocked } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // YEARLY IS THE DEFAULT SELECTION on both doors below (owner, 2026-10-29). On the resubscribe
@@ -73,7 +78,9 @@ export default function LicencesSettings(props: PageProps) {
   // present for the whole trial so the pricing can be read either way round; the BUTTON appears
   // only when the selection differs from the plan they hold, because a button that would change
   // nothing is a support call asking what it did.
-  const canSwitch = Boolean(trialing && currentPlan);
+  // A PAID YEAR CLOSES THE DOOR (owner, 2026-10-29). Derived server-side by annualPaidIn, so the
+  // screen and change-plan refuse on one predicate rather than two readings of the same idea.
+  const canSwitch = Boolean(trialing && currentPlan && !annualLocked);
   const switchTo: 'monthly' | 'annual' | null = canSwitch && plan !== currentPlan ? plan : null;
 
   async function go(path: string, body?: Record<string, unknown>) {
@@ -140,6 +147,18 @@ export default function LicencesSettings(props: PageProps) {
         </div>
       )}
 
+      {/* A PAID YEAR. The control is ABSENT, and the absence is EXPLAINED — a yearly garage that
+          looked for the switch and found nothing would ask us where it went. It is not an error
+          state, so it reads as a plain note rather than a warning. */}
+      {billingConfigured && annualLocked && (
+        <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-switch-locked">
+          <p className="text-sm text-ink">
+            You’re on the <span className="font-medium">yearly</span> plan, paid for the year.
+            Your plan can be changed at renewal.
+          </p>
+        </div>
+      )}
+
       {/* SWITCHING DURING THE TRIAL. Present only while trialing; see the derivation above. The
           SAME chooser as the signup screen, so the figures a garage switches on are the figures it
           was quoted — one resolver, one renderer, no second copy of the arithmetic. */}
@@ -200,7 +219,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const [group, billing, siteCount, latestTerms] = await Promise.all([
     prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true, trial_ends_at: true } }),
-    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true } }),
+    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true, first_paid_at: true } }),
     prisma.site.count({ where: { group_id: groupId } }),
     // WHAT THEY ARE ON NOW. The plan is not in the billing cache, so it is read from the terms
     // timeline, which the webhook appends to on every change — the latest row is the current shape.
@@ -220,6 +239,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       });
   const planRow = latestTerms?.plan ?? null;
   const currentPlan = planRow === null ? null : planRow === 'monthly' ? 'monthly' as const : 'annual' as const;
+  const annualLocked = annualPaidIn({ plan: planRow as PlanKind | null, firstPaidAt: billing?.first_paid_at ?? null });
 
   return {
     props: {
@@ -236,6 +256,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       isAdmin: true,
       choice,
       currentPlan,
+      annualLocked,
     },
   };
 };

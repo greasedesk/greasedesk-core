@@ -21,7 +21,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi } from '@/lib/admin-guard';
 import { refuseDemoBilling } from '@/lib/demo-tenant';
 import { getStripe, stripePriceId } from '@/lib/stripe';
-import { planSettings, subscriptionLineFor, renewalAnnualPennies, type PlanKind } from '@/lib/billing-plans';
+import { planSettings, subscriptionLineFor, renewalAnnualPennies, annualPaidIn, currentPlanTerms, writePlanTerms, type PlanKind } from '@/lib/billing-plans';
 import { offerFor, planForGarage } from '@/lib/affiliate';
 import { ensureFirstYearCoupon } from '@/lib/first-year-coupon';
 import { planSwitchParams } from '@/lib/plan-switch';
@@ -45,13 +45,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: 'Billing isn’t configured yet.' });
 
-  const [group, billing] = await Promise.all([
+  const [group, billing, tail] = await Promise.all([
     prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true } }),
-    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { stripe_subscription_id: true, subscription_status: true } }),
+    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { stripe_subscription_id: true, subscription_status: true, first_paid_at: true } }),
+    currentPlanTerms(prisma, groupId),
   ]);
   if (!group) return res.status(404).json({ message: 'Group not found.' });
   if (!billing?.stripe_subscription_id) {
     return res.status(409).json({ message: 'There is no subscription to change yet — choose a plan at checkout.' });
+  }
+
+  // ── A PAID YEAR IS NOT GIVEN BACK A MONTH AT A TIME (owner, 2026-10-29) ─────────────────────
+  // BEFORE the trialing check, because this refusal is the true one and the generic "after the
+  // first payment, contact us" would send a garage that cannot be helped to a support queue.
+  // The licences screen hides the control on the same predicate; this is the half that holds when
+  // the screen is out of date, old, or bypassed altogether.
+  if (want === 'monthly' && annualPaidIn({ plan: (tail?.plan ?? null) as PlanKind | null, firstPaidAt: billing.first_paid_at })) {
+    return res.status(409).json({
+      message: 'You’ve paid for a full year, so the plan can be changed at renewal rather than now.',
+      code: 'ANNUAL_PAID',
+    });
   }
 
   // ── TRIALING, READ FROM STRIPE, NOT FROM THE CACHE ──────────────────────────────────────────
@@ -130,8 +143,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(502).json({ message: 'Could not change your plan — please try again shortly.' });
   }
 
-  // The TenantPlanTerms row is appended by the webhook from the metadata stamped above, so the
-  // timeline is written from Stripe's object rather than from this request's intention.
+  // ── THE TIMELINE IS WRITTEN HERE TOO, NOT ONLY BY THE WEBHOOK (D1, 2026-10-29) ──────────────
+  // It used to be the webhook's job alone, "so the timeline is written from Stripe's object
+  // rather than from this request's intention". That reads well and left the screen lying: the
+  // licences page reads the current plan off the tail of this timeline, the browser reloads the
+  // instant this handler returns, and the webhook arrives a second or so later. A garage that had
+  // just switched to monthly was told it was still on the yearly plan, and stayed told until it
+  // reloaded again. The reader and the writer were on different clocks.
+  //
+  // Safe to write from both ends because writePlanTerms is the locked chokepoint: it takes the
+  // group row, re-reads the tail inside the transaction, and inserts ONLY on a change. Whichever
+  // of the two arrives second finds its own row already there and writes nothing.
+  await writePlanTerms(prisma, groupId, plan).catch((e: any) => {
+    // Not fatal: Stripe has the change, and the webhook will append the row on its own. Said out
+    // loud because until it does, the screen is a step behind.
+    console.error('[stripe] change-plan: plan terms write failed —', e?.message);
+  });
+
   await writeAudit(prisma as any, {
     groupId, userId: vis.userId ?? null,
     action: 'billing.plan_changed', entity: 'group', entityId: groupId,

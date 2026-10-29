@@ -45,6 +45,37 @@ type Db = any; // a PrismaClient or an interactive-transaction client
 export const PLAN_KINDS = ['monthly', 'annual_new', 'annual_offer', 'annual_renewal'] as const;
 export type PlanKind = typeof PLAN_KINDS[number];
 
+/** The annual shapes, as a set: everything that is not the rolling monthly plan. */
+export const isAnnualKind = (k: PlanKind | null | undefined): boolean => !!k && k !== 'monthly';
+
+/**
+ * A GARAGE THAT HAS PAID FOR A YEAR CANNOT DROP TO MONTHLY (owner, 2026-10-29).
+ *
+ * It has bought twelve months of service and the money is collected. Dropping to monthly mid-term
+ * is a credit note, a proration and a refund policy, and none of those are built. So the door is
+ * CLOSED rather than guessed at: the switch control is absent and the API refuses, with the one
+ * sentence that is actually true — the plan can be changed at renewal.
+ *
+ * ── WHY THE TEST IS "ON AN ANNUAL PLAN AND HAS PAID", NOT "HAS PAID AN ANNUAL INVOICE" ─────────
+ * `first_paid_at` records the first non-zero invoice of any kind, so on its own it does not say
+ * WHICH plan was paid for. It does not need to: switching is a trial-only door, nothing is
+ * collected during a trial, and so a garage cannot have paid under one plan and then moved to
+ * another. Annual tail + money taken therefore means the money was taken for the year.
+ *
+ * THAT PREMISE IS LOAD-BEARING. If a switch is ever allowed after the first charge — the board
+ * item is "annual → monthly in the last 14 days before renewal, taking effect at renewal" — this
+ * predicate stops being able to tell the two apart and must read the paid invoice itself.
+ *
+ * Note it is NOT the same question as `trialing`. Today the status covers almost every case,
+ * because a paid garage is `active`. "Almost" is the problem: a subscription can read `trialing`
+ * with money already taken (a trial extended in the Stripe dashboard after a charge, a pause and
+ * resume), and in that gap the old code would have offered the switch and change-plan would have
+ * taken it.
+ */
+export function annualPaidIn(a: { plan: PlanKind | null | undefined; firstPaidAt: Date | null | undefined }): boolean {
+  return isAnnualKind(a.plan) && !!a.firstPaidAt;
+}
+
 export type PlanSettings = {
   monthlyPricePennies: number;
   trialDays: number;

@@ -144,6 +144,13 @@ try {
     const r = await fetch(`${B}${path}`, { headers: { cookie: cookies() }, redirect: 'manual', cache: 'no-store' });
     return { status: r.status, location: r.headers.get('location'), html: await r.text() };
   };
+  const post = async (path, body) => {
+    const r = await fetch(`${B}${path}`, { method: 'POST', redirect: 'manual', cache: 'no-store',
+      headers: { cookie: cookies(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const text = await r.text();
+    let json = null; try { json = JSON.parse(text); } catch { /* an HTML error page */ }
+    return { status: r.status, json, text };
+  };
 
   // ── 1. BOTH CHOICES RENDER, ON THE ONLY CHECKOUT A NEW GARAGE SEES ────────────────────────────
   const onb = await get('/onboarding/billing');
@@ -321,6 +328,49 @@ try {
     && !licPaid.html.includes('data-testid="plan-renewal-annual"'),
     `${textOf(licPaid.html, 'plan-headline-annual')} vs ${poundsExact(expectRenewalEquiv)}`);
   await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: null } });
+
+  // ── 6b. A PAID YEAR CLOSES THE SWITCH, AND SAYS SO (owner, 2026-10-29) ────────────────────────
+  // NOT covered by "present only while trialing" below: this fixture still reads trialing. A
+  // subscription can read trialing with money already taken — a trial extended in the Stripe
+  // dashboard after a charge, a pause and resume — and in that gap the control was offered and
+  // change-plan would have taken it. The testids differ by a suffix, so each `includes` carries
+  // the closing quote: `plan-switch-locked` contains `plan-switch`.
+  await prisma.tenantPlanTerms.create({
+    data: { group_id: groupId, plan: 'annual_renewal', months_paid: 10, months_given: 12,
+      paid_now_pennies: 75000, effective_from: new Date() },
+  });
+  await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: new Date() } });
+  const licLocked = await get('/admin/settings/licences');
+  check('a garage that has PAID for the year is not offered the switch, though it still reads trialing',
+    !licLocked.html.includes('data-testid="plan-switch"') && !/data-testid="plan-switch-to-/.test(licLocked.html),
+    'a paid year is not given back a month at a time — that is a credit note and a proration');
+  check('  …and the absence is EXPLAINED, not silent',
+    licLocked.html.includes('data-testid="plan-switch-locked"') && /changed at renewal/.test(licLocked.html),
+    'a yearly garage that looked for the switch and found nothing would ask us where it went');
+  // AND THE API REFUSES IT, which is the half that holds when the screen is old or bypassed.
+  // A source scan could only see that the guard is PRESENT — a red-proof that disabled it with
+  // `if (false && …)` left every scan green. So this posts to the real endpoint. The refusal
+  // sits BEFORE the Stripe retrieve, which is why a fixture subscription id that Stripe has
+  // never heard of is enough: were the guard moved below the retrieve, Stripe would 404 on it
+  // and this would come back 502 instead of 409.
+  const refused = await post('/api/stripe/change-plan', { plan: 'monthly' });
+  check('  …and change-plan refuses the same switch, with its own reason',
+    refused.status === 409 && refused.json?.code === 'ANNUAL_PAID',
+    `HTTP ${refused.status} ${JSON.stringify(refused.json ?? refused.text.slice(0, 120))}`);
+  check('  …naming renewal, not "contact us"',
+    /renewal/i.test(refused.json?.message ?? ''), refused.json?.message);
+
+  // THE DISCRIMINATOR: the same annual tail with the money not yet taken keeps the door open, so
+  // the two clauses above are about the PAYMENT and not about being on a yearly plan.
+  await prisma.groupBilling.update({ where: { group_id: groupId }, data: { first_paid_at: null } });
+  const licUnpaid = await get('/admin/settings/licences');
+  check('  …while the same annual garage mid-trial still has it',
+    licUnpaid.html.includes('data-testid="plan-switch"') && !licUnpaid.html.includes('data-testid="plan-switch-locked"'),
+    'what closes the door is the money, not the plan');
+  const notRefused = await post('/api/stripe/change-plan', { plan: 'monthly' });
+  check('  …and change-plan stops refusing on that ground too',
+    notRefused.json?.code !== 'ANNUAL_PAID',
+    `${notRefused.status} ${JSON.stringify(notRefused.json ?? '')} — it goes on to Stripe and fails there on a fixture id, which is the right next step`);
 
   await prisma.groupBilling.update({ where: { group_id: groupId }, data: { subscription_status: 'active' } });
   const licActive = await get('/admin/settings/licences');

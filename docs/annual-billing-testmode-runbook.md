@@ -251,22 +251,43 @@ should show **`O × M`** (£450) — `R × M` less the once-only `(R − O) × M
 
 ## D — SWITCH PLAN DURING THE TRIAL
 
-On garage **C**, still trialing:
+On garage **C**, still trialing, on **Settings → Licence**. Rehearsed 2026-10-29 and **FAILED at
+step 2** — see the box at the end of this section; the figures below are what the fixed build owes.
 
-1. On **Settings → Licence**, a trialing garage now has a **Switch to monthly / Switch to yearly**
-   control stating the plan it is on and what it would be charged. Press it. (Equivalently:
-   `POST /api/stripe/change-plan` with `{"plan":"monthly"}`.) Confirm the control is **absent**
-   once the subscription is `active` — it is removed, not disabled.
-2. **Confirm:** the subscription item is now £75/month; **the trial end date has not moved**;
-   nothing has been charged; no proration line appears anywhere.
-3. Switch back with `{"plan":"annual"}`. Confirm it returns to `R × M` per year **with the coupon still
-   attached** — the garage did not lose its offer by changing its mind.
-4. **Confirm the timeline appends rather than overwrites:**
-   `SELECT plan, effective_from FROM "TenantPlanTerms" WHERE group_id = '<id>' ORDER BY effective_from;`
-   Expect four rows: `monthly` (signup), `annual_offer`, `monthly`, `annual_offer`. The earliest
-   row is still the signup one.
-5. **Confirm the door closes.** After step E below, call `change-plan` once more: it must refuse
-   with `TRIAL_OVER` and change nothing.
+1. The toggle opens on **Yearly**. Click **Monthly**, check the panel reads **£75 /month**, then
+   press **Switch to monthly**. (Equivalently: `POST /api/stripe/change-plan` with
+   `{"plan":"monthly"}`.)
+2. **Confirm on the Stripe subscription:** the item is **£75/month**, `gd_plan` is `monthly`, the
+   **trial end has not moved**, no proration line anywhere — and **the discount is GONE**. No
+   `gd-first-year-…` coupon, nothing under Discounts, and the upcoming invoice reads **£75**, not
+   £0.00. This is the clause that failed.
+3. **Confirm on the screen, without reloading again:** the page comes back saying *"You're on the
+   **monthly** plan"*. It reads the tail of `TenantPlanTerms`, which `change-plan` now writes
+   itself rather than waiting for the webhook.
+4. Toggle back to **Yearly**. Before pressing, check it still reads **£37.50 /month**, **"£450 for
+   your first year, then £750 a year"**, **Save 50%**, and the referral reason naming the affiliate
+   at **"price of 6"** (C's frozen months, not the live setting). Press **Switch to yearly**.
+5. **Confirm:** item back to **£750/year**, `gd-first-year-30000-gbp` **attached again** at
+   `duration: once`, **upcoming invoice £450**, trial end still unmoved. The garage did not lose
+   its offer by changing its mind, and did not spend it either — `first_paid_at` is still NULL.
+6. **Confirm the timeline appends rather than overwrites:**
+   `SELECT plan, paid_now_pennies, months_paid, effective_from FROM "TenantPlanTerms" WHERE group_id = '<id>' ORDER BY effective_from;`
+   The new `annual_offer` row must read **45000 / 6** — the frozen months. A row reading 60000 / 8
+   is the live setting leaking in, which is the defect `planForGarage` fixed.
+7. **Confirm the door closes.** After step E below, call `change-plan` once more: it must refuse
+   with `ANNUAL_PAID` (a paid year, changeable at renewal) rather than `TRIAL_OVER`, and the
+   licences screen must show the `plan-switch-locked` note instead of the control.
+
+> **WHAT D1 FOUND, 2026-10-29.** After the switch to monthly the £300 coupon was still attached and
+> the upcoming invoice read £0.00. `lib/plan-switch` sent `discounts: []`, and that fails twice
+> over: Stripe treats an empty **array** as *leave the discounts unchanged* (only the empty
+> **string** clears), and stripe-node form-encodes an empty array to nothing at all, so the field
+> never left the process. The gate asserted the object we built, which was never the thing that was
+> wrong; it now asserts the encoded request body through stripe-node's own transport.
+>
+> D1 also found the licences screen still saying *"You're on the yearly plan"*: it reads the terms
+> timeline, only the webhook wrote it, and the browser reloads the instant `change-plan` returns —
+> a second or so before the event lands.
 
 ---
 
