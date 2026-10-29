@@ -24,6 +24,7 @@ import { isLapsedStatus } from '@/lib/billing';
 // Used ONLY inside getServerSideProps, so Next strips it (and lib/db behind it) from the client
 // bundle. Keep it that way: a module-scope reference here would ship Prisma to the browser.
 import { annualPaidIn, type PlanKind } from '@/lib/billing-plans';
+import { monthlySwitchWindow, pendingScheduleId, renewalAtFor, WINDOW_DAYS } from '@/lib/renewal-window';
 import { planChoiceFor, type PlanChoice } from '@/lib/plan-choice';
 import PlanChooser from '@/components/billing/PlanChooser';
 
@@ -41,8 +42,18 @@ type PageProps = {
   choice: PlanChoice | null;
   /** What they are on NOW, from the latest TenantPlanTerms row (the webhook appends one per change). */
   currentPlan: 'monthly' | 'annual' | null;
-  /** On a yearly plan with money already taken: the switch is closed until renewal. */
+  /** On a yearly plan with money already taken: the switch is closed outside the window below. */
   annualLocked: boolean;
+  /** THE LAST FOURTEEN DAYS. Derived server-side from Stripe's own renewal date so the screen and
+   *  change-plan decide on one rule (lib/renewal-window). */
+  windowOpen: boolean;
+  /** Formatted for the garage; null when we could not read a renewal date, which is NOT "no
+   *  renewal" — it is unknown, and the copy says less rather than naming a date we guessed. */
+  renewalLabel: string | null;
+  windowOpensLabel: string | null;
+  /** A move to monthly already held for renewal: Stripe's schedule id, read live. */
+  heldForRenewal: boolean;
+  windowDays: number;
 };
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -60,7 +71,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function LicencesSettings(props: PageProps) {
-  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan, annualLocked } = props;
+  const { groupName, subscriptionStatus, currentPeriodEnd, periodEndLabel, hasCustomer, siteCount, perMonthLabel, perLocationLbl, billingConfigured, isAdmin, isDemo, choice, currentPlan, annualLocked, windowOpen, renewalLabel, windowOpensLabel, heldForRenewal, windowDays } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // YEARLY IS THE DEFAULT SELECTION on both doors below (owner, 2026-10-29). On the resubscribe
@@ -147,14 +158,73 @@ export default function LicencesSettings(props: PageProps) {
         </div>
       )}
 
-      {/* A PAID YEAR. The control is ABSENT, and the absence is EXPLAINED — a yearly garage that
-          looked for the switch and found nothing would ask us where it went. It is not an error
-          state, so it reads as a plain note rather than a warning. */}
-      {billingConfigured && annualLocked && (
+      {/* A PAID YEAR, IN THREE STATES. The control is ABSENT rather than disabled outside the
+          window — a disabled button invites a support call asking why — and the absence is
+          EXPLAINED, with the date to come back on when we have one.
+
+          HELD first: a garage that has already chosen must be told what it chose, not shown the
+          choice again. Nothing of ours records the hold; `heldForRenewal` is Stripe's own schedule,
+          read live in getServerSideProps, so this cannot describe a pending state that has since
+          been released somewhere else. */}
+      {billingConfigured && annualLocked && heldForRenewal && (
+        <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-hold-pending">
+          <p className="text-sm text-ink">
+            You’ve asked to move to the <span className="font-medium">monthly</span> plan
+            {renewalLabel ? <> from <span className="font-medium">{renewalLabel}</span></> : ' at your renewal'}.
+            Your yearly plan runs until then and nothing changes before it.
+          </p>
+          <button
+            onClick={() => go('/api/stripe/change-plan', { plan: 'annual' })}
+            disabled={busy}
+            data-testid="plan-hold-cancel"
+            className="mt-3 bg-surface hover:bg-surface-muted text-ink border border-line rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? 'Changing…' : 'Stay on yearly'}
+          </button>
+        </div>
+      )}
+
+      {/* THE WINDOW IS OPEN. Its own block rather than the PlanChooser: the chooser's copy is about
+          a trial that is ending and a first charge, and neither is true here. What is true is two
+          figures and a date, so that is what it says. */}
+      {billingConfigured && annualLocked && !heldForRenewal && windowOpen && (
+        <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-window-open">
+          <p className="text-sm text-ink font-medium mb-1">
+            You’re on the <span className="font-medium">yearly</span> plan.
+          </p>
+          <p className="text-sm text-muted">
+            Your renewal{renewalLabel ? <> on <span className="text-ink font-medium">{renewalLabel}</span></> : ''} is
+            close enough to change what happens next. You can move to monthly from that date instead
+            of renewing for another year. The year you’ve paid for is not shortened and nothing is
+            refunded.
+          </p>
+          {/* ITS OWN TESTID, not plan-switch-to-monthly. That one belongs to the trial switch, and
+              a clause asserting "the trial control is absent" would have found this button instead
+              and passed against the wrong subject. */}
+          <button
+            onClick={() => go('/api/stripe/change-plan', { plan: 'monthly' })}
+            disabled={busy}
+            data-testid="plan-window-to-monthly"
+            className="mt-3 bg-accent hover:bg-accent-hover text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? 'Changing…' : 'Move to monthly at renewal'}
+          </button>
+        </div>
+      )}
+
+      {/* OUTSIDE THE WINDOW. The dated sentence is the point: "your plan can be changed at renewal"
+          was true and unactionable, and a garage reading it had no idea when to come back. */}
+      {billingConfigured && annualLocked && !heldForRenewal && !windowOpen && (
         <div className="max-w-xl mt-4 bg-surface border border-line rounded-xl p-4" data-testid="plan-switch-locked">
           <p className="text-sm text-ink">
             You’re on the <span className="font-medium">yearly</span> plan, paid for the year.
-            Your plan can be changed at renewal.
+            {/* THE SENTENCES ARE SINGLE EXPRESSIONS where a number sits inside the words. React
+                puts an SSR comment marker around every interpolation, so `the last {windowDays}
+                days` renders as `the last <!-- -->14<!-- --> days` — a clause reading the page for
+                that phrase goes red over the renderer rather than over the copy. */}
+            {windowOpensLabel && renewalLabel
+              ? <> You can change to monthly from <span className="font-medium">{windowOpensLabel}</span>{`, the last ${windowDays} days before your renewal on `}<span className="font-medium">{renewalLabel}</span>.</>
+              : ` You can change to monthly in the last ${windowDays} days before your renewal.`}
           </p>
         </div>
       )}
@@ -219,7 +289,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
 
   const [group, billing, siteCount, latestTerms] = await Promise.all([
     prisma.group.findUnique({ where: { id: groupId }, select: { group_name: true, country_code: true, ref: true, is_demo: true, trial_ends_at: true } }),
-    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true, first_paid_at: true } }),
+    prisma.groupBilling.findUnique({ where: { group_id: groupId }, select: { subscription_status: true, current_period_end: true, stripe_customer_id: true, stripe_subscription_id: true, first_paid_at: true } }),
     prisma.site.count({ where: { group_id: groupId } }),
     // WHAT THEY ARE ON NOW. The plan is not in the billing cache, so it is read from the terms
     // timeline, which the webhook appends to on every change — the latest row is the current shape.
@@ -243,6 +313,41 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   const currentPlan = planRow === null ? null : planRow === 'monthly' ? 'monthly' as const : 'annual' as const;
   const annualLocked = annualPaidIn({ plan: planRow as PlanKind | null, firstPaidAt: billing?.first_paid_at ?? null });
 
+  // ── THE RENEWAL DATE AND ANY HELD MOVE, FROM STRIPE ITSELF ──────────────────────────────────
+  // ONLY for a garage the window can apply to, so an ordinary page load costs no Stripe call.
+  //
+  // LIVE, not mirrored. A pending move held in a column of ours is a thing that can go stale and
+  // lie, and a licences screen describing a plan the garage was not on is the fault this whole
+  // design came out of. The cached current_period_end is the FALLBACK, not the source: a Stripe
+  // outage should cost the pending state, not the whole page.
+  //
+  // THREE STATES. A failed read leaves renewalAt null, and null is UNKNOWN — the window is shut
+  // and the copy names no date rather than one derived from a date we do not have.
+  let liveRenewalAt: Date | null = null;
+  let heldForRenewal = false;
+  if (annualLocked) {
+    const { getStripe } = await import('@/lib/stripe');
+    const { renewalAtOf } = await import('@/lib/stripe-period');
+    const stripe = getStripe();
+    const subId = billing?.stripe_subscription_id ?? null;
+    if (stripe && subId) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(subId);
+        liveRenewalAt = renewalAtOf(sub);
+        heldForRenewal = !!pendingScheduleId(sub);
+      } catch (e: any) {
+        // SAID OUT LOUD. The page still renders, with the undated copy, and this is the only
+        // record that it did so because Stripe could not be reached.
+        console.error('[licences] could not read the subscription for the renewal window —', e?.message);
+      }
+    }
+  }
+  // ONE RESOLUTION, shared with change-plan (lib/renewal-window): live first, the cache only as a
+  // fallback, and a CACHED date already in the past is stale rather than a renewal.
+  const renewalAt = renewalAtFor({ live: liveRenewalAt, cached: billing?.current_period_end, now: new Date() });
+  const win = monthlySwitchWindow({ renewalAt, now: new Date() });
+  const profile = resolveTenantProfile(group);
+
   return {
     props: {
       groupName: group?.group_name ?? 'Your account',
@@ -259,6 +364,11 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       choice,
       currentPlan,
       annualLocked,
+      windowOpen: win.open,
+      renewalLabel: renewalAt ? formatProfileDate(profile, renewalAt, { long: true }) : null,
+      windowOpensLabel: win.opensAt ? formatProfileDate(profile, win.opensAt, { long: true }) : null,
+      heldForRenewal,
+      windowDays: WINDOW_DAYS,
     },
   };
 };

@@ -345,20 +345,111 @@ try {
     !licLocked.html.includes('data-testid="plan-switch"') && !/data-testid="plan-switch-to-/.test(licLocked.html),
     'a paid year is not given back a month at a time — that is a credit note and a proration');
   check('  …and the absence is EXPLAINED, not silent',
-    licLocked.html.includes('data-testid="plan-switch-locked"') && /changed at renewal/.test(licLocked.html),
+    licLocked.html.includes('data-testid="plan-switch-locked"') && /last 14 days before your renewal/.test(licLocked.html),
     'a yearly garage that looked for the switch and found nothing would ask us where it went');
+  // AND WITH NO DATE TO GIVE, IT GIVES NONE. This fixture's subscription id is one Stripe has
+  // never heard of and its cache carries no period end, so the renewal date is genuinely unknown
+  // — the copy says what is true in general rather than naming a date derived from nothing.
+  check('  …and an UNKNOWN renewal date is not dressed up as one',
+    !/before your renewal on/.test(licLocked.html),
+    'a date we cannot read is unknown, not a date to compute from today');
   // AND THE API REFUSES IT, which is the half that holds when the screen is old or bypassed.
   // A source scan could only see that the guard is PRESENT — a red-proof that disabled it with
-  // `if (false && …)` left every scan green. So this posts to the real endpoint. The refusal
-  // sits BEFORE the Stripe retrieve, which is why a fixture subscription id that Stripe has
-  // never heard of is enough: were the guard moved below the retrieve, Stripe would 404 on it
-  // and this would come back 502 instead of 409.
+  // `if (false && …)` left every scan green. So this posts to the real endpoint.
+  //
+  // WHY A FIXTURE SUBSCRIPTION ID IS ENOUGH, and it is no longer "the guard runs first". The
+  // retrieve now runs BEFORE every branch, because the window needs Stripe's renewal date. An id
+  // Stripe has never heard of therefore fails the retrieve — and for a paid annual garage asking
+  // for monthly that is an UNKNOWN renewal date, which leaves the window shut, which is this
+  // refusal. The handler fails CLOSED to the safe answer rather than 502-ing a garage towards
+  // something that would keep refusing. Remove the paid-year branch and this comes back 502.
   const refused = await post('/api/stripe/change-plan', { plan: 'monthly' });
   check('  …and change-plan refuses the same switch, with its own reason',
     refused.status === 409 && refused.json?.code === 'ANNUAL_PAID',
     `HTTP ${refused.status} ${JSON.stringify(refused.json ?? refused.text.slice(0, 120))}`);
   check('  …naming renewal, not "contact us"',
     /renewal/i.test(refused.json?.message ?? ''), refused.json?.message);
+
+  // ── 6c. THE LAST FOURTEEN DAYS (owner ruling, 2026-10-29) ────────────────────────────────────
+  // The paid year closes the switch everywhere EXCEPT the fortnight before renewal, where the
+  // choice is about a period nobody has paid for and so moves no money. The screen and the
+  // endpoint read one predicate (lib/renewal-window), and these clauses drive both.
+  //
+  // THE LIMB THESE WALK. The renewal date resolves live-first with the cache as the fallback, and
+  // this fixture's subscription id is not one Stripe knows — so both the screen and the endpoint
+  // reach the date through the FALLBACK, from GroupBilling.current_period_end planted below. The
+  // live limb is proved by the pure clauses in annual-billing-gate and, against a real
+  // subscription, by checkout E. Said plainly because a clause that walks one of two limbs and
+  // reports on both is the kind of coverage that is not coverage.
+  const DAY_MS = 86_400_000;
+  const setRenewal = (ms) => prisma.groupBilling.update({
+    where: { group_id: groupId }, data: { current_period_end: new Date(Date.now() + ms) } });
+  const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  // A MONTH OUT: shut, and the copy names the day to come back on.
+  await setRenewal(30 * DAY_MS);
+  const farRenewal = new Date(Date.now() + 30 * DAY_MS);
+  const farOpens = new Date(farRenewal.getTime() - 14 * DAY_MS);
+  const licFar = await get('/admin/settings/licences');
+  check('a month before renewal the switch is still shut',
+    licFar.html.includes('data-testid="plan-switch-locked"') && !licFar.html.includes('data-testid="plan-window-open"'),
+    'outside the window the control is ABSENT, not disabled');
+  check('  …and the note names the OPENING date and the renewal date',
+    licFar.html.includes(fmt(farOpens)) && licFar.html.includes(fmt(farRenewal)),
+    `expected ${fmt(farOpens)} and ${fmt(farRenewal)}`);
+  const farRefused = await post('/api/stripe/change-plan', { plan: 'monthly' });
+  check('  …and the endpoint refuses, naming the same opening date',
+    farRefused.status === 409 && farRefused.json?.code === 'ANNUAL_PAID'
+      && farRefused.json?.opensAt?.slice(0, 10) === farOpens.toISOString().slice(0, 10),
+    `HTTP ${farRefused.status} ${farRefused.json?.code} opensAt ${farRefused.json?.opensAt ?? 'absent'} vs ${farOpens.toISOString()}`);
+
+  // THE BOUNDARY, FROM THE OUTSIDE IN. One second earlier than the window and it is shut; one
+  // second later and it is open. Both go through the real screen, so this is the rule REACHING
+  // the garage rather than the arithmetic agreeing with itself.
+  await setRenewal(14 * DAY_MS + 60_000);
+  const licJustOutside = await get('/admin/settings/licences');
+  check('a minute before the window opens, it is shut',
+    licJustOutside.html.includes('data-testid="plan-switch-locked"'),
+    'the boundary is 14 days to the second, not "about a fortnight"');
+
+  await setRenewal(14 * DAY_MS - 60_000);
+  const licJustInside = await get('/admin/settings/licences');
+  check('  …and a minute after it opens, the switch is THERE',
+    licJustInside.html.includes('data-testid="plan-window-open"')
+      && !licJustInside.html.includes('data-testid="plan-switch-locked"'),
+    'the two blocks are exclusive — a screen showing both would be telling a garage two things');
+  check('  …with a button to move to monthly AT RENEWAL',
+    licJustInside.html.includes('data-testid="plan-window-to-monthly"'),
+    'its own testid: plan-switch-to-monthly belongs to the trial control');
+  check('  …and it promises the paid year is not cut short',
+    /not shortened and nothing is refunded/.test(licJustInside.html),
+    'the whole reason the window is safe is that it changes only the period nobody has paid for');
+
+  // AND THE TRIAL CONTROL IS STILL ABSENT. The window is not the trial switch reappearing: that
+  // one changes the price NOW, which is the thing a paid year forbids.
+  check('  …while the TRIAL switch stays absent, because this is a different door',
+    !licJustInside.html.includes('data-testid="plan-switch"') && !/data-testid="plan-switch-to-/.test(licJustInside.html),
+    'a paid year is never re-priced today, in or out of the window');
+
+  // THE ENDPOINT AGREES. It gets as far as Stripe — which is the proof it is no longer refusing —
+  // and fails there on a subscription id Stripe has never heard of. A 409 ANNUAL_PAID here would
+  // mean the screen offering a door the endpoint had shut, which is the disagreement this one
+  // shared predicate exists to prevent.
+  const insideTry = await post('/api/stripe/change-plan', { plan: 'monthly' });
+  check('  …and the endpoint stops refusing on the paid-year ground inside the window',
+    insideTry.json?.code !== 'ANNUAL_PAID',
+    `${insideTry.status} ${JSON.stringify(insideTry.json ?? insideTry.text.slice(0, 120))} — it goes on to Stripe, which is the right next step for a fixture id`);
+
+  // A CACHED DATE IN THE PAST IS NOT A RENEWAL DATE. Without this the window would stand open for
+  // ever on any garage whose cache went quiet — the switch offered against a day that has passed.
+  await setRenewal(-3 * DAY_MS);
+  const licStale = await get('/admin/settings/licences');
+  check('a cached renewal date in the PAST is treated as unknown, not as an open window',
+    licStale.html.includes('data-testid="plan-switch-locked"')
+      && !licStale.html.includes('data-testid="plan-window-open"')
+      && !/before your renewal on/.test(licStale.html),
+    'a stale cache must not hold the door open');
+  await prisma.groupBilling.update({ where: { group_id: groupId }, data: { current_period_end: null } });
 
   // THE DISCRIMINATOR: the same annual tail with the money not yet taken keeps the door open, so
   // the two clauses above are about the PAYMENT and not about being on a yearly plan.

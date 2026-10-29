@@ -645,6 +645,173 @@ try {
     cached?.current_period_end?.toISOString() === PERIOD.toISOString(),
     `${cached?.current_period_end?.toISOString() ?? 'null'} — null is what every row in this database held until today`);
 
+  // ── 5f. THE LAST FOURTEEN DAYS BEFORE RENEWAL ───────────────────────────────────────────────
+  // A paid annual garage may choose monthly only inside the window, and the choice takes effect AT
+  // RENEWAL. The boundary is DERIVED from WINDOW_DAYS in every clause below, never from a 14 typed
+  // here: a gate restating the number agrees with itself when the constant moves.
+  console.log('\n— the fourteen-day window —');
+  const RW = await import(`${R}/lib/renewal-window.ts`);
+  const PH = await import(`${R}/lib/plan-hold.ts`);
+  const DAY = 86_400_000;
+  const RENEWS = new Date('2027-11-28T12:19:06.000Z');
+  const at = (ms) => RW.monthlySwitchWindow({ renewalAt: RENEWS, now: new Date(RENEWS.getTime() + ms) });
+  const span = RW.WINDOW_DAYS * DAY;
+
+  check('WINDOW_DAYS is 14', RW.WINDOW_DAYS === 14, String(RW.WINDOW_DAYS));
+  check('the window opens EXACTLY WINDOW_DAYS before renewal',
+    at(-span).open === true && at(-span - 1000).open === false,
+    `at −${RW.WINDOW_DAYS}d ${at(-span).open} | one second earlier ${at(-span - 1000).open}`);
+  check('  …and opensAt is that moment, to the second',
+    at(0).opensAt?.toISOString() === new Date(RENEWS.getTime() - span).toISOString(),
+    at(0).opensAt?.toISOString());
+  check('  …and it is still open one second before renewal', at(-1000).open === true);
+  check('  …and SHUT at the renewal instant itself', at(0).open === false,
+    'that instant belongs to the next period — a switch landing then is a switch to a year being charged for');
+  check('  …and shut after it', at(DAY).open === false);
+  check('  …and shut a month out', at(-30 * DAY).open === false);
+
+  // UNKNOWN IS SHUT, not "open because we cannot prove otherwise". A window we cannot date is a
+  // switch whose effective date we could not name on the screen.
+  const unknown = RW.monthlySwitchWindow({ renewalAt: null, now: new Date() });
+  check('an UNKNOWN renewal date leaves the window shut, with no date to show',
+    unknown.open === false && unknown.opensAt === null, JSON.stringify(unknown));
+
+  // ── WHAT IS ACTUALLY SENT TO HOLD IT ────────────────────────────────────────────────────────
+  // Phase 1 is the paid year and must come out untouched; every field not sent back is RESET on
+  // it. These read the built parameters, not the source, for the reason in lib/plan-switch's
+  // header: a source scan passed on every day the coupon was missing.
+  console.log('\n— the schedule that holds it —');
+  const P1_START = Math.floor(new Date('2026-11-28T12:19:06Z').getTime() / 1000);
+  const P1_END = Math.floor(RENEWS.getTime() / 1000);
+  const phase1Of = (over = {}) => ({
+    items: [{ price: 'price_ANNUAL_ADHOC', quantity: 2 }],
+    start_date: P1_START, end_date: P1_END, currency: 'gbp',
+    discounts: [], metadata: {}, proration_behavior: 'create_prorations',
+    add_invoice_items: [], default_tax_rates: [], automatic_tax: null,
+    collection_method: null, default_payment_method: null, application_fee_percent: null,
+    billing_cycle_anchor: null, billing_thresholds: null, description: null,
+    invoice_settings: null, on_behalf_of: null, transfer_data: null, trial_end: null,
+    ...over,
+  });
+
+  const built = PH.monthlyAtRenewalUpdate({ phase: phase1Of(), monthlyPriceId: 'price_MONTHLY', quantity: 2 });
+  check('the hold is built', built.ok === true, built.ok ? '' : JSON.stringify(built.unknownFields));
+  const ph = built.ok ? built.params.phases : [];
+  check('  …phase 1 keeps the paid year\'s price, quantity and BOTH dates',
+    ph[0]?.items?.[0]?.price === 'price_ANNUAL_ADHOC' && ph[0]?.items?.[0]?.quantity === 2
+      && ph[0]?.start_date === P1_START && ph[0]?.end_date === P1_END,
+    JSON.stringify(ph[0]?.items) + ` ${ph[0]?.start_date}→${ph[0]?.end_date}`);
+  check('  …and raises NO proration on it',
+    ph[0]?.proration_behavior === 'none',
+    `${ph[0]?.proration_behavior} — Stripe's default here is create_prorations, so this is a correction`);
+  check('  …phase 2 is the MONTHLY price at the same quantity',
+    ph[1]?.items?.[0]?.price === 'price_MONTHLY' && ph[1]?.items?.[0]?.quantity === 2,
+    JSON.stringify(ph[1]?.items));
+  check('  …and carries gd_plan monthly, which is what appends the terms row ON THE DAY',
+    ph[1]?.metadata?.gd_plan === 'monthly', JSON.stringify(ph[1]?.metadata));
+  check('  …and carries NO discount — the first-year coupon was spent on the year being paid for',
+    ph[1] && !('discounts' in ph[1]), JSON.stringify(ph[1]?.discounts ?? 'absent'));
+  check('  …and the schedule LETS GO afterwards, leaving an ordinary monthly subscription',
+    built.ok && built.params.end_behavior === 'release' && ph[1]?.iterations === 1,
+    `${built.ok ? built.params.end_behavior : '?'} / iterations ${ph[1]?.iterations}`);
+
+  // THE RENEWAL INVOICE. Asserted against the SAME settings the screen quotes from, so a clause
+  // and a screen cannot disagree about £75. The invoice itself is checkout E: a schedule's phase
+  // price is what Stripe will bill, but only a test clock can watch it bill.
+  const monthlyForTwo = S.monthlyPricePennies * 2;
+  check('  …so the renewal period is billed at the monthly price × sites, from the settings',
+    monthlyForTwo === 15000 && ph[1]?.items?.[0]?.quantity === 2,
+    `${monthlyForTwo}p for 2 sites — the £75 figure comes from the settings row, not from this file`);
+
+  // A FIELD WE CANNOT ECHO IS REFUSED, NOT DROPPED. garageVatRegistered() is false today, so a
+  // dropped automatic_tax would wait until the day we register and arrive as a tax bug.
+  const withTax = PH.monthlyAtRenewalUpdate({
+    phase: phase1Of({ automatic_tax: { enabled: true, liability: { type: 'self' } } }),
+    monthlyPriceId: 'price_MONTHLY', quantity: 2 });
+  check('a phase carrying automatic_tax is CARRIED, not dropped',
+    withTax.ok && withTax.params.phases[0].automatic_tax?.enabled === true,
+    JSON.stringify(withTax.ok ? withTax.params.phases[0].automatic_tax : withTax.unknownFields));
+  const withUnknown = PH.monthlyAtRenewalUpdate({
+    phase: phase1Of({ on_behalf_of: 'acct_SOMEBODY', description: 'a phase we did not write' }),
+    monthlyPriceId: 'price_MONTHLY', quantity: 2 });
+  check('  …and a phase carrying fields we cannot echo is REFUSED, by name',
+    withUnknown.ok === false && withUnknown.unknownFields.join(',') === 'description,on_behalf_of',
+    JSON.stringify(withUnknown.ok ? 'built it anyway' : withUnknown.unknownFields));
+
+  // AND THE TWO LISTS COVER STRIPE'S OWN PHASE. Enumerated from the installed type definitions
+  // rather than from a name pattern: a field Stripe adds lands in neither list, this goes red at
+  // upgrade time, and a person decides what to do with it instead of a filter.
+  const fsPh = await import('node:fs');
+  const dts = fsPh.readFileSync(`${R}/node_modules/stripe/cjs/resources/SubscriptionSchedules.d.ts`, 'utf8');
+  // BRACE-MATCHED, not sliced to the next interface: the Phase interface is followed by its own
+  // nested namespaces, and a naive slice swept their fields in too (`flexible`, `type`) and
+  // reported four unlisted fields that do not exist on a Phase. The clause went red over its own
+  // reading rather than over anything in lib/plan-hold.
+  const nsAt = dts.indexOf('namespace SubscriptionSchedule');
+  const phAt = dts.indexOf('interface Phase', nsAt);
+  const openAt = dts.indexOf('{', phAt);
+  let depth = 0, closeAt = openAt;
+  for (let i = openAt; i < dts.length; i += 1) {
+    if (dts[i] === '{') depth += 1;
+    else if (dts[i] === '}') { depth -= 1; if (depth === 0) { closeAt = i; break; } }
+  }
+  const phBlk = dts.slice(openAt, closeAt);
+  const stripeFields = [...new Set([...phBlk.matchAll(/\n {8}([a-z_]+)\??:/g)].map((m) => m[1]))];
+  const known = new Set([...PH.CARRIED_PHASE_FIELDS, ...PH.REFUSED_PHASE_FIELDS]);
+  const unlisted = stripeFields.filter((f) => !known.has(f));
+  check('every field of Stripe\'s own response Phase is either carried or refused by name',
+    stripeFields.length >= 15 && unlisted.length === 0,
+    `${stripeFields.length} fields read from the type definitions; unlisted: ${unlisted.join(', ') || 'none'}`);
+
+  // DID THE PAID YEAR COME BACK AS IT WENT IN? The comparator, both ways round.
+  const before = { priceIds: ['price_ANNUAL_ADHOC'], totalQuantity: 2, periodEnd: P1_END };
+  check('holdFidelity passes when phase 1 comes back identical',
+    PH.holdFidelity({ before, phase: phase1Of() }).ok === true);
+  const moved = PH.holdFidelity({ before, phase: phase1Of({ end_date: P1_END - 30 * 86400 }) });
+  check('  …and goes red when the paid year has been SHORTENED',
+    moved.ok === false && /period end/.test(moved.differences.join('|')), moved.differences.join('; '));
+  const requantified = PH.holdFidelity({ before, phase: phase1Of({ items: [{ price: 'price_ANNUAL_ADHOC', quantity: 1 }] }) });
+  check('  …and when a site has gone missing from it',
+    requantified.ok === false && /quantity/.test(requantified.differences.join('|')), requantified.differences.join('; '));
+
+  // ── 5g. EVERY OTHER WRITER OF THIS SUBSCRIPTION ─────────────────────────────────────────────
+  // Holding the switch attaches a Stripe SCHEDULE for the fortnight before renewal, and a
+  // subscription managed by a schedule REFUSES item changes through subscriptions.update. So the
+  // hold is only as safe as every other path that updates the same object — change-plan was made
+  // to branch on it, and the question that remains is which other callers exist.
+  //
+  // ENUMERATED FROM THE SOURCE, not from a list someone remembered to keep: a new caller appears
+  // in the scan and not in the declared set, and this goes red with its filename.
+  console.log('\n— who else writes this subscription —');
+  const SUB_WRITERS = {
+    'lib/stripe-sync.ts': 'site count → quantity. Detects the schedule and records billing.quantity_sync_blocked rather than failing into a swallowed catch.',
+    'pages/api/stripe/change-plan.ts': 'the switch itself. Branches on sub.schedule before anything else.',
+    'pages/api/superadmin/migrate-subscription-price.ts': 'operator price migration. Would fail against a held subscription; an operator sees the error.',
+    'pages/api/superadmin/trial-extend.ts': 'operator trial extension. A paid annual garage is not trialing, so the window and this cannot meet.',
+  };
+  const fs5g = await import('node:fs');
+  const strip5g = (src) => src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join('\n');
+  const walk5g = (dir) => fs5g.readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk5g(`${dir}/${e.name}`) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
+  const UPDATES = /stripe\s*\.\s*subscriptions\s*\.\s*update|subscriptionItems\s*\.\s*update/;
+  const writers = [...walk5g('lib'), ...walk5g('pages')].filter((f) => UPDATES.test(strip5g(fs5g.readFileSync(f, 'utf8'))));
+  const undeclared = writers.filter((f) => !(f in SUB_WRITERS));
+  const vanished = Object.keys(SUB_WRITERS).filter((f) => !writers.includes(f));
+  check('every path that updates a subscription is declared, with what a held schedule does to it',
+    undeclared.length === 0 && vanished.length === 0,
+    `${writers.length} found; undeclared: ${undeclared.join(', ') || 'none'}; declared but gone: ${vanished.join(', ') || 'none'}`);
+  check('  …and the scan would have found one — change-plan itself matches',
+    writers.includes('pages/api/stripe/change-plan.ts'),
+    'otherwise the clause above passes against a regex that matches nothing anywhere');
+  // THERE IS NO CLAUSE HERE FOR "THE QUANTITY SYNC CHECKS FOR A SCHEDULE", and the attempt is
+  // worth recording. A scan for `sub.schedule` in lib/stripe-sync was written and then REMOVED:
+  // red-proved by disabling the guard with `if (false && sub.schedule)`, it stayed green, because
+  // the text it looks for is still there. It found decoration.
+  //
+  // What that guard does cannot be proved without a subscription Stripe will serve with a schedule
+  // attached, so it belongs to checkout E and not here. The declared set above is the real
+  // protection: a new writer appears in the scan, not in SUB_WRITERS, and goes red by filename.
+
   // ── 5d. THE CHOKEPOINT IS THE ONLY DOOR ─────────────────────────────────────────────────────
   // The lock protects writePlanTerms. Any other module writing TenantPlanTerms directly walks
   // straight past it, and the race comes back somewhere nobody is looking — so the SET of writers

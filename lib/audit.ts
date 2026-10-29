@@ -215,6 +215,23 @@ export type AuditAction =
                                  // by how much: { to, amountPennies, trialEnd }
   | 'billing.plan_change_failed' // Stripe refused the switch. The garage saw a plan they did not
                                  // get, so the attempt is evidence: { wanted, detail }
+  // ── THE LAST FOURTEEN DAYS. A paid annual garage choosing monthly AT RENEWAL, held as a Stripe
+  // subscription schedule. All five are recorded rather than logged: each one is a decision about
+  // next year's price, taken fourteen days before it takes effect, and the garage may well ask us
+  // in between what it asked for and when.
+  | 'billing.plan_hold_set'      // monthly held for the renewal date: { to, effectiveAt, scheduleId, sites }
+  | 'billing.plan_hold_released' // changed their mind before renewal; the schedule let go: { scheduleId, renewalAt }
+  | 'billing.plan_hold_refused'  // the paid year's phase carries a field we cannot echo back, so
+                                 // nothing was changed. Names the fields: { unknownFields, scheduleId }
+  | 'billing.plan_hold_failed'   // Stripe refused the schedule update: { detail, scheduleId }
+  | 'billing.quantity_sync_blocked' // a site was added or removed while a move to monthly was held
+                                 // for renewal, so the subscription is managed by a schedule and
+                                 // the quantity could not be re-rated. The garage is billed for
+                                 // the OLD count until the hold ends: { billedQuantity,
+                                 // actualSites, scheduleId }
+  | 'billing.plan_hold_damaged'  // THE LOUD ONE: the paid year's phase came back different from the
+                                 // subscription that went in. No repair was attempted — see
+                                 // lib/plan-hold: { differences, scheduleId, subscriptionId }
   | 'checkout.failed'     // Stripe refused to create a Checkout session. Carries Stripe's own
                          // message, code and REQUEST ID — without these the 502 is undiagnosable
                          // from outside: { detail, stripeCode, requestId, quantity, currency }
