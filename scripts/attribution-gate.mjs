@@ -331,7 +331,7 @@ try {
 
   // ── 7. THE SWITCH GATES THE PRICE, NEVER THE RECORD ─────────────────────────────────────────
   console.log('\n— the offer switch —');
-  await AF.saveSettings(prisma, { signupsOpen: false }, { settingsId: SETTINGS });
+  await AF.saveSettings(prisma, { offerOpen: false }, { settingsId: SETTINGS });
   {
     const g = await prisma.group.create({ data: { group_name: `${PREFIX} closed`, billing_email: `${PREFIX.toLowerCase()}-closed@example.invalid` }, select: { id: true } });
     const r = await AF.attributeAtSignup(prisma, { groupId: g.id, match: await AT.findPartyByRefCode(prisma, `${PREFIX}AFF`), garage: { email: `${PREFIX.toLowerCase()}-closed@example.invalid` } }, { settingsId: SETTINGS });
@@ -343,10 +343,10 @@ try {
     await prisma.group.delete({ where: { id: g.id } }).catch(() => {});
   }
   check('  …while the OFFER itself is refused',
-    !!AF.refuseOffer({ code: `${PREFIX}AFF`, codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }));
+    !!AF.refuseOffer({ code: `${PREFIX}AFF`, codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: false }));
   check('  …and the refusal says what it actually closed',
-    /offer/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }))
-      && !/programme is closed to new signups/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false })),
+    /offer/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: false }))
+      && !/programme is closed to new signups/i.test(AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: false })),
     'the old wording read as though affiliates could no longer join, which nothing here controls');
   check('  …and the Engine Room label says the same thing',
     /offer/i.test((await import(`${R}/lib/programme-settings.ts`)).PLAN_SETTING_LABEL.affiliate_signups_open));

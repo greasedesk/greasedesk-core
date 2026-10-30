@@ -1,0 +1,35 @@
+-- @migration: additive
+--
+-- ONE SWITCH WAS ANSWERING TWO QUESTIONS (owner, 2026-10-30).
+--
+-- affiliate_signups_open is read by refuseOffer and means "a referred garage gets 12 months for
+-- the price of 8". Nothing has ever read it to decide whether a PERSON may become an affiliate --
+-- there was nothing to join. Its name says otherwise, and when the public signup page lands the
+-- two have to be answerable apart: the programme may be open to new affiliates while the garage
+-- offer is off, or the offer may run while joining is shut.
+--
+-- DELIBERATELY NOT NAMED affiliate_public_signups_open, which the plan proposed. Two columns one
+-- word apart are two columns that get confused at a glance, and that confusion is the thing being
+-- fixed here. "joining" shares no word with "offer".
+--
+-- THE OLD COLUMN KEEPS ITS NAME (owner, 2026-10-30): renaming it needs a DROP, which is
+-- constraining, and between apply and push every public page would 500 -- Prisma selects all
+-- scalars, so getProgrammeSettings would throw on a column that no longer existed, and that
+-- function is reached by /, /pricing and /llms.txt. The rename is on the board as cosmetic and low
+-- priority; the code's own vocabulary says offerOpen and joiningOpen, so the misleading name
+-- survives only here and in one mapping line.
+--
+-- CLOSED BY DEFAULT, because the page it governs does not exist yet. The switch gets turned on by
+-- someone who can see the signup page working, and a fresh database -- a gate's, a new
+-- environment's -- starts with joining shut rather than silently open.
+--
+-- IT TAKES EFFECT IMMEDIATELY (owner, 2026-10-30). The affiliates signup page is SERVER-RENDERED,
+-- with no ISR, precisely so that closing this switch closes signups at once. That is why it is not
+-- in PUBLIC_COPY_PATHS and why saving it revalidates nothing: there is no cached page to refresh.
+-- If that page ever becomes statically generated, this switch needs the revalidate-and-read-back
+-- the trial length has, or a closed programme would keep accepting people from a cached page.
+--
+-- NO BACKFILL AND NO UPDATE: the existing column keeps its meaning and its value untouched, so
+-- nothing deployed reads or writes anything differently, and this applies safely at any time.
+
+ALTER TABLE "ProgrammeSettings" ADD COLUMN "affiliate_joining_open" BOOLEAN NOT NULL DEFAULT false;

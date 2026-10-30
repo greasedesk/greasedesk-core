@@ -255,9 +255,22 @@ try {
   // the annual price meant a migration or a direct database write — a price change with no
   // operator against it and no audit row.
   console.log('\n— and the prices are editable, validated and audited —');
-  check('every plan setting is named in one closed list', PS.PLAN_SETTING_FIELDS.length === 7
+  // PINNED ON THE RULE AS WELL AS THE COUNT. The count moves legitimately whenever a setting is
+  // added — it is here so that addition is a conscious edit, and it caught the joining switch — but
+  // the RULE is that every named field is a real column carrying a label and a kind, and that no
+  // two labels are alike. A field misspelt in the list reads back undefined on a screen that
+  // renders from this map, and saves nothing, while a duplicated label puts two switches on the
+  // screen under one name: the exact failure the offer/joining split was made to avoid.
+  const settingsRow = await prisma.programmeSettings.upsert({ where: { id: GATE_SETTINGS }, update: {}, create: { id: GATE_SETTINGS } });
+  check('every plan setting is named in one closed list', PS.PLAN_SETTING_FIELDS.length === 8
     && PS.PLAN_SETTING_FIELDS.every((f) => PS.PLAN_SETTING_LABEL[f] && PS.PLAN_SETTING_KIND[f]),
     JSON.stringify(PS.PLAN_SETTING_FIELDS));
+  const notColumns = PS.PLAN_SETTING_FIELDS.filter((f) => !Object.prototype.hasOwnProperty.call(settingsRow, f));
+  check('  …and every one of them is a real column on ProgrammeSettings',
+    notColumns.length === 0, notColumns.join(', ') || 'all present on the row itself');
+  check('  …and no two of them share a label, because the screen renders from this map',
+    new Set(PS.PLAN_SETTING_FIELDS.map((f) => PS.PLAN_SETTING_LABEL[f])).size === PS.PLAN_SETTING_FIELDS.length,
+    JSON.stringify(PS.PLAN_SETTING_FIELDS.map((f) => PS.PLAN_SETTING_LABEL[f])));
 
   // VALIDATION, each refusal and then the discriminator. Months are 1..12; money is whole pennies
   // and zero or more — zero is a real setting (a programme paying nothing) and must be ALLOWED,
@@ -276,7 +289,8 @@ try {
   // Checked over the RESULTING state: a save touching only months_given can invalidate an offer
   // value set months ago and never moved, so a per-field check cannot see it.
   const base = { new_annual_months_paid: 10, renewal_annual_months_paid: 10, offer_months_paid: 8,
-    months_given: 12, total_reward_pennies: 12000, instalment_pennies: 3000, affiliate_signups_open: true };
+    months_given: 12, total_reward_pennies: 12000, instalment_pennies: 3000,
+    affiliate_signups_open: true, affiliate_joining_open: false };
   check('months charged may not exceed months given',
     !!PS.refusePlanCombination({ ...base, offer_months_paid: 13 - 1, months_given: 10 })
       && !!PS.refusePlanCombination({ ...base, new_annual_months_paid: 11, months_given: 10 })
@@ -296,11 +310,16 @@ try {
 
   // A SWITCH IS NOT A NUMBER. Number(false) is 0, a perfectly plausible value that would read
   // back as "off" by accident rather than by decision.
-  check('the signups switch is a boolean, and a number is refused',
+  check('the offer switch is a boolean, and a number is refused',
     PS.refusePlanSetting('affiliate_signups_open', true) === null
       && PS.refusePlanSetting('affiliate_signups_open', false) === null
       && !!PS.refusePlanSetting('affiliate_signups_open', 0),
     'false must be ACCEPTED — it is the whole point of the switch');
+  check('  …and so is the JOINING switch, which is a second one as of 2026-10-30',
+    PS.refusePlanSetting('affiliate_joining_open', true) === null
+      && PS.refusePlanSetting('affiliate_joining_open', false) === null
+      && !!PS.refusePlanSetting('affiliate_joining_open', 0),
+    'a new field validated by kind, not by name — this is what proves the registry reached it');
 
   // THE WRITE: on this gate's OWN row, never the singleton, and audited old-to-new.
   await prisma.programmeSettings.upsert({ where: { id: GATE_SETTINGS }, update: {}, create: { id: GATE_SETTINGS } });

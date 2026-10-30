@@ -86,7 +86,10 @@ const sweep = async () => {
     await prisma.commissionEntry.deleteMany({ where: { party_id: { in: reps } } }).catch(() => {});
     await prisma.rep.deleteMany({ where: { id: { in: reps } } }).catch(() => {});
   }
-  const settings = await prisma.programmeSettings.deleteMany({ where: { id: SETTINGS } }).catch(() => ({ count: 0 }));
+  // startsWith, NOT the one id: section 8b makes a SECOND settings row (`${SETTINGS}-fresh`) to
+  // read the schema's defaults off an unconfigured database, and a sweep naming only the first one
+  // would leave it behind — the shape of fixture residue that threw P2002 on the next run.
+  const settings = await prisma.programmeSettings.deleteMany({ where: { id: { startsWith: SETTINGS } } }).catch(() => ({ count: 0 }));
   return reps.length + groups.length + (settings?.count ?? 0);
 };
 
@@ -213,13 +216,13 @@ try {
 
   // ── 7. WHO MAY TAKE THE OFFER ───────────────────────────────────────────────────────────────
   console.log('\n— who may take the offer —');
-  check('no code, no offer', !!AF.refuseOffer({ code: null, codeValid: false, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }));
-  check('an unknown code is refused', !!AF.refuseOffer({ code: 'NOPE', codeValid: false, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }));
-  check('an EXISTING garage is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: false, alreadyTaken: false, signupsOpen: true }));
-  check('a garage that already took it is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: true, signupsOpen: true }));
+  check('no code, no offer', !!AF.refuseOffer({ code: null, codeValid: false, hasNeverPaid: true, alreadyTaken: false, offerOpen: true }));
+  check('an unknown code is refused', !!AF.refuseOffer({ code: 'NOPE', codeValid: false, hasNeverPaid: true, alreadyTaken: false, offerOpen: true }));
+  check('an EXISTING garage is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: false, alreadyTaken: false, offerOpen: true }));
+  check('a garage that already took it is refused', !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: true, offerOpen: true }));
   // THE DISCRIMINATOR: all four above pass against a function that refuses everything.
   check('  …and a NEW garage with a valid code is ALLOWED',
-    AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: true }) === null,
+    AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: true }) === null,
     'otherwise the four refusals above prove only that the door is nailed shut');
 
   // ── REVERSED 2026-10-28 ─────────────────────────────────────────────────────────────────────
@@ -249,9 +252,9 @@ try {
   // Closing is about NEW signups. It must not touch money already earned, nor instalments a
   // paying garage is still generating — those were promised on terms that were frozen.
   console.log('\n— closing signups —');
-  await AF.saveSettings(prisma, { signupsOpen: false }, { settingsId: SETTINGS });
+  await AF.saveSettings(prisma, { offerOpen: false }, { settingsId: SETTINGS });
   check('a closed programme refuses a new signup',
-    !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, signupsOpen: false }));
+    !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: false }));
   const earnedBefore = (await prisma.commissionEntry.aggregate({ where: { group_id: g3 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
   check('  …and leaves what was already EARNED alone', earnedBefore === 12000, `£${(earnedBefore / 100).toFixed(2)}`);
   const g6 = await mkGarage(6);
@@ -261,6 +264,59 @@ try {
   check('  …and a garage signed up BEFORE closing keeps earning its instalments',
     (await prisma.commissionEntry.count({ where: { group_id: g6 } })) === 1,
     'closing the door is not a clawback — the terms were frozen when they signed');
+
+  // ── 8b. TWO SWITCHES, AND THEY MUST BE ABLE TO DISAGREE (owner, 2026-10-30) ─────────────────
+  // One switch was answering two questions: do referred GARAGES get 12-for-8, and may a PERSON
+  // join the programme at all. The second has no reader until the public signup page lands, so
+  // the thing worth asserting now is the SPLIT itself — that each switch moves alone and that
+  // closing one says nothing about the other. A clause proving they agree would pass just as well
+  // against the single column this replaces.
+  console.log('\n— the offer and joining are separate questions —');
+  await AF.saveSettings(prisma, { offerOpen: false, joiningOpen: true }, { settingsId: SETTINGS });
+  const shutOfferOpenDoor = await AF.currentTerms(prisma, { settingsId: SETTINGS });
+  check('the offer can be OFF while joining is OPEN',
+    shutOfferOpenDoor.offerOpen === false && shutOfferOpenDoor.joiningOpen === true,
+    'we stop giving the discount and go on recruiting affiliates');
+  check('  …and the offer is refused on the offer switch alone',
+    !!AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: shutOfferOpenDoor.offerOpen }),
+    'joining being open does not buy a garage the discount');
+
+  await AF.saveSettings(prisma, { offerOpen: true, joiningOpen: false }, { settingsId: SETTINGS });
+  const openOfferShutDoor = await AF.currentTerms(prisma, { settingsId: SETTINGS });
+  check('  …and joining can be SHUT while the offer runs',
+    openOfferShutDoor.offerOpen === true && openOfferShutDoor.joiningOpen === false,
+    'we stop recruiting and honour the deal for garages already referred');
+  check('  …with the offer still granted, because joining has nothing to say about it',
+    AF.refuseOffer({ code: 'X', codeValid: true, hasNeverPaid: true, alreadyTaken: false, offerOpen: openOfferShutDoor.offerOpen }) === null,
+    'this is the clause that would go red if one column were still answering both');
+
+  // EACH SAVE MOVES ITS OWN COLUMN AND LEAVES THE OTHER WHERE IT WAS. Written separately from the
+  // pair above: setting both at once cannot show that one did not drag the other.
+  await AF.saveSettings(prisma, { joiningOpen: true }, { settingsId: SETTINGS });
+  const onlyJoining = await AF.currentTerms(prisma, { settingsId: SETTINGS });
+  check('  …and saving one switch alone does not move the other',
+    onlyJoining.joiningOpen === true && onlyJoining.offerOpen === true,
+    `offer ${onlyJoining.offerOpen} / joining ${onlyJoining.joiningOpen}`);
+
+  // FAIL-CLOSED ON A FRESH DATABASE. getProgrammeSettings upserts with nothing but an id, so a new
+  // row is the schema's defaults — which is what a new environment, and every gate, starts from.
+  const FRESH = `${SETTINGS}-fresh`;
+  const fresh = await AF.currentTerms(prisma, { settingsId: FRESH });
+  check('a database that has never been configured has joining SHUT and the offer OPEN',
+    fresh.joiningOpen === false && fresh.offerOpen === true,
+    'the switch is turned on by someone who can see the signup page working');
+
+  // THE LABELS ARE THE WHOLE DEFENCE ON THE SCREEN, which renders from the registry map. Neither
+  // may be read as the other's subject: one is about garages and the offer, the other about people
+  // joining. attribution-gate already holds that the offer label says "offer".
+  const LABEL = (await import(`${R}/lib/programme-settings.ts`)).PLAN_SETTING_LABEL;
+  check('  …and neither switch\u2019s label can be mistaken for the other\u2019s subject',
+    !/join/i.test(LABEL.affiliate_signups_open) && !/offer/i.test(LABEL.affiliate_joining_open)
+      && /join/i.test(LABEL.affiliate_joining_open),
+    `"${LABEL.affiliate_signups_open}" / "${LABEL.affiliate_joining_open}"`);
+
+  // LEFT AS SECTION 8 LEFT IT, so nothing below reads a state this block invented.
+  await AF.saveSettings(prisma, { offerOpen: false, joiningOpen: false }, { settingsId: SETTINGS });
 
   // ── 9. THE NULL THAT MEANS "NO VISIT IN THIS PROGRAMME" ─────────────────────────────────────
   check('an affiliate entry records no visit, rather than claiming one',

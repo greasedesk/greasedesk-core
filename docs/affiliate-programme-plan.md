@@ -132,6 +132,22 @@ directions. The **reseller** clawback is deliberately unchanged: a rep's commiss
 the money and is clawed back in proportion, per refund. The terms document (slice I) must state the
 affiliate rule in these words.
 
+### 2.6b The joining switch takes effect at once, and the name stays wrong
+
+**Owner, 2026-10-30.** Two rulings on the split:
+
+**The affiliates signup page is server-rendered, with no ISR**, so closing `affiliate_joining_open`
+closes signups immediately. That is why the field is deliberately *absent* from
+`PUBLIC_COPY_PATHS` and why saving it revalidates nothing — there is no cached page to refresh.
+Slices C and D must honour that: if either page is ever statically generated, the field joins
+`PUBLIC_COPY_PATHS` and takes the revalidate-and-read-back the trial length has, or a closed
+programme would go on accepting people from a cached page.
+
+**`affiliate_signups_open` keeps its misleading name**, and the rename is boarded as cosmetic, low
+priority. Renaming needs a `DROP`, which is constraining, and between apply and push every public
+page would 500: Prisma selects all scalars, and `getProgrammeSettings` is reached by `/`,
+`/pricing` and `/llms.txt`. The code's own names carry the meaning instead.
+
 ### 2.7 Payouts in December, bank details not collected
 
 The portal shows "payable". Until bank details exist, payable means *owed and un-sendable*. The
@@ -166,7 +182,7 @@ Each ends green with gates through the rendered screens, red-proved.
 | # | Slice | Migration |
 |---|---|---|
 | **A** | **Wire the affiliate accrual.** `rewardPaidInvoice` called from `invoice.paid` beside the rep accrual; the 14-day hold as a derived predicate; the refund policy written down and the refund half wired (full refunds only, amended 2026-10-30); `REFUND_POLICY_UNDECIDED` deleted. Nothing user-facing. | none |
-| **B** | **Split the switch.** `affiliate_signups_open` keeps its meaning for the offer; a new column for public joining. Engine Room gets both, labelled so neither can be mistaken for the other. | **1 additive** |
+| **B** | **Split the switch.** SHIPPED 2026-10-30. `affiliate_signups_open` keeps its meaning *and its name* for the offer; `affiliate_joining_open` is new, and closed by default. Engine Room gets both, labelled in the owner's own words. The code's vocabulary is `offerOpen` / `joiningOpen`, so nothing past `currentTerms` says "signups" about the garage offer. | **1 additive** — `20261030090000_affiliate_joining_open`, applied to the gate database |
 | **C** | **`affiliates.greasedesk.com` + the public page.** Middleware routing on the `er.` pattern, hero, terms card, reasons, four steps, FAQ, all figures from the settings through one resolver. Links to the apex carrying `?ref=`. | none |
 | **D** | **Signup + email + SMS verification + instant approval.** Short form, `Rep` row with `party_type: affiliate`, email verify, SMS via the existing path with its existing limits, the test-environment bypass of 2.9, then code + link + QR. Creation-time case guard. | **1 constraining** (`lower(ref_code)` unique, affiliate rows) — *only after the collision check has been run* |
 | **E** | **The portal.** Magic-link sign-in reusing `lib/rep-magic-link`, link/code/QR, referrals by garage name and status only, earnings in five states, the payee choice recorded, the December note. | **1 additive** (payee choice columns) |

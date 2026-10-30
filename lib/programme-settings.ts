@@ -212,12 +212,20 @@ const describe = (e: unknown): string => (e instanceof Error ? e.message : Strin
 /**
  * ── THE PLAN AND REWARD SETTINGS, AND WHY THEY ARE NOT LIKE THE TRIAL LENGTH ───────────────────
  * The trial length is printed on the public site, so saving it must also refresh statically
- * generated pages and prove they changed. NONE of these six is on a public page — the only
- * reader under pages/ is the owner-only Engine Room API — so there is nothing to revalidate, and
- * a revalidate call here would be ceremony that looks like a guarantee.
+ * generated pages and prove they changed. None of these is on a STATICALLY GENERATED page — the
+ * readers under pages/ are the owner-only Engine Room API and, for the joining switch, the
+ * server-rendered affiliate signup pages — so there is nothing to revalidate, and a revalidate
+ * call here would be ceremony that looks like a guarantee.
  *
- * Said rather than inferred: if one of these ever reaches public copy, it joins PUBLIC_COPY_PATHS
- * and this comment stops being true.
+ * THAT IS A PROPERTY OF THOSE PAGES, NOT OF THESE FIELDS (owner, 2026-10-30).
+ * affiliate_joining_open governs a public page and is deliberately absent from PUBLIC_COPY_PATHS,
+ * because affiliates.greasedesk.com is server-rendered with no ISR so that closing the switch
+ * closes signups at once. If that page is ever made static, this field joins PUBLIC_COPY_PATHS and
+ * takes the revalidate-and-read-back the trial length has — otherwise a closed programme would go
+ * on accepting people from a cached page.
+ *
+ * Said rather than inferred: if one of these reaches STATIC public copy, it joins
+ * PUBLIC_COPY_PATHS and this comment stops being true.
  */
 export const PLAN_SETTING_FIELDS = [
   'new_annual_months_paid',
@@ -227,6 +235,7 @@ export const PLAN_SETTING_FIELDS = [
   'total_reward_pennies',
   'instalment_pennies',
   'affiliate_signups_open',
+  'affiliate_joining_open',
 ] as const;
 export type PlanSettingField = typeof PLAN_SETTING_FIELDS[number];
 
@@ -239,6 +248,7 @@ export const PLAN_SETTING_KIND: Record<PlanSettingField, 'months' | 'pennies' | 
   total_reward_pennies: 'pennies',
   instalment_pennies: 'pennies',
   affiliate_signups_open: 'switch',
+  affiliate_joining_open: 'switch',
 };
 
 export const PLAN_SETTING_LABEL: Record<PlanSettingField, string> = {
@@ -248,7 +258,11 @@ export const PLAN_SETTING_LABEL: Record<PlanSettingField, string> = {
   months_given: 'Months of service given on any annual plan',
   total_reward_pennies: 'Affiliate reward per referred garage (total)',
   instalment_pennies: 'Affiliate reward per paid month (monthly plans)',
-  affiliate_signups_open: 'Affiliate offer (12 for 8) available to new garages',
+  // TWO SWITCHES, TWO SUBJECTS, AND THE SCREEN RENDERS FROM THIS MAP — so these labels are the
+  // whole defence against turning the wrong one off. The owner's own words, and sharing no
+  // distinguishing term: one is about GARAGES getting the offer, the other about PEOPLE joining.
+  affiliate_signups_open: 'Referred garages get the offer (12 months for the price of 8)',
+  affiliate_joining_open: 'New affiliates can join (public signup at affiliates.greasedesk.com)',
 };
 
 /** Why this value may not be saved to this field, or null when it may. */

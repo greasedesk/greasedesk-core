@@ -91,7 +91,21 @@ export const rewardIsPayable = (a: { paidAt: Date; now?: Date }): boolean =>
 export const wholeChargeRefunded = (a: { chargePennies: number; refundedPennies: number }): boolean =>
   a.chargePennies > 0 && a.refundedPennies >= a.chargePennies;
 
-/** The programme-wide reward terms as they stand today, for a garage signing up now. */
+/**
+ * ── TWO SWITCHES, BECAUSE ONE WAS ANSWERING TWO QUESTIONS (owner, 2026-10-30) ──────────────────
+ * offerOpen   — do REFERRED GARAGES get 12 months for the price of 8? Read by refuseOffer.
+ * joiningOpen — may a PERSON join the programme at all? Read by the public signup (slice D).
+ *
+ * They are independent on purpose: the offer can run while joining is shut (we stop recruiting but
+ * honour the deal), and joining can be open while the offer is off (we recruit affiliates for a
+ * programme whose garage discount is paused). Either switch answering for the other would be wrong
+ * for one of them.
+ *
+ * THE COLUMN NAMES DO NOT MATCH THESE NAMES, and that is deliberate. offerOpen reads
+ * affiliate_signups_open — the name is wrong, renaming it needs a DROP that would 500 every public
+ * page between apply and push, and the rename is boarded as cosmetic. This function is where the
+ * wrong name stops: nothing past this line says "signups" about the garage offer.
+ */
 export async function currentTerms(db: Db = defaultDb, opts?: SettingsOpts) {
   const s = await getProgrammeSettings(db, opts);
   return {
@@ -99,14 +113,15 @@ export async function currentTerms(db: Db = defaultDb, opts?: SettingsOpts) {
     instalmentPennies: s.instalment_pennies,
     offerMonthsPaid: s.offer_months_paid,
     monthsGiven: s.months_given,
-    signupsOpen: s.affiliate_signups_open,
+    offerOpen: s.affiliate_signups_open,
+    joiningOpen: s.affiliate_joining_open,
   };
 }
 
 /** Change the programme-wide terms. Never touches a garage already referred — see freezeTermsAtSignup. */
 export async function saveSettings(
   db: Db,
-  patch: Partial<{ totalRewardPennies: number; instalmentPennies: number; offerMonthsPaid: number; monthsGiven: number; signupsOpen: boolean }>,
+  patch: Partial<{ totalRewardPennies: number; instalmentPennies: number; offerMonthsPaid: number; monthsGiven: number; offerOpen: boolean; joiningOpen: boolean }>,
   opts?: SettingsOpts,
 ) {
   await getProgrammeSettings(db, opts); // the row exists, created from the schema's defaults
@@ -115,7 +130,8 @@ export async function saveSettings(
   if (patch.instalmentPennies !== undefined) data.instalment_pennies = patch.instalmentPennies;
   if (patch.offerMonthsPaid !== undefined) data.offer_months_paid = patch.offerMonthsPaid;
   if (patch.monthsGiven !== undefined) data.months_given = patch.monthsGiven;
-  if (patch.signupsOpen !== undefined) data.affiliate_signups_open = patch.signupsOpen;
+  if (patch.offerOpen !== undefined) data.affiliate_signups_open = patch.offerOpen;
+  if (patch.joiningOpen !== undefined) data.affiliate_joining_open = patch.joiningOpen;
   return db.programmeSettings.update({ where: { id: opts?.settingsId ?? 'singleton' }, data });
 }
 
@@ -491,14 +507,15 @@ export async function rewardTrialStarted(_db: Db, _args: { groupId: string }): P
 }
 
 /** Why this garage may not take the affiliate offer, or null when it may. */
-export function refuseOffer(a: { code: string | null; codeValid: boolean; hasNeverPaid: boolean; alreadyTaken: boolean; signupsOpen: boolean }): string | null {
+export function refuseOffer(a: { code: string | null; codeValid: boolean; hasNeverPaid: boolean; alreadyTaken: boolean; offerOpen: boolean }): string | null {
   // THE SWITCH GATES THE OFFER, NEVER THE ATTRIBUTION (owner, 2026-10-28). It decides whether a new
   // garage may have the 12-for-8 price, not whether affiliates may join and not whether a referral
   // is recorded — a garage that arrives on a link is credited to the affiliate either way, because
   // who introduced them is a fact and the discount is a decision. The old wording, "the affiliate
-  // programme is closed to new signups", read as though it stopped affiliates signing up, which is
-  // a thing nothing in this file controls.
-  if (!a.signupsOpen) return 'The affiliate offer is not available to new garages at the moment.';
+  // programme is closed to new signups", read as though it stopped affiliates signing up — which
+  // is now a SEPARATE switch (joiningOpen, 2026-10-30), and this one still has nothing to say
+  // about it. The parameter was called signupsOpen until that split; the column still is.
+  if (!a.offerOpen) return 'The affiliate offer is not available to new garages at the moment.';
   if (!a.code) return 'The affiliate offer needs a referral code.';
   if (!a.codeValid) return 'That referral code is not one we recognise.';
   // NOT "has never been trialing" (owner ruling, 2026-10-29 — THIS REVERSES 2026-10-28). The old
@@ -607,7 +624,7 @@ export async function offerFor(
     codeValid: !!attribution,
     hasNeverPaid: !everPaid,
     alreadyTaken: !!taken,
-    signupsOpen: terms.signupsOpen,
+    offerOpen: terms.offerOpen,
   });
 
   // ── FROZEN FIRST (owner ruling, 2026-10-29) ──────────────────────────────────────────────────

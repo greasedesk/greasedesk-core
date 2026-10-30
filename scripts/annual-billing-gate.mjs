@@ -182,14 +182,14 @@ try {
     o2.annualPennies === 75000, 'what it pays once is £600; what it renews at is £750');
 
   // THE SWITCH GATES THE PRICE, NEVER THE ATTRIBUTION (owner, 2026-10-28).
-  await AF.saveSettings(prisma, { signupsOpen: false }, { settingsId: SETTINGS });
+  await AF.saveSettings(prisma, { offerOpen: false }, { settingsId: SETTINGS });
   const o3 = await AF.offerFor(prisma, referred, { settingsId: SETTINGS });
   check('with the offer CLOSED a referred garage is quoted £750 and stays attributed',
     o3.plan === 'annual_renewal' && o3.discountPennies === 0 && o3.attributed === true && /offer/i.test(o3.refusal),
     `${o3.refusal}`);
   check('  …and the attribution row is untouched',
     (await prisma.tenantAttribution.count({ where: { group_id: referred, ended_at: null } })) === 1);
-  await AF.saveSettings(prisma, { signupsOpen: true }, { settingsId: SETTINGS });
+  await AF.saveSettings(prisma, { offerOpen: true }, { settingsId: SETTINGS });
 
   // ── REVERSED 2026-10-29 ─────────────────────────────────────────────────────────────────────
   // This asserted that merely HOLDING an annual_offer terms row spent the offer. Under that rule

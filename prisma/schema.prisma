@@ -1241,7 +1241,21 @@ model ProgrammeSettings {
   total_reward_pennies       Int      @default(12000)
   instalment_pennies         Int      @default(3000)
   minimum_payout_pennies     Int      @default(10000)
+  /// DO THE GARAGES GET THE OFFER? Read by refuseOffer: a referred garage's first year is 12
+  /// months for the price of 8. It says nothing about whether a person may BECOME an affiliate —
+  /// that is affiliate_joining_open below. The name is wrong and is kept deliberately (owner,
+  /// 2026-10-30): renaming it needs a DROP, which would 500 every public page between apply and
+  /// push, because Prisma selects all scalars and getProgrammeSettings is reached by /, /pricing
+  /// and /llms.txt. The rename is boarded as cosmetic. The code says offerOpen.
   affiliate_signups_open     Boolean  @default(true)
+  /// MAY SOMEONE JOIN THE PROGRAMME? The public signup at affiliates.greasedesk.com. The other
+  /// half of the switch that was answering two questions. CLOSED by default: it is turned on by
+  /// someone who can see the signup page working, and a fresh database starts shut rather than
+  /// silently open. It takes effect IMMEDIATELY because that page is server-rendered with no ISR
+  /// (owner, 2026-10-30) — which is why it is not in PUBLIC_COPY_PATHS and saving it revalidates
+  /// nothing. If the page ever becomes static, this needs the revalidate-and-read-back the trial
+  /// length has, or a closed programme would keep accepting people from a cached page.
+  affiliate_joining_open     Boolean  @default(false)
   /// @nulls: copy_revalidated_at, copy_revalidate_error
   /// Whether the PUBLIC SITE agrees with trial_days. The marketing pages are statically generated
   /// and refreshed on demand when the setting is saved; a save that succeeds while the refresh
