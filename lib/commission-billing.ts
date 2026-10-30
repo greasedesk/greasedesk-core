@@ -9,7 +9,8 @@
  * It maps onto the RESELLER engine (lib/commission, rates and tapers) and onto the AFFILIATE
  * programme (lib/affiliate, a flat sum frozen at signup). They are different rules over one ledger
  * table, and they are both here for the reason this file exists: so there is one place a Stripe
- * payment event becomes a ledger entry. The affiliate half was written in full and never called
+ * payment event becomes a ledger entry. They answer a PARTIAL refund differently on purpose: a
+ * reseller's share of the money is clawed back in proportion, an affiliate's flat reward stands. The affiliate half was written in full and never called
  * from anywhere but a gate — the functions below are what reached it.
  *
  * Called only from the signature-verified, event-id-deduped webhook (pages/api/stripe/webhook). The
@@ -26,8 +27,8 @@
 import type Stripe from 'stripe';
 import type { PrismaClient } from '@prisma/client';
 import { accruePayment, clawbackRefund, isCommissionError } from '@/lib/commission';
-import { rewardPaidInvoice, reverseAffiliateReward } from '@/lib/affiliate';
-import { listChargeRefunds, refundCounts } from '@/lib/stripe-refunds';
+import { rewardPaidInvoice, reverseAffiliateReward, wholeChargeRefunded } from '@/lib/affiliate';
+import { listChargeRefunds, refundCounts, type RefundLite } from '@/lib/stripe-refunds';
 import { resolveAttribution } from '@/lib/attribution';
 
 type Db = PrismaClient;
@@ -214,13 +215,68 @@ export async function rewardFromInvoicePaid(db: Db, invoice: Stripe.Invoice): Pr
   }
 }
 
+export type AffiliateReversalDecision =
+  | { reverse: false; why: string }
+  | { reverse: true; refundId: string; refundedAt: Date; refundedPennies: number };
+
 /**
- * Money given back reverses the reward it earned. The REFUND half of the policy in lib/affiliate;
- * the chargeback half waits on the Dispute work, and nothing here pretends otherwise.
+ * ── IS THE AFFILIATE REWARD REVERSED BY THIS? ───────────────────────────────────────────────────
+ * PURE, and exported for that reason: the reversal path cannot be driven end to end in a gate,
+ * because listChargeRefunds asks Stripe and refuses to answer without a client. The decision this
+ * function makes IS the rule, so it is the thing a clause must be able to hold — synthetic refund
+ * lists in, a decision out, no database and no network.
+ *
+ * ONE DECISION ABOUT THE CHARGE, not one per refund. Under the owner's amendment of 2026-10-30
+ * only a full refund reverses, and a full refund may be the sum of several partials — so the
+ * question is about the TOTAL, and the reversal is keyed on the refund that completed it. That
+ * identity is stable across re-deliveries (Stripe will not permit a further refund once the charge
+ * is fully refunded, so the completing refund never changes), which is what keeps source_ref
+ * idempotent.
+ *
+ * THE REP CLAWBACK ABOVE IS DELIBERATELY NOT THIS. A reseller's commission is a SHARE of the money,
+ * so a partial refund claws back a proportion of it, per refund; an affiliate's reward is a flat sum
+ * for a referral, so it either stands or goes. Two parties, two rules, one ledger — they are not in
+ * conflict and neither should be "tidied" into the other.
+ */
+export function affiliateReversalFromRefunds(args: {
+  chargePennies: number;
+  chargeCreated: Date | null;
+  refunds: RefundLite[];
+}): AffiliateReversalDecision {
+  // A failed or cancelled refund moved no money. refundCounts is the shared answer to that.
+  const counted = args.refunds.filter(refundCounts);
+  const refundedPennies = counted.reduce((n, r) => n + (r.amount ?? 0), 0);
+  if (!wholeChargeRefunded({ chargePennies: args.chargePennies, refundedPennies })) {
+    return { reverse: false, why: `only ${refundedPennies}p of ${args.chargePennies}p refunded — a partial refund leaves the affiliate reward standing` };
+  }
+  // LATEST BY created, tie-broken on the id so two refunds in the same second always pick the same
+  // one. `at(-1)` of an ascending sort, because the last one is the one that completed it.
+  const completing = [...counted]
+    .sort((a, b) => (a.created.getTime() - b.created.getTime()) || (a.id < b.id ? -1 : 1))
+    .at(-1);
+  if (!completing) return { reverse: false, why: 'no refund on this charge counted, so there is nothing to date a reversal from' };
+
+  // DATED FROM THE REFUND, falling back only to the charge. NOT the clock: a reversal filed in the
+  // wrong month reads as new work in a pay run, so an undated refund is REFUSED rather than stamped
+  // with today. listChargeRefunds turns an absent `created` into new Date(0), which is why this
+  // tests the instant rather than the presence of the object.
+  const fromRefund = completing.created && completing.created.getTime() > 0 ? completing.created : null;
+  const refundedAt = fromRefund ?? (args.chargeCreated && args.chargeCreated.getTime() > 0 ? args.chargeCreated : null);
+  if (!refundedAt) return { reverse: false, why: `refund ${completing.id} carries no date, and a reversal must be filed in the month the money went back` };
+
+  return { reverse: true, refundId: completing.id, refundedAt, refundedPennies };
+}
+
+/**
+ * Money given back reverses the reward it earned — ALL of it going back, that is. The REFUND half of
+ * the policy in lib/affiliate; the chargeback half waits on the Dispute work, and nothing here
+ * pretends otherwise.
  *
  * The refunds are ASKED OF STRIPE rather than read off the event, for the reason the rep clawback
  * above records: `refunds` has not been included on a Charge by default since API 2022-11-15, and
- * reading it off the event is how the card-refund path came to write nothing at all.
+ * reading it off the event is how the card-refund path came to write nothing at all. Under the
+ * amended rule that reader matters more, not less: the full/partial question is about the CUMULATIVE
+ * total, and the event body for the first of three partials cannot answer it.
  */
 export async function reverseAffiliateFromChargeRefunded(db: Db, charge: Stripe.Charge): Promise<BillingResult> {
   const c = charge as any;
@@ -230,18 +286,28 @@ export async function reverseAffiliateFromChargeRefunded(db: Db, charge: Stripe.
   const groupId = await groupIdForCustomer(db, idOf(c.customer));
   if (!groupId) return { status: 'skipped', reason: 'unknown Stripe customer' };
 
-  const refunds = (await listChargeRefunds(c.id, {})).filter(refundCounts);
-  let written = 0, noop = 0;
-  for (const rf of refunds) {
-    const refundId: string | null = rf.id ?? null;
-    if (!refundId) continue;
-    const refundedAt = rf.created ?? unixToDate(c.created) ?? new Date();
-    try {
-      const r = await reverseAffiliateReward(db as any, { groupId, refundId, invoiceId, refundedAt });
-      r.reversed ? written++ : noop++;
-    } catch (e: any) {
-      console.error('[commission-billing] affiliate reversal refused for', groupId, refundId, e?.message);
-    }
+  // WHAT WE ACTUALLY TOOK, which is amount_captured when it says anything: a refund can only ever be
+  // up to the captured amount, so comparing a total refund against an AUTHORISED amount would read
+  // a fully-refunded charge as partial and leave the reward standing on money that is all back.
+  const chargePennies: number =
+    (typeof c.amount_captured === 'number' && c.amount_captured > 0 ? c.amount_captured : c.amount) ?? 0;
+  if (chargePennies <= 0) return { status: 'skipped', reason: `${groupId}: charge carries no captured amount` };
+
+  const decision = affiliateReversalFromRefunds({
+    chargePennies, chargeCreated: unixToDate(c.created), refunds: await listChargeRefunds(c.id, {}),
+  });
+  // THE TENANT IN THE REASON — the webhook logs this verbatim, and "partially refunded" about
+  // nobody in particular cannot be followed up.
+  if (!decision.reverse) return { status: 'skipped', reason: `${groupId}: ${decision.why}` };
+
+  try {
+    const r = await reverseAffiliateReward(db as any, {
+      groupId, invoiceId, refundId: decision.refundId, refundedAt: decision.refundedAt,
+      chargePennies, refundedPennies: decision.refundedPennies,
+    });
+    return { status: 'clawed', groupId, written: r.reversed ? 1 : 0, noop: r.reversed ? 0 : 1 };
+  } catch (e: any) {
+    console.error('[commission-billing] affiliate reversal refused for', groupId, decision.refundId, e?.message);
+    return { status: 'skipped', reason: `${groupId}: affiliate reversal threw: ${String(e?.message ?? e).slice(0, 160)}` };
   }
-  return { status: 'clawed', groupId, written, noop };
 }

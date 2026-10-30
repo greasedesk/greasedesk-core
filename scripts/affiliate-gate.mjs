@@ -363,8 +363,39 @@ try {
   const earned = await AF.rewardPaidInvoice(prisma, { groupId: g22, invoiceId: 'in_ZZAFF_REFUNDME', paidPennies: 7500, status: 'paid', paidAt: new Date('2026-06-01T00:00:00Z') });
   check('a paid month earns its instalment', earned.paid === true && earned.amountPennies === 3000, String(earned.amountPennies));
 
-  const rev = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_1', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-20T00:00:00Z') });
-  check('  …and a refund of that invoice reverses it',
+  // ── A PARTIAL REFUND LEAVES IT STANDING (owner, 2026-10-30) ───────────────────────────────
+  // This REVERSES yesterday's rule, which took the whole reward back on any refund at all. A few
+  // pounds off a month as goodwill is our decision, not the affiliate's, and must not cost them.
+  // ASSERTED ON THE LEDGER as well as the refusal: "the reward stands" means the accrual is still
+  // there and still positive, which a message alone would not show.
+  const REFUND = { groupId: g22, invoiceId: 'in_ZZAFF_REFUNDME', chargePennies: 7500 };
+  const partial = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_PART', refundedPennies: 2000, refundedAt: new Date('2026-06-20T00:00:00Z') });
+  check('  …a PARTIAL refund of that invoice does NOT reverse it',
+    partial.reversed === false && /only a full refund reverses it/.test(partial.why ?? ''), partial.why);
+  const standsAt = (await prisma.commissionEntry.aggregate({ where: { group_id: g22 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
+  check('  …and the reward is still there, in full',
+    standsAt === 3000 && (await prisma.commissionEntry.count({ where: { group_id: g22, kind: 'clawback' } })) === 0,
+    `${standsAt}p and no clawback row — goodwill on our side must not cost the affiliate`);
+  const nearly = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_NEARLY', refundedPennies: 7499, refundedAt: new Date('2026-06-20T00:00:00Z') });
+  check('  …one penny short of the whole charge is still a partial refund',
+    nearly.reversed === false, `${nearly.why} — the boundary is the charge, not "most of it"`);
+  // AND THE NUMBERS ARE REQUIRED. A caller who cannot say how much went back, and of what, gets an
+  // exception: defaulting refundedPennies to 0 would silently stop reversing anything, and
+  // defaulting chargePennies to 0 would make the comparison true of every refund and reverse
+  // everything. Two guards, failing in opposite directions, so both are named.
+  const noCharge = await AF.reverseAffiliateReward(prisma, { groupId: g22, invoiceId: 'in_ZZAFF_REFUNDME', refundId: 're_ZZAFF_NOCHARGE', refundedPennies: 7500, refundedAt: new Date('2026-06-20T00:00:00Z') })
+    .then(() => null, (e) => e);
+  check('  …the reversal REFUSES to run without the charge amount',
+    noCharge instanceof Error && /chargePennies is required/.test(noCharge.message),
+    noCharge ? 'threw' : 'it answered without being able to tell a partial refund from a full one');
+  const noRefunded = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_NOTOTAL', refundedAt: new Date('2026-06-20T00:00:00Z') })
+    .then(() => null, (e) => e);
+  check('  …and without the refunded total, for the same reason',
+    noRefunded instanceof Error && /refundedPennies is required/.test(noRefunded.message),
+    noRefunded ? 'threw' : 'a missing total would read as nothing refunded, for ever, in silence');
+
+  const rev = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_1', refundedPennies: 7500, refundedAt: new Date('2026-06-20T00:00:00Z') });
+  check('  …but a FULL refund of that invoice reverses it',
     rev.reversed === true && rev.amountPennies === -3000,
     `${rev.reversed} / ${rev.amountPennies} — the NEGATIVE of what was accrued, not the refunded amount`);
   const net = (await prisma.commissionEntry.aggregate({ where: { group_id: g22 }, _sum: { amount_pennies: true } }))._sum.amount_pennies ?? 0;
@@ -374,7 +405,7 @@ try {
     'dated from refundedAt — a reversal in the wrong month reads as new work in a pay run');
 
   const rowsAfterOne = await prisma.commissionEntry.count({ where: { group_id: g22 } });
-  const again = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_1', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-20T00:00:00Z') });
+  const again = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_1', refundedPennies: 7500, refundedAt: new Date('2026-06-20T00:00:00Z') });
   // ASSERTED ON THE LEDGER, not on the message. The first draft matched /already/ against `why`,
   // which the "reversed in full" guard satisfies — so it passed without ever reaching the P2002
   // catch it was written for. What a re-delivered webhook must not do is add a row, so that is
@@ -383,12 +414,60 @@ try {
   check('  …and the SAME refund twice adds no further row',
     again.reversed === false && (await prisma.commissionEntry.count({ where: { group_id: g22 } })) === rowsAfterOne,
     `${again.why} — ${rowsAfterOne} row(s) before and after`);
-  const second = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_2', invoiceId: 'in_ZZAFF_REFUNDME', refundedAt: new Date('2026-06-21T00:00:00Z') });
+  const second = await AF.reverseAffiliateReward(prisma, { ...REFUND, refundId: 're_ZZAFF_2', refundedPennies: 7500, refundedAt: new Date('2026-06-21T00:00:00Z') });
   check('  …nor does a SECOND refund of the same invoice take back more than went out',
     second.reversed === false && /already been reversed in full/.test(second.why ?? ''), second.why);
-  const nothing = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_3', invoiceId: 'in_ZZAFF_NEVERPAID', refundedAt: new Date('2026-06-21T00:00:00Z') });
+  const nothing = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_3', invoiceId: 'in_ZZAFF_NEVERPAID', chargePennies: 7500, refundedPennies: 7500, refundedAt: new Date('2026-06-21T00:00:00Z') });
   check('  …and a refund of an invoice that earned nothing writes nothing',
     nothing.reversed === false && /earned no affiliate reward/.test(nothing.why ?? ''), nothing.why);
+
+  // ── 12b. FULL OR PARTIAL IS DECIDED OVER THE WHOLE CHARGE ───────────────────────────────────
+  // The reversal path cannot be driven end to end here: it asks Stripe for the refunds, and
+  // listChargeRefunds refuses to answer without a client (correctly — an empty list because we
+  // could not ask is indistinguishable from "no refunds"). So the DECISION is the thing held, and
+  // it is a pure exported function for that reason: synthetic refund lists in, a decision out.
+  console.log('\n— and the full/partial decision itself —');
+  const CB = await import(`${R}/lib/commission-billing.ts`);
+  const rf = (id, amount, created, status = 'succeeded') => ({ id, amount, currency: 'GBP', reason: null, created, status });
+  const JUN20 = new Date('2026-06-20T10:00:00Z');
+  const JUN21 = new Date('2026-06-21T10:00:00Z');
+
+  const onePart = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: JUN20, refunds: [rf('re_A', 2000, JUN20)] });
+  check('£20 off a £75 month is a partial refund',
+    onePart.reverse === false && /2000p of 7500p/.test(onePart.why ?? ''),
+    `${onePart.why} — both numbers in the message, because the webhook logs this line verbatim`);
+
+  // CUMULATIVE. Three partials that between them take the whole charge back ARE a full refund —
+  // which is why the caller passes the TOTAL and not this refund's own amount, and why the refunds
+  // are asked of Stripe rather than read off an event body that can only know about one of them.
+  const twoParts = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: JUN20, refunds: [rf('re_A', 2000, JUN20), rf('re_B', 5500, JUN21)] });
+  check('  …but two partials that together take the whole charge back DO reverse it',
+    twoParts.reverse === true && twoParts.refundedPennies === 7500, JSON.stringify(twoParts));
+  check('  …keyed on the refund that COMPLETED it, not the first one',
+    twoParts.reverse === true && twoParts.refundId === 're_B',
+    'stable across re-deliveries: Stripe permits no further refund once the charge is fully refunded');
+  check('  …and dated from that same completing refund',
+    twoParts.reverse === true && twoParts.refundedAt.toISOString() === JUN21.toISOString(),
+    'the month the money finally went back is the month the reversal belongs in');
+
+  const failed = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: JUN20, refunds: [rf('re_A', 2000, JUN20), rf('re_X', 5500, JUN21, 'failed')] });
+  check('  …a FAILED refund moved no money, so it does not make the total',
+    failed.reverse === false && /2000p of 7500p/.test(failed.why ?? ''), failed.why);
+
+  // WHAT WE TOOK, NOT WHAT WE ASKED FOR. A refund can only ever be up to the captured amount, so
+  // the comparison is against that; this holds the arithmetic at the boundary.
+  const exact = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: JUN20, refunds: [rf('re_A', 7500, JUN20)] });
+  check('  …and one refund of the whole charge is full on the nose',
+    exact.reverse === true && exact.refundId === 're_A', JSON.stringify(exact));
+
+  // NEVER THE CLOCK. listChargeRefunds turns an absent `created` into new Date(0), so the test is
+  // on the instant, not on whether the object is there.
+  const undatedRefund = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: JUN20, refunds: [rf('re_A', 7500, new Date(0))] });
+  check('  …an undated refund falls back to the CHARGE date',
+    undatedRefund.reverse === true && undatedRefund.refundedAt.toISOString() === JUN20.toISOString(), JSON.stringify(undatedRefund));
+  const undatedBoth = CB.affiliateReversalFromRefunds({ chargePennies: 7500, chargeCreated: null, refunds: [rf('re_A', 7500, new Date(0))] });
+  check('  …and with no date anywhere it REFUSES rather than filing it in whatever month this ran',
+    undatedBoth.reverse === false && /carries no date/.test(undatedBoth.why ?? ''), undatedBoth.why);
 
   // ── 13. AND THE WIRE ITSELF ─────────────────────────────────────────────────────────────────
   // THE WHOLE POINT OF THIS SLICE. rewardPaidInvoice was complete, gated and correct, and had no
@@ -397,7 +476,6 @@ try {
   // accrual path reads the event and the database and makes no Stripe API call, which is exactly
   // why it can be asserted here.
   console.log('\n— the webhook actually reaches it —');
-  const CB = await import(`${R}/lib/commission-billing.ts`);
   const g23 = await mkGarage(23);
   const CUST = `cus_${PREFIX}WIRE`;
   // CREATED, not updated. This gate's mkGarage makes a Group and nothing else — unlike the annual
@@ -458,7 +536,7 @@ try {
   check('  …and an UNPARSEABLE one too, rather than treating NaN as a moment',
     badDateThrew instanceof Error && /paidAt is required/.test(badDateThrew.message),
     badDateThrew ? 'threw' : 'an Invalid Date would have produced period "NaN-aN"');
-  const reversalNoDate = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_NODATE', invoiceId: 'in_ZZAFF_REFUNDME' })
+  const reversalNoDate = await AF.reverseAffiliateReward(prisma, { groupId: g22, refundId: 're_ZZAFF_NODATE', invoiceId: 'in_ZZAFF_REFUNDME', chargePennies: 7500, refundedPennies: 7500 })
     .then(() => null, (e) => e);
   check('  …and the reversal refuses without a refund date for the same reason',
     reversalNoDate instanceof Error && /refundedAt is required/.test(reversalNoDate.message),

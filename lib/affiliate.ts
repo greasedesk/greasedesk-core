@@ -34,7 +34,8 @@ type Db = any; // a PrismaClient or an interactive-transaction client
  * an unanswered question visible. The question is answered.
  *
  *   A reward becomes PAYABLE 14 days after the invoice that earned it was paid.
- *   If that money goes back, the reward is REVERSED.
+ *   If ALL of that money goes back, the reward is REVERSED.
+ *   A PARTIAL refund leaves the reward standing (owner, 2026-10-30).
  *   If the reward had already been paid out, the reversal stands against FUTURE rewards.
  *
  * ── A REFUND AND A CHARGEBACK ARE NOT ONE EVENT, AND ONLY ONE IS WIRED ─────────────────────────
@@ -73,6 +74,22 @@ export const rewardPayableFrom = (paidAt: Date): Date =>
  */
 export const rewardIsPayable = (a: { paidAt: Date; now?: Date }): boolean =>
   (a.now ?? new Date()).getTime() >= rewardPayableFrom(a.paidAt).getTime();
+
+/**
+ * ── ONLY THE WHOLE OF IT REVERSES (owner, 2026-10-30) ──────────────────────────────────────────
+ * Has all of what we took gone back? A PARTIAL refund is usually goodwill — a few pounds off a
+ * month that was otherwise served and paid for — and the affiliate had no part in that decision,
+ * so it must not cost them. This reverses the earlier reading, which reversed the whole reward on
+ * any refund at all.
+ *
+ * CUMULATIVE, and `>=` rather than `===`. Three partials that between them take the whole charge
+ * back ARE a full refund, so the caller passes the TOTAL refunded on the charge and not this
+ * refund's own amount. The `>=` is deliberate too: Stripe will not let a charge be over-refunded,
+ * so a total ABOVE the charge means we are reading a number we do not understand — and calling
+ * that "not full" would leave a reward standing on money that is entirely gone.
+ */
+export const wholeChargeRefunded = (a: { chargePennies: number; refundedPennies: number }): boolean =>
+  a.chargePennies > 0 && a.refundedPennies >= a.chargePennies;
 
 /** The programme-wide reward terms as they stand today, for a garage signing up now. */
 export async function currentTerms(db: Db = defaultDb, opts?: SettingsOpts) {
@@ -348,35 +365,61 @@ export async function rewardPaidInvoice(
 }
 
 /**
- * ── THE REWARD FOLLOWS THE MONEY BACK (owner ruling, 2026-10-29) ───────────────────────────────
- * Money we took has been given back, so the reward it earned is reversed. One clawback entry per
- * refund, carrying the NEGATIVE of what was accrued for that invoice — never the refunded amount,
+ * ── THE REWARD FOLLOWS THE MONEY BACK (owner, 2026-10-29; amended 2026-10-30) ──────────────────
+ * ALL of the money we took has been given back, so the reward it earned is reversed. One clawback
+ * entry carrying the NEGATIVE of what was accrued for that invoice — never the refunded amount,
  * which is a different number: a £75 month earns £30, and refunding the £75 reverses the £30.
  *
- * PARTIAL REFUNDS ARE REVERSED IN FULL, and that is a decision rather than an oversight. The
- * reward is a flat sum for a paid month, not a share of it, so there is no fraction of it that
- * corresponds to a fraction of the invoice. A garage refunded £20 of a £75 month did not pay for
- * that month on the terms the reward was for. If that ever needs to be proportional it needs the
- * owner, not a rule invented here.
+ * A PARTIAL REFUND LEAVES IT STANDING — see wholeChargeRefunded above for why. This is the owner's
+ * amendment of 2026-10-30 and it reverses what this function did yesterday, which was to reverse
+ * in full on any refund. The reward is for the referral, not for the final penny of the month.
+ *
+ * SO THE CALLER MUST SAY HOW MUCH WENT BACK, AND OF WHAT. Both numbers are required and neither is
+ * defaulted, because the two innocent-looking defaults fail in opposite directions: refundedPennies
+ * defaulting to 0 would silently stop reversing anything at all, and chargePennies defaulting to 0
+ * would make the comparison true of every refund and reverse everything. A caller that does not
+ * know the numbers gets an exception, not an answer.
  *
  * ALREADY PAID OUT? The entry still goes in. CommissionEntry is a ledger and a clawback against a
  * paid accrual is exactly how "set against future rewards" is expressed — the pay run sums the
  * ledger, so a negative line reduces the next payout rather than demanding money back. Nothing
  * here chases anybody.
  *
- * IDEMPOTENT on the REFUND id, not the invoice id: one invoice can be refunded twice, and the
- * unique index is on [source_ref, party_id, kind] so two refunds of one invoice are two rows while
- * a re-delivered event is none.
+ * IDEMPOTENT on the REFUND id, not the invoice id: the unique index is on
+ * [source_ref, party_id, kind], so a re-delivered event writes nothing. Under the amended rule the
+ * identity is the refund that COMPLETED the full refund (lib/commission-billing picks it), and the
+ * remaining-balance guard below is what stops a later refund of the same invoice taking more back
+ * than went out.
  */
 export async function reverseAffiliateReward(
   db: Db,
-  args: { groupId: string; refundId: string; invoiceId: string; refundedAt: Date },
+  args: {
+    groupId: string; refundId: string; invoiceId: string; refundedAt: Date;
+    /** What we actually took on the charge this invoice was paid by. */
+    chargePennies: number;
+    /** The TOTAL refunded on that charge so far, this refund included — not this refund's amount. */
+    refundedPennies: number;
+  },
 ): Promise<{ reversed: false; why: string } | { reversed: true; amountPennies: number; entryId: string }> {
   // DATED FROM THE REFUND, not the clock — the same rule as paidAt on the accrual. lib/commission
   // does `periodOf(r.refunded_at)` for exactly this reason, and a reversal filed in the wrong
   // month is a pay run that reads it as new work.
   if (!(args.refundedAt instanceof Date) || Number.isNaN(args.refundedAt.getTime())) {
     throw new Error('reverseAffiliateReward: refundedAt is required — the period is the month the money went back');
+  }
+  // THE PARTIAL/FULL QUESTION IS ASKED FIRST, and it is asked of numbers the caller had to supply.
+  // Neither is defaulted; see the block above for why a default would be wrong in both directions.
+  if (!Number.isFinite(args.chargePennies) || args.chargePennies <= 0) {
+    throw new Error('reverseAffiliateReward: chargePennies is required — without it a partial refund cannot be told from a full one');
+  }
+  if (!Number.isFinite(args.refundedPennies) || args.refundedPennies < 0) {
+    throw new Error('reverseAffiliateReward: refundedPennies is required — without it a partial refund cannot be told from a full one');
+  }
+  if (!wholeChargeRefunded({ chargePennies: args.chargePennies, refundedPennies: args.refundedPennies })) {
+    return {
+      reversed: false,
+      why: `only ${args.refundedPennies}p of ${args.chargePennies}p has been refunded, so the reward stands — only a full refund reverses it`,
+    };
   }
   const attribution = await affiliateFor(db, args.groupId);
   if (!attribution) return { reversed: false, why: 'no live affiliate attribution for this garage' };

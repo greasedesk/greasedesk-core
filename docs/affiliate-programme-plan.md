@@ -119,6 +119,19 @@ I would write the policy into `lib/affiliate` now (it replaces `REFUND_POLICY_UN
 a flag with no reader), wire the refund half, and state the chargeback half as **pending the
 dispute slice** rather than claim it.
 
+**Amended by the owner, 2026-10-30 (after slice A shipped):** only a **full** refund of the
+invoice reverses the reward. A **partial** refund leaves it standing — it is usually goodwill, our
+decision and not the affiliate's, and it should not cost them. Slice A first shipped the opposite
+reading (any refund reversed the whole reward), and this is the correction. Consequences, all of
+them built: the question is asked of the **cumulative** total refunded on the charge, so three
+partials that together take the whole charge back *are* a full refund and the third one reverses
+it; the reversal is therefore one decision about the charge rather than one per refund, keyed on
+the refund that **completed** it; and `reverseAffiliateReward` now requires both the charge amount
+and the refunded total, with no default, because the two obvious defaults fail in opposite
+directions. The **reseller** clawback is deliberately unchanged: a rep's commission is a share of
+the money and is clawed back in proportion, per refund. The terms document (slice I) must state the
+affiliate rule in these words.
+
 ### 2.7 Payouts in December, bank details not collected
 
 The portal shows "payable". Until bank details exist, payable means *owed and un-sendable*. The
@@ -152,7 +165,7 @@ Each ends green with gates through the rendered screens, red-proved.
 
 | # | Slice | Migration |
 |---|---|---|
-| **A** | **Wire the affiliate accrual.** `rewardPaidInvoice` called from `invoice.paid` beside the rep accrual; the 14-day hold as a derived predicate; the refund policy written down and the refund half wired; `REFUND_POLICY_UNDECIDED` deleted. Nothing user-facing. | none |
+| **A** | **Wire the affiliate accrual.** `rewardPaidInvoice` called from `invoice.paid` beside the rep accrual; the 14-day hold as a derived predicate; the refund policy written down and the refund half wired (full refunds only, amended 2026-10-30); `REFUND_POLICY_UNDECIDED` deleted. Nothing user-facing. | none |
 | **B** | **Split the switch.** `affiliate_signups_open` keeps its meaning for the offer; a new column for public joining. Engine Room gets both, labelled so neither can be mistaken for the other. | **1 additive** |
 | **C** | **`affiliates.greasedesk.com` + the public page.** Middleware routing on the `er.` pattern, hero, terms card, reasons, four steps, FAQ, all figures from the settings through one resolver. Links to the apex carrying `?ref=`. | none |
 | **D** | **Signup + email + SMS verification + instant approval.** Short form, `Rep` row with `party_type: affiliate`, email verify, SMS via the existing path with its existing limits, the test-environment bypass of 2.9, then code + link + QR. Creation-time case guard. | **1 constraining** (`lower(ref_code)` unique, affiliate rows) — *only after the collision check has been run* |
