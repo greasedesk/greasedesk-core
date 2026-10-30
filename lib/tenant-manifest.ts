@@ -266,6 +266,10 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   RepInvoiceLine: OURS('a line on our invoice to a reseller'),
   RepPayRun: OURS('our payment run to resellers'),
   ResellerEnquiry: OURS('someone asking to become a reseller'),
+  // Beside its reseller twin on purpose: a waiting-list entry is an email address belonging to a
+  // PERSON who is not a tenant and may never be one. It has no group_id, so a tenant export cannot
+  // reach it and a tenant purge has nothing to take.
+  AffiliateWaitlist: OURS('someone asking to be told when the affiliate programme opens'),
   Prospect: OURS('our sales pipeline'),
   ProspectSequence: OURS('our outreach sequence'),
   ProspectSending: OURS('an outreach message we sent'),
