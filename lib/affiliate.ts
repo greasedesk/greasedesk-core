@@ -260,6 +260,36 @@ export function refuseUnactivated(a: { termsAcceptedAt: Date | null | undefined;
 }
 
 /**
+ * ── A SUSPENDED CODE STOPS EARNING, FROM THAT MOMENT (owner, 2026-10-30) ───────────────────────
+ *
+ * THE COLUMN WAS ALREADY BEING READ AND IGNORED. rewardPaidInvoice selected `suspended_at` beside
+ * `terms_accepted_at` and then used only the second — so suspending an affiliate in the Engine Room
+ * stopped them taking NEW referrals (findPartyByRefCode answers `suspended`) and went on paying them
+ * every month on the garages they already had. The select is the evidence somebody meant to do this;
+ * the clause that would have caught it did not exist.
+ *
+ * A DATE COMPARISON, NOT A BOOLEAN, and the same shape as activation for the same reason: an
+ * invoice paid BEFORE the suspension was earned fairly and is not taken back, and one paid on or
+ * after it earns nothing. With the clock instead of the invoice's paid date, a webhook re-delivered
+ * after a suspension would retrospectively unpay a month that had already been earned.
+ *
+ * ON OR AFTER, not strictly after: suspension is a decision taken at a moment, and an invoice that
+ * clears in the same instant is the case nobody will ever test by hand. The boundary is stated so
+ * it is not decided twice.
+ *
+ * WHAT THIS DOES NOT TOUCH: a garage already referred keeps its frozen terms and its price. The
+ * affiliate stops earning; the garage was promised something and still has it. And nothing already
+ * accrued is reversed — that is what a refund does, and a suspension is not one.
+ */
+export function refuseSuspended(a: { suspendedAt: Date | null | undefined; paidAt: Date }): string | null {
+  if (!a.suspendedAt) return null;
+  if (a.paidAt.getTime() >= a.suspendedAt.getTime()) {
+    return `this code was suspended on ${a.suspendedAt.toISOString().slice(0, 10)}, and earns nothing from that moment`;
+  }
+  return null;
+}
+
+/**
  * ── NO EARNING ON A GARAGE YOU OWN OR WORK FOR — CHECKED AT ACCRUAL (owner, 2026-10-29) ────────
  * refuseSelfReferral already runs at SIGNUP, against what was typed into the form. That is not
  * enough: the relationship can change afterwards. Somebody refers a garage, and six months later
@@ -321,12 +351,17 @@ export async function rewardPaidInvoice(
   const attribution = await affiliateFor(db, args.groupId);
   if (!attribution) return { paid: false, why: 'no live affiliate attribution for this garage' };
 
-  // ── TWO GATES BEFORE THE CAP ARITHMETIC (owner rulings, 2026-10-29) ─────────────────────────
-  // Both answer "may THIS affiliate earn on THIS garage", and both can only be answered now:
-  // activation may have happened after the referral, and employment may have happened after both.
+  // ── THREE GATES BEFORE THE CAP ARITHMETIC (owner rulings, 2026-10-29 and 2026-10-30) ────────
+  // All three answer "may THIS affiliate earn on THIS garage", and none of them can be answered
+  // any earlier: activation may have happened after the referral, employment may have happened
+  // after both, and a suspension may have happened after all of it.
   const rep = await db.rep.findUnique({ where: { id: attribution.party_id }, select: { terms_accepted_at: true, suspended_at: true } });
   const unactivated = refuseUnactivated({ termsAcceptedAt: rep?.terms_accepted_at ?? null, paidAt: args.paidAt });
   if (unactivated) return { paid: false, why: unactivated };
+  // THE THIRD GATE, and the column it reads was already being fetched and ignored — see
+  // refuseSuspended. Suspension stopped new referrals and did not stop earning on old ones.
+  const suspended = refuseSuspended({ suspendedAt: rep?.suspended_at ?? null, paidAt: args.paidAt });
+  if (suspended) return { paid: false, why: suspended };
   const ownOrWorkFor = await refuseOwnOrWorkFor(db, { groupId: args.groupId, partyId: attribution.party_id });
   if (ownOrWorkFor) return { paid: false, why: ownOrWorkFor };
 

@@ -194,6 +194,9 @@ const TIERS = {
     // for two in-process calls — it declines outright if an SMS adapter is configured, so it can
     // never send a real text to do it.
     'affiliate-join-gate',
+    // The Engine Room side: the affiliates list, suspend/unsuspend, and the rule that a suspended
+    // code earns nothing from that moment — which was selected and ignored until 2026-10-30.
+    'affiliate-admin-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',
