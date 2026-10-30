@@ -48,12 +48,22 @@ import type { TemplateData } from '@/lib/notification-templates';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** The four, as data. Enumerated from here by every reader — the screen, the sweep and the gate. */
+/**
+ * The four, as data. Enumerated from here by every reader — the screen, the sweep and the gate.
+ *
+ * `swept` IS WHAT DECIDES WHETHER AN INLINE SEND MAY BE CAPPED, and it is a field rather than a
+ * comment for that reason. A capped send that never completes leaves no row; the only thing that
+ * then raises the alert is the hourly sweep. So an alert the sweep does not walk must never be
+ * capped — see INLINE_TIMEOUT_MS below for why that is a Vercel fact and not a theoretical one.
+ * A fifth alert declares `swept` and gets the right cap without anyone remembering this rule.
+ */
 export const OPERATOR_ALERTS = {
-  affiliate_joined: { template: 'alert_affiliate_joined', subjectType: 'rep', label: 'A new affiliate joined' },
-  garage_registered: { template: 'alert_garage_registered', subjectType: 'group', label: 'A garage registered' },
-  garage_no_checkout: { template: 'alert_garage_no_checkout', subjectType: 'group', label: 'Registered, no checkout after an hour' },
-  first_payment: { template: 'alert_first_payment', subjectType: 'group', label: 'A trial became a paying customer' },
+  affiliate_joined: { template: 'alert_affiliate_joined', subjectType: 'rep', label: 'A new affiliate joined', swept: true },
+  garage_registered: { template: 'alert_garage_registered', subjectType: 'group', label: 'A garage registered', swept: true },
+  garage_no_checkout: { template: 'alert_garage_no_checkout', subjectType: 'group', label: 'Registered, no checkout after an hour', swept: true },
+  // NOT SWEPT: its figure lives on the Stripe invoice the webhook held, and nothing local records
+  // it, so a catch-up would print "not recorded" where the money goes. Therefore NEVER CAPPED.
+  first_payment: { template: 'alert_first_payment', subjectType: 'group', label: 'A trial became a paying customer', swept: false },
 } as const;
 
 export type OperatorAlertKind = keyof typeof OPERATOR_ALERTS;
@@ -67,19 +77,34 @@ export const ATTEMPT_CAP = 3;
  * HOW LONG AN INLINE SEND MAY HOLD UP THE THING IT REPORTS (owner, 2026-10-30).
  *
  * Three of these fire inside a request — a signup and a Stripe webhook. "It cannot FAIL the
- * signup" was true from the start; it could still SLOW one, because a provider that accepts
- * connections and then thinks about it for thirty seconds is a thirty-second signup. So the inline
- * calls are capped and the sweep picks up whatever the cap cut off.
+ * signup" was true from the start; it could still SLOW one, because a provider that accepts a
+ * connection and then thinks about it for thirty seconds is a thirty-second signup.
  *
- * ── A TIMEOUT IS NOT A CANCELLATION, AND THAT IS WHY THIS IS SAFE ──────────────────────────────
- * Nothing is aborted: the send goes on in the background and, if it finishes, writes its own
- * NotificationLog row like any other. The sweep then reads that row and treats the alert as
- * settled, so a slow send produces ONE email, not two. This only works because idempotency is read
- * from the row the send itself writes rather than from a flag the caller sets — if the caller
- * marked it "sent" before the send returned, every timeout would be a lost alert, and if it marked
- * it afterwards, every timeout would be a duplicate.
+ * ── A TIMEOUT IS NOT A CANCELLATION, BUT IT IS NOT A PROMISE EITHER (owner, 2026-10-30) ────────
+ * Nothing is aborted: the send goes on and, IF IT FINISHES, writes its own NotificationLog row
+ * like any other, which the sweep then reads as settled. That happens on a long-lived dev server.
+ * ON VERCEL IT MAY NOT: once the response is returned the function instance can be FROZEN, and
+ * work left running is simply stopped. There is no waitUntil available to us — `@vercel/functions`
+ * is not a dependency of this project and Next 14.2 has no `after()` (that is Next 15) — so the
+ * honest statement is:
+ *
+ *     a capped send either completes, or leaves NO ROW AT ALL.
+ *
+ * Which is survivable for exactly one reason: THE SWEEP. An alert with no row is raised on the
+ * next hourly pass, so the worst case of a cap is a late email rather than a lost one. That makes
+ * the cap safe precisely where the sweep is the backstop and unsafe everywhere else, which is why
+ * `swept` is a field on the registry above and why the cap is DERIVED from it rather than passed
+ * by each caller. first_payment is not swept, so it is not capped: it is awaited in full.
  */
 export const INLINE_TIMEOUT_MS = 3000;
+
+/**
+ * THE CAP FOR ONE ALERT, derived — null (no cap) for anything the sweep does not walk.
+ * Exported because the rule is worth asserting directly rather than only through its effect.
+ */
+export function defaultCapFor(kind: OperatorAlertKind): number | null {
+  return OPERATOR_ALERTS[kind].swept ? INLINE_TIMEOUT_MS : null;
+}
 
 /**
  * What a capped call answers. A WRAPPER with its own discriminant rather than a bare marker object:
@@ -320,8 +345,11 @@ export async function firstPaymentPayload(
 
 /**
  * ONE PATH FOR ALL FOUR, so the cap, the catch and the missing-subject answer are written once.
- * `timeoutMs` defaults to the inline cap: the dangerous call site is the one inside a request, so
- * that is the one the default protects. The sweep passes null for no cap.
+ *
+ * THE DEFAULT CAP IS DERIVED FROM THE REGISTRY, not chosen by the caller: an alert the sweep walks
+ * may be cut off (the sweep raises it again), and one it does not must be awaited in full, because
+ * on Vercel a cut-off send can be frozen before it writes anything. The sweep passes null
+ * explicitly — nothing waits on a cron, and a cap there would hide a slow provider.
  */
 async function deliver(
   db: Db,
@@ -330,7 +358,7 @@ async function deliver(
   build: () => Promise<TemplateData | null>,
   timeoutMs: number | null | undefined,
 ): Promise<AlertOutcome> {
-  const ms = timeoutMs === undefined ? INLINE_TIMEOUT_MS : timeoutMs;
+  const ms = timeoutMs === undefined ? defaultCapFor(kind) : timeoutMs;
   try {
     const work = (async (): Promise<AlertOutcome> => {
       const data = await build();
@@ -339,8 +367,8 @@ async function deliver(
     })();
     const raced = await withCap(work, ms);
     if (raced.timedOut) {
-      // SAID, NOT SWALLOWED. The caller logs it, the sweep finishes it, and the row — if the send
-      // completes — is written by the send itself.
+      // SAID, NOT SWALLOWED. The caller logs it and THE SWEEP RAISES IT AGAIN — which is the
+      // guarantee, rather than the send finishing in the background, which on Vercel it may not.
       return { kind, subjectId, results: [], timedOut: true };
     }
     return raced.value;
@@ -366,9 +394,10 @@ export async function alertGarageNoCheckout(db: Db, groupId: string, opts?: { ti
 }
 
 /**
- * A TRIAL BECAME A PAYING CUSTOMER. Called where first_paid_at is STAMPED (recordFirstPayment),
- * which returns 'recorded' exactly once for exactly this event — so the caller's own idempotency
- * and this alert's agree by construction rather than by two separate rules.
+ * A TRIAL BECAME A PAYING CUSTOMER. Called from the invoice.paid webhook on both of the verdicts
+ * that mean "this garage has paid us", with the duplicate prevented HERE rather than there — the
+ * webhook's comment says why. UNCAPPED, because `swept: false`: there is no hourly pass behind
+ * this one, so a send cut off and then frozen would be an alert nobody ever gets.
  */
 export async function alertFirstPayment(
   db: Db,
@@ -467,9 +496,10 @@ export type SweepResult = {
  *
  * `first_payment` IS NOT SWEPT, deliberately. Its alert names the amount, and the amount lives on
  * the Stripe invoice the webhook was handed — nothing local records it, so a catch-up would have
- * to print "not recorded" where the figure belongs. A webhook that never arrived is re-delivered by
- * Stripe (and the alert is idempotent); one whose send failed is visible on the Engine Room screen
- * with its error. An alert that lies about the money would be worse than a late one.
+ * to print "not recorded" where the figure belongs. An alert that lies about the money would be
+ * worse than a late one. What stands in for a sweep there: the webhook attempts the alert on a
+ * re-delivery too, so Stripe's own retry finishes an attempt that died — which is also why that
+ * send is never capped.
  */
 export async function runOperatorAlertSweep(db: Db, now: Date = new Date()): Promise<SweepResult> {
   const settings = await (db as any).programmeSettings.findUnique({ where: { id: 'singleton' }, select: { alert_emails: true } }).catch(() => null);

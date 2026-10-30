@@ -173,18 +173,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // attributions and can legitimately refuse.
         const aff = await rewardFromInvoicePaid(prisma, invoice);
         // ── AND TELL THE OWNER, ONCE ────────────────────────────────────────────────────────────
-        // GATED ON 'recorded', which recordFirstPayment returns exactly once for exactly this
-        // event — so "the first time we were paid" is decided by the thing that stamps the date,
-        // not by a second rule here that could disagree with it. Every later invoice answers
-        // 'already recorded' and no alert goes.
+        // ATTEMPTED ON BOTH "recorded" AND "already recorded", and the DUPLICATE is prevented by
+        // the alert's own idempotency rather than by this condition.
         //
-        // AFTER the three writes above, and it cannot fail them: sendOperatorAlert catches its own
-        // errors, so a Stripe webhook never retries because an email to us did not go. CAPPED at
-        // three seconds for the other half of that promise — Stripe times a webhook out and retries
-        // it, so a slow email provider would turn one payment into a handful of deliveries. The
-        // send continues past the cap and writes its own row; the hourly sweep reads it.
+        // Gating on 'recorded' alone was the first version and it had a hole with no floor under
+        // it: this alert is the one the hourly sweep does NOT walk, so if the function died after
+        // the date was stamped and before the send landed, Stripe's retry would read
+        // 'already recorded' and say nothing — the alert lost for good. Both verdicts mean the
+        // same thing ("this garage has paid us"), the NotificationLog row is what stops a second
+        // email, and a retry now finishes what a dead attempt started. Every later monthly invoice
+        // costs one query and sends nothing.
+        //
+        // NOT CAPPED, deliberately, and the registry enforces it: a capped send that is frozen
+        // before it writes leaves no row, and with no sweep behind this alert there would be
+        // nothing to notice that. It is awaited in full. It still cannot FAIL the webhook —
+        // sendOperatorAlert catches its own errors — and if it makes the webhook slow enough for
+        // Stripe to time out, Stripe retries and the line above finishes the job.
         let alerted: unknown = paid;
-        if (paid === 'recorded') {
+        if (paid === 'recorded' || paid === 'already recorded') {
           const groupId = await groupIdForInvoiceCustomer(prisma, invoice);
           if (groupId) {
             alerted = await alertFirstPayment(prisma, groupId, {

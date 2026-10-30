@@ -384,20 +384,55 @@ try {
     capped.timedOut === true && capped.error === undefined && capped.results.length === 0,
     'three states: it went, it failed, or we do not know yet');
 
-  // AND THE THING THE CAP IS ONLY SAFE BECAUSE OF: a send that finishes AFTER the cap still writes
-  // its own row, and that row settles the alert. If it did not, every slow send would be a
-  // duplicate email from the next sweep.
+  // ── WHICH ALERTS MAY BE CAPPED AT ALL, AND WHY IT IS NOT A FREE CHOICE ───────────────────────
+  // On Vercel a function can be FROZEN once it has responded, so a capped send that has not
+  // finished is not "still running" — it may simply stop, leaving no row. The only thing that then
+  // raises the alert is the sweep. So the cap is derived from whether the sweep walks that alert.
+  check('every alert the sweep walks is capped, and the one it does not is NOT',
+    OA.OPERATOR_ALERT_KINDS.every((k) => OA.defaultCapFor(k) === (OA.OPERATOR_ALERTS[k].swept ? OA.INLINE_TIMEOUT_MS : null))
+    && OA.defaultCapFor('first_payment') === null,
+    `${OA.OPERATOR_ALERT_KINDS.map((k) => `${k}:${OA.defaultCapFor(k) ?? 'uncapped'}`).join(' ')}`);
+  // THE COMPLETENESS CLAUSE, and the one that stops this rotting: `swept: true` is a CLAIM about
+  // the sweep, and a claim nobody checks is how an alert comes to be capped with nothing behind it.
+  // Both sides are enumerated — the registry, and the kinds the sweep actually attempted.
+  const sweptClaimed = OA.OPERATOR_ALERT_KINDS.filter((k) => OA.OPERATOR_ALERTS[k].swept).sort();
+  const sweptActual = Object.keys((await OA.runOperatorAlertSweep(prisma, now)).attempted).sort();
+  check('  …and "swept" is what the sweep ACTUALLY walks, not a claim beside it',
+    JSON.stringify(sweptClaimed) === JSON.stringify(sweptActual),
+    `registry says ${sweptClaimed.join(', ')} · the sweep walked ${sweptActual.join(', ')}`);
+  const t3 = Date.now();
+  const payUncapped = await OA.alertFirstPayment(slowDb, 'zzal-nobody', { amountPennies: 1 });
+  check('  …so the first-payment alert with no options waits for its answer',
+    payUncapped.timedOut !== true && Date.now() - t3 > OA.INLINE_TIMEOUT_MS,
+    `${Date.now() - t3}ms — nothing sweeps it, so a cut-off send would be an alert nobody ever gets`);
+  // THE DECISION IN THE WEBHOOK, pinned where no clause can reach it: the alert is attempted on a
+  // RE-DELIVERY too, so Stripe's retry finishes an attempt that died after the date was stamped.
+  const webhookSrc = fs.readFileSync('/Users/hugh/Developer/greasedesk-core/pages/api/stripe/webhook.ts', 'utf8');
+  check('  …and the webhook attempts it on a re-delivery, not only on the first stamp',
+    /paid === 'recorded' \|\| paid === 'already recorded'/.test(webhookSrc),
+    'gated on the first verdict alone, a function that died mid-send would lose this alert for good');
+
+  // AND THE GUARANTEE A CAP ACTUALLY RESTS ON. Two halves, and only the second is a guarantee.
   const slowSubject = await mkGroup('slowsend', { created_at: ago(120) });
   const cut = await OA.alertGarageRegistered(prisma, slowSubject.id, { timeoutMs: 1 });
   check('a send cut off at 1ms reports a timeout', cut.timedOut === true, JSON.stringify(cut));
   await sleep(4000); // let the work it did not wait for finish
   const landed = await rowsFor('alert_garage_registered', slowSubject.id);
-  check('  …but the send was not CANCELLED: it finished and wrote its own rows',
-    landed.length === 2, `${landed.length} row(s) — a timeout is not an abort`);
+  check('  …and ON THIS SERVER it finished anyway and wrote its rows',
+    landed.length === 2,
+    `${landed.length} row(s) — true of a long-lived dev server and NOT a production guarantee: Vercel can freeze the instance once it has responded`);
   const afterCut = await OA.runOperatorAlertSweep(prisma);
-  check('  …so the sweep finds it settled and sends nothing again',
+  check('  …and either way the sweep sends nothing a second time',
     (await rowsFor('alert_garage_registered', slowSubject.id)).length === 2 && afterCut.sent === 0,
     'idempotency read from the row the SEND writes — a flag set by the caller would be a lost alert or a duplicate');
+  // THE HALF THAT IS THE GUARANTEE: no row at all — which is what a frozen function leaves — and
+  // the sweep raises it. Arranged by removing the rows, because a frozen function cannot be
+  // arranged from here and the state it leaves behind can.
+  await prisma.notificationLog.deleteMany({ where: { template: 'alert_garage_registered', subject_id: slowSubject.id } });
+  check('  …and a send that left NO ROW AT ALL is raised again by the sweep',
+    (await OA.runOperatorAlertSweep(prisma)).attempted.garage_registered > 0
+    && (await rowsFor('alert_garage_registered', slowSubject.id)).length === 2,
+    'this is why a cap is survivable: the worst case is a late email, not a lost one');
 
   // ── 10. WHAT THE EMAIL ACTUALLY SAYS ──────────────────────────────────────────────────────────
   console.log('\n— the email itself —');
