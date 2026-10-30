@@ -1,6 +1,6 @@
 /**
  * File: scripts/billing-plans-gate.mjs
- * @gate-requires: db
+ * @gate-requires: db, server
  *
  * THE PLAN SHAPES, AND THE ARITHMETIC THAT PRICES THEM.
  *
@@ -20,14 +20,27 @@
  * clauses about rewards, attribution and who may take the offer.
  *
  * ── FIXTURES ────────────────────────────────────────────────────────────────────────────────────
- * Groups prefixed ZZBP and a settings row of this gate's own, swept before and after and
- * REGISTERED. Nothing here touches the live settings singleton or any real tenant: gates run
- * against the production database, and on 2026-10-25 one of them changed a public offer.
+ * Groups prefixed ZZBP, a settings row of this gate's own and one owner operator, swept before and
+ * after and REGISTERED. Nothing here WRITES the settings singleton or any real tenant.
+ *
+ * That rule was written when gates ran against the production database and one of them changed a
+ * public offer on 2026-10-25. Gates now run against the gate database, so the original hazard is
+ * gone — but the rule stands for a second reason: the singleton is shared fixture state that other
+ * gates read (trial_days among them), and a gate that moves it makes its neighbours' reds depend
+ * on the order they ran in. Section 9 therefore READS the singleton and asserts the screen against
+ * what it already holds.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, onTeardown } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, onTeardown, serverReady, erOrigin, ER_RESOLVER_ARGS } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { readFileSync, readdirSync, statSync, existsSync } = await import('node:fs');
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
+// THE SHARED PATH MATCHER, not a regex of my own. /\/superadmin\/login/ is a SUBSTRING test: it is
+// true of /superadmin/login-history and of anything else that merely contains the words, so a gate
+// using it can conclude "still on the login page" about a page it has never seen. anchored-match
+// answers the segment question, and anchored-match-gate is what caught this one (2026-10-30).
+const { underPath } = await import('../lib/anchored-match.ts');
+const bcrypt = (await import('/Users/hugh/Developer/greasedesk-core/node_modules/bcryptjs/index.js')).default;
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -35,7 +48,9 @@ const R = '/Users/hugh/Developer/greasedesk-core';
 const PREFIX = 'ZZBP';
 const GATE_SETTINGS = 'ZZBP-settings';
 
-let prisma;
+let prisma, browser;
+const OP_EMAIL = 'zzbp-plan-gate@greasedesk.test';
+const OP_PASS = 'GatePlanSettings!2026';
 const sweep = async () => {
   if (!prisma) return 0;
   const groups = (await prisma.group.findMany({ where: { group_name: { startsWith: PREFIX } }, select: { id: true } })).map((g) => g.id);
@@ -44,7 +59,11 @@ const sweep = async () => {
     await prisma.group.deleteMany({ where: { id: { in: groups } } }).catch(() => {});
   }
   const settings = await prisma.programmeSettings.deleteMany({ where: { id: GATE_SETTINGS } }).catch(() => ({ count: 0 }));
-  return groups.length + (settings?.count ?? 0);
+  // REGISTERED, not deleted inline. The operator used to be removed on the line after its last
+  // clause, which left it behind whenever anything in between threw — and the next run then
+  // collided on the unique email.
+  const ops = await prisma.operator.deleteMany({ where: { email: OP_EMAIL } }).catch(() => ({ count: 0 }));
+  return groups.length + (settings?.count ?? 0) + (ops?.count ?? 0);
 };
 
 try {
@@ -324,9 +343,11 @@ try {
   // THE WRITE: on this gate's OWN row, never the singleton, and audited old-to-new.
   await prisma.programmeSettings.upsert({ where: { id: GATE_SETTINGS }, update: {}, create: { id: GATE_SETTINGS } });
   const singletonBefore = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { offer_months_paid: true } }))?.offer_months_paid ?? null;
+  // A REAL PASSWORD HASH, because the browser section below signs in as this operator. It was the
+  // literal 'x' while nothing ever authenticated as it.
   const op = await prisma.operator.create({ data: {
-    email: 'zzbp-plan-gate@greasedesk.test', name: 'Plan settings gate', role: 'owner', status: 'active',
-    regions: ['GB'], passwordHash: 'x' }, select: { id: true } });
+    email: OP_EMAIL, name: 'Plan settings gate', role: 'owner', status: 'active',
+    regions: ['GB'], passwordHash: await bcrypt.hash(OP_PASS, 10) }, select: { id: true } });
   const saved = await PS.savePlanSettings(prisma, {
     changes: { offer_months_paid: 8, total_reward_pennies: 60000, affiliate_signups_open: false },
     actorId: op.id, settingsId: GATE_SETTINGS,
@@ -352,7 +373,71 @@ try {
   const again = await PS.savePlanSettings(prisma, { changes: { offer_months_paid: 8 }, actorId: op.id, settingsId: GATE_SETTINGS });
   check('  …and re-saving the same value records no change', Object.keys(again.changed).length === 0,
     JSON.stringify(again.changed));
-  await prisma.operator.deleteMany({ where: { id: op.id } });
+
+  // ── 9. AND THE OPERATOR CAN SEE THE SWITCHES ON THE SCREEN ──────────────────────────────────
+  // Everything above drives the registry and the write chokepoint. None of it proves a control
+  // REACHED the page: the Engine Room renders from PLAN_SETTING_FIELDS, so a field added to that
+  // list is expected to appear — expected, which is not asserted (2026-10-30, the joining switch).
+  //
+  // READ-ONLY ON THE SINGLETON. This file's rule is that a gate must not touch the live settings
+  // row, so the checkbox states are asserted against what that row already holds rather than
+  // against values written here. The offer and joining switches currently hold DIFFERENT values,
+  // which is what makes that comparison worth making; a hardwired `checked` goes red on one of
+  // them either way, and the red-proof is where that was shown.
+  console.log('\n— and the switches are on the screen —');
+  const ready = await serverReady();
+  check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
+  // THE HOST RULE IS WHAT MAKES THE ENGINE ROOM REACHABLE: middleware 404s /superadmin on
+  // localhost, so without it this section would assert things about a Not Found page.
+  browser = await chromium.launch({ channel: 'chrome', args: ER_RESOLVER_ARGS });
+  const ER = erOrigin();
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 2400 } })).newPage();
+  await page.goto(`${ER}/superadmin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', OP_EMAIL);
+  await page.fill('input[type="password"]', OP_PASS);
+  await page.click('button[type="submit"]');
+  // SETTLE FIRST: next-auth redirects on its own after the credential POST, and racing it with a
+  // goto aborts the navigation — which reads as a broken page when it is not.
+  const onLogin = (path) => underPath(path, '/superadmin/login');
+  await page.waitForURL((u) => !onLogin(u.pathname), { timeout: 60000 }).catch(() => {});
+  check('the owner operator is signed in to the Engine Room',
+    !onLogin(new URL(page.url()).pathname), page.url());
+
+  await page.goto(`${ER}/superadmin/billing`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="save-plan-settings"]', { timeout: 30000 }).catch(() => {});
+  // SIZE BEFORE IDENTITY. One control per registry field, counted — so a field that silently fails
+  // to render is a red here and not a thing someone notices months later.
+  const controls = await page.locator('[data-testid^="ps-"]').count();
+  check('every plan setting in the registry has a control on the screen',
+    controls === PS.PLAN_SETTING_FIELDS.length, `${controls} controls for ${PS.PLAN_SETTING_FIELDS.length} fields`);
+
+  const joinBox = page.locator('[data-testid="ps-affiliate_joining_open"]');
+  const offerBox = page.locator('[data-testid="ps-affiliate_signups_open"]');
+  check('  …including the JOINING switch, as a checkbox',
+    (await joinBox.count()) === 1 && (await joinBox.getAttribute('type')) === 'checkbox',
+    'the control an operator uses to close the programme to new affiliates');
+  const joinLabel = await page.locator('label[for="ps-affiliate_joining_open"]').innerText().catch(() => '');
+  const offerLabel = await page.locator('label[for="ps-affiliate_signups_open"]').innerText().catch(() => '');
+  check('  …labelled on the page as its own subject, not the other\u2019s',
+    /join/i.test(joinLabel) && !/offer/i.test(joinLabel) && /offer/i.test(offerLabel) && !/join/i.test(offerLabel),
+    `"${joinLabel.replace(/\s+/g, ' ')}" / "${offerLabel.replace(/\s+/g, ' ')}"`);
+
+  // NOT `live`: that name is already a trial_days reading twice in this file, and a third subject
+  // under it would be the one-label-two-subjects mistake in the gate itself.
+  const liveSwitches = await prisma.programmeSettings.findUnique({ where: { id: 'singleton' },
+    select: { affiliate_joining_open: true, affiliate_signups_open: true } });
+  // PRESENCE BEFORE STATE. isChecked() on a locator that matches nothing WAITS, and then throws a
+  // 30-second timeout that abandons the rest of this section — so a field that failed to render
+  // would cost the clauses below rather than simply going red here. Found by the red-proof that
+  // removed the control (2026-10-30).
+  const bothBoxes = (await joinBox.count()) === 1 && (await offerBox.count()) === 1;
+  const shown = bothBoxes ? { join: await joinBox.isChecked(), offer: await offerBox.isChecked() } : null;
+  check('  …and each box shows what the live row actually holds',
+    !!shown && shown.join === liveSwitches?.affiliate_joining_open
+      && shown.offer === liveSwitches?.affiliate_signups_open,
+    shown
+      ? `joining ${liveSwitches?.affiliate_joining_open} / offer ${liveSwitches?.affiliate_signups_open} — two switches holding different values is what gives this clause its teeth`
+      : 'one of the two controls is not on the page at all, so there is no state to compare');
 
   // AND NO PRODUCTION PATH NAMES A ROW. The existing scan covers pages/; this is the same rule
   // for the new PUT handler, which must take its row from the chokepoint's default.
@@ -365,6 +450,7 @@ try {
   console.log(`\n✗ THREW: ${describeError(e).slice(0, 700)}`);
   out.push('F');
 } finally {
+  await browser?.close().catch(() => {});
   const left = await sweep().catch(() => -1);
   const liveStill = await prisma?.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { trial_days: true } }).catch(() => null);
   const mineGone = await prisma?.programmeSettings.count({ where: { id: GATE_SETTINGS } }).catch(() => -1);

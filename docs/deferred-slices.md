@@ -266,3 +266,30 @@ reconcile to a single honest total.
 stream is built, not discovered while wiring it. The display is ready; the definition is the open
 question. Do not add a vehicle stream that books prep-inclusive margin without first deciding which of
 the above holds — a stream that double-counts prep is worse than no stream.
+
+---
+
+## Renaming `ProgrammeSettings.affiliate_signups_open` — cosmetic, low priority
+
+**Boarded by the owner, 2026-10-30, at slice B of the affiliate programme.**
+
+The column means *do referred garages get 12 months for the price of 8*. It is read only by
+`refuseOffer`. Its name says "signups", which is now a **different** switch —
+`affiliate_joining_open`, added in the same slice, which decides whether a person may join the
+programme at all. One of the two names is wrong, and it is the older one.
+
+**Why it was not renamed with the split.** A rename needs a `DROP`, which classifies constraining,
+and the two-push policy leaves a window between apply and push where production runs code naming
+the old column. Prisma selects **all** scalars, so `getProgrammeSettings` would throw on a column
+that no longer existed — and that function is reached by `/`, `/pricing` and `/llms.txt`. The
+cheapest wrong moment would take the public site down.
+
+**What was done instead.** The code's own vocabulary carries the meaning: `currentTerms` returns
+`offerOpen` and `joiningOpen`, `refuseOffer`'s parameter is `offerOpen`, and both columns carry a
+`///` comment in the schema saying which question each answers. Nothing past `lib/affiliate.ts`
+says "signups" about the garage offer.
+
+**The shape of the fix, when it is worth doing.** Three migrations, not one: add
+`affiliate_offer_open` and copy the value (an `UPDATE`, so constraining); push code that reads the
+new column; then drop the old one. Worth bundling with the next constraining migration that has to
+wait for a push anyway, rather than spending two pushes on a name.

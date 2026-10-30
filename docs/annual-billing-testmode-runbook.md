@@ -148,7 +148,9 @@ yearly plan:
 Read them for yourself before you start:
 
 ```sql
-SELECT trial_days, renewal_annual_months_paid, offer_months_paid, affiliate_signups_open
+SELECT trial_days, renewal_annual_months_paid, offer_months_paid,
+       affiliate_signups_open,  -- the GARAGE OFFER (the name is wrong; see the affiliate plan)
+       affiliate_joining_open   -- may a PERSON join the programme (added 2026-10-30, closed by default)
 FROM "ProgrammeSettings" WHERE id = 'singleton';
 ```
 

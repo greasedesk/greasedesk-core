@@ -17,7 +17,7 @@ More than the brief assumes, which changes the shape of the work.
 | The ledger: `CommissionEntry` with `status` pending/held/released/billed/paid/void, `kind` accrual/clawback, pay runs | `lib/rep-pay-run` |
 | A magic-link portal with its own rate-limit key, login, profile | `pages/rep/*`, `lib/rep-magic-link` |
 | SMS code verification that **already accepts a `rep` subject** and a `phone_verify` purpose | `lib/phone-verification`, `lib/delivered-code` |
-| `affiliate_signups_open` | `ProgrammeSettings` |
+| `affiliate_signups_open` (the garage offer) and, since slice B, `affiliate_joining_open` | `ProgrammeSettings` |
 | `qrcode` as a dependency | `package.json:41` |
 | The code-collision check script, written and **never run** | `scripts/check-ref-code-case.mjs` |
 
@@ -45,7 +45,11 @@ gated, and unreached. Another one for the built-and-unread list.
 
 ## 2 — THINGS I THINK ARE WRONG, OR HIDE MORE WORK THAN THEY LOOK
 
-### 2.1 `affiliate_signups_open` is one control answering two questions
+### 2.1 `affiliate_signups_open` is one control answering two questions — SETTLED, slice B
+
+**Shipped 2026-10-30 as `39f7a7f`.** Two columns: `affiliate_signups_open` for the garage offer
+(name kept, see 2.6b) and `affiliate_joining_open` for public joining, closed by default. Personal
+codes stay ungated by either, as proposed. The code says `offerOpen` / `joiningOpen`.
 
 `refuseOffer()` reads it to decide whether **a garage may take the discount**. Item 6 wants it to
 mean **whether a new affiliate may join**. Today, closing signups would silently stop referred
