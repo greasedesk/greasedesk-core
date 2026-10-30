@@ -53,6 +53,7 @@ export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, g
     { heading: 'Refunds', body: 'If we refund a garage’s payment in full, the reward that payment earned is reversed. A partial refund leaves it alone. A reversal is set against what you earn next, and we do not ask for money back.' },
     { heading: 'Garages you own or work for', body: 'You cannot earn on a garage you own, work for, or are part of. This is checked when you sign up and again when a reward would be earned.' },
     { heading: 'Changes to the programme', body: 'We will give you 30 days’ notice before changing what the programme pays. A garage already referred keeps the terms it was referred under.' },
+    { heading: 'Labelling your content', body: 'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the post or the description — and we ask everyone to do it. It applies wherever you post: video, text, social or email.' },
     { heading: 'Tax', body: 'What you earn is yours to declare. We deduct nothing from it and we are not able to advise you about it.' },
   ];
   const coming: string[] = [

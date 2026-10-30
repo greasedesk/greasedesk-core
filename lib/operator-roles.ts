@@ -69,6 +69,12 @@ export const ER_NAV: ErNavItem[] = [
   // Programme settings — today the TRIAL LENGTH, which every new garage is offered and which the
   // public site prints. Owner only: it is a commercial term, not an operational one.
   { href: '/superadmin/billing', label: 'Billing', minRole: 'owner' },
+  // AFFILIATES — today the waiting list from affiliates.greasedesk.com, with the affiliates
+  // themselves to follow. OWNER ONLY: it holds email addresses left by members of the public who are
+  // not customers, and the only action it will grow is telling them the programme has opened.
+  // REGISTERED HERE on purpose, like Prospects above: erMinRole falls back to 'support' for an
+  // unregistered href, so a missing line would open this to the lowest role.
+  { href: '/superadmin/affiliates', label: 'Affiliates', minRole: 'owner' },
 ];
 export const erNavFor = (role: OperatorRoleName): ErNavItem[] => ER_NAV.filter((i) => roleAtLeast(role, i.minRole));
 /** The minRole a route requires — the SAME value its page passes to requireOperatorPage. */

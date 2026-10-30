@@ -32,7 +32,7 @@
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
-const { gatePrisma, describeError, gateOrigin, affiliateOrigin, repOrigin, erOrigin, serverReady, onTeardown } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, gateOrigin, affiliateOrigin, repOrigin, erOrigin, ER_RESOLVER_ARGS, serverReady, onTeardown } = await import('./_gate-preflight.mjs');
 const { readFileSync } = await import('node:fs');
 const http = await import('node:http');
 const { AFFILIATE_SITE_URL } = await import('../lib/company-info.ts');
@@ -40,6 +40,8 @@ const { underPath } = await import('../lib/anchored-match.ts');
 const ROBOTS = await import('../lib/robots-rules.ts');
 const PUB = await import('../lib/affiliate-public.ts');
 const WAIT = await import('../lib/affiliate-waitlist.ts');
+const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
+const bcrypt = (await import('/Users/hugh/Developer/greasedesk-core/node_modules/bcryptjs/index.js')).default;
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -50,8 +52,13 @@ const ER_HOST = new URL(erOrigin()).hostname;
 const APEX = B.hostname;
 
 /** One request, one Host header, no redirect following — a redirect is the answer, not a detour. */
-const ask = (host, path, { method = 'GET', body } = {}) => new Promise((resolve) => {
+const ask = (host, path, { method = 'GET', body, xff } = {}) => new Promise((resolve) => {
   const headers = { Host: `${host}:${B.port}` };
+  // A FORWARDED IP OF OUR OWN. The limiter keys on x-forwarded-for and falls back to the literal
+  // 'unknown', which every anonymous caller shares — so a burst clause without this would spend a
+  // budget a real visitor and the next gate also draw on. TEST-NET-3 (RFC 5737), which is
+  // documentation-only and can never be a real client.
+  if (xff) headers['x-forwarded-for'] = xff;
   if (body) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(body); }
   const r = http.request({ hostname: B.hostname, port: B.port, path, method, headers }, (res) => {
     let b = ''; res.on('data', (d) => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b, headers: res.headers }));
@@ -66,11 +73,24 @@ const ogImage = (html) => (html.match(/<meta property="og:image" content="([^"]+
 /** The visible text of the rendered page, so a clause about COPY is about what a person reads. */
 const text = (html) => html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&').replace(/&pound;/g, '£').replace(/\s+/g, ' ');
 
-let prisma;
+let prisma, browser;
+/** Every address this gate leaves ends with this, so the sweep can find them by shape. */
+const MARK = '@zz-affiliate-site.invalid';
+/** Our own forwarded IP, so the limiter budget we spend is nobody else's. */
+const GATE_IP = '203.0.113.7';
+const OP_EMAIL = 'zzas-affiliate-site-gate@greasedesk.test';
+const OP_PASS = 'GateAffiliateSite!2026';
 /** What the singleton held before this gate touched it — restored in teardown, whatever happens. */
 let before = null;
 const restore = async () => {
-  if (!prisma || !before) return 0;
+  if (!prisma) return 0;
+  // EVERY FIXTURE, in one registered function. The waiting-list rows, the limiter tokens this gate
+  // spent, the operator it signed in as, and the settings row it moved — a teardown that restored
+  // only the settings would leave the next run colliding on a unique email.
+  await prisma.affiliateWaitlist.deleteMany({ where: { email: { endsWith: MARK } } }).catch(() => {});
+  await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: `waitlist:ip:${GATE_IP}` } } }).catch(() => {});
+  await prisma.operator.deleteMany({ where: { email: OP_EMAIL } }).catch(() => {});
+  if (!before) return 0;
   await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: before });
   return 1;
 };
@@ -244,14 +264,23 @@ try {
   // ── 9. THE COPY ITSELF ───────────────────────────────────────────────────────────────────────
   // Not a proofread — two rules this codebase holds everywhere, over the RENDERED TEXT.
   console.log('\n— the copy obeys the two standing rules —');
-  const page = text(open.body);
+  const copy = text(open.body);
   check('the word "free" is nowhere on the page',
-    !/\bfree\b/i.test(page), 'the sitewide wording rule: dated wording, never "free"');
+    !/\bfree\b/i.test(copy), 'the sitewide wording rule: dated wording, never "free"');
   check('  …and the discriminator: the trial IS described, in days',
-    /\d+ days with nothing to pay/.test(page), 'otherwise the clause above passes on a page that says nothing at all');
+    /\d+ days with nothing to pay/.test(copy), 'otherwise the clause above passes on a page that says nothing at all');
   check('both audiences are addressed by name',
-    /motor trade|in and out of garages/i.test(page) && /videos|content/i.test(page),
+    /motor trade|in and out of garages/i.test(copy) && /videos|content/i.test(copy),
     'one page, two starting points — the owner asked for both');
+  // THE AD LABEL (owner, 2026-10-30). Affiliate content is an ad under the CAP Code and has to be
+  // obviously identifiable as one. Asserted in BOTH places it must appear, because a rule stated to
+  // creators in their own section and then missing from the question they actually click on is a
+  // rule we told them once and hid afterwards.
+  check('the ad-labelling rule is on the page, with the tag it means',
+    /labelled as an ad/i.test(copy) && /#ad/.test(copy), 'UK advertising rules, said where a creator reads');
+  check('  …in the creator section AND in the video question',
+    (copy.match(/labelled as an ad/gi) ?? []).length >= 2,
+    `found ${(copy.match(/labelled as an ad/gi) ?? []).length} — one of the two places would leave the other silent`);
 
   // ── 10. THE PURE RULES BEHIND IT ─────────────────────────────────────────────────────────────
   console.log('\n— and the rules behind the figures —');
@@ -283,6 +312,114 @@ try {
     WAIT.validateWaitlist({ email: 'a@b.co', audience: 'influencer' }).ok === false,
     'a value turned into NULL would hide the form and this list drifting apart');
 
+  // ── 10b. THE WAITING LIST ACTUALLY STORES ────────────────────────────────────────────────────
+  // Everything above is the page. This is the pipe: a person leaves an address on a closed
+  // programme's page, and the owner reads it in the Engine Room. Driven against the REAL endpoint
+  // and the REAL table, with this gate's own forwarded IP so the limiter budget is nobody else's.
+  console.log('\n— the waiting list stores what it is given —');
+  await prisma.affiliateWaitlist.deleteMany({ where: { email: { endsWith: MARK } } });
+  const post = (payload, { xff = GATE_IP } = {}) =>
+    ask(AFF_HOST, '/api/affiliate-site/waitlist', { method: 'POST', body: JSON.stringify(payload), xff });
+  const rowFor = (email) => prisma.affiliateWaitlist.findUnique({ where: { email } });
+
+  const SAM = `sam${MARK}`;
+  const first = await post({ email: ` SAM${MARK.toUpperCase()} `, audience: 'creator' });
+  const samRow = await rowFor(SAM);
+  check('an address left on the closed page is STORED', first.status === 200 && !!samRow, `HTTP ${first.status}`);
+  check('  …folded to lower case, so one person holds one place in the queue',
+    samRow?.email === SAM, `${samRow?.email} — the unique index is case-sensitive; the fold is what makes this true`);
+  check('  …with the answer they gave about themselves', samRow?.audience === 'creator', String(samRow?.audience));
+
+  const askedAt = samRow?.created_at;
+  const again = await post({ email: SAM, audience: 'trade' });
+  const corrected = await rowFor(SAM);
+  check('  …and the same person twice is ONE row, not an error',
+    again.status === 200 && (await prisma.affiliateWaitlist.count({ where: { email: { endsWith: MARK } } })) === 1,
+    `HTTP ${again.status} — there is nothing for them to do about it, and the answer would tell a stranger whether an address is on the list`);
+  check('  …their correction is taken', corrected?.audience === 'trade', String(corrected?.audience));
+  check('  …and their PLACE IN THE QUEUE is the day they first asked',
+    corrected?.created_at?.getTime() === askedAt?.getTime(),
+    'upsert, not delete-and-create — a second visit must not send them to the back');
+  await post({ email: SAM });
+  check('  …while answering nothing the second time does NOT erase what they said',
+    (await rowFor(SAM))?.audience === 'trade',
+    'null means "they did not say", which is not the same as "they said nothing this time"');
+
+  const noAnswer = `quiet${MARK}`;
+  await post({ email: noAnswer });
+  check('somebody who does not say which they are is stored as NULL',
+    (await rowFor(noAnswer))?.audience === null, 'three states, and this is the third');
+
+  const bad = await post({ email: 'not-an-email' });
+  check('a malformed address is refused and stores nothing',
+    bad.status === 400 && (await prisma.affiliateWaitlist.count({ where: { email: { endsWith: MARK } } })) === 2,
+    `HTTP ${bad.status} — still two rows`);
+  const unknownAudience = await post({ email: `x${MARK}`, audience: 'influencer' });
+  check('  …and so is an audience the form does not offer',
+    unknownAudience.status === 400 && !(await rowFor(`x${MARK}`)),
+    'turning it into NULL would hide the form and the table drifting apart');
+
+  const trap = await post({ email: `bot${MARK}`, website: 'http://spam.invalid' });
+  check('the honeypot is accepted and dropped',
+    trap.status === 200 && !(await rowFor(`bot${MARK}`)),
+    'a bot told it failed learns what to change; one told it worked does not');
+
+  const getIt = await ask(AFF_HOST, '/api/affiliate-site/waitlist');
+  check('a GET is 405, not a stored blank', getIt.status === 405, `HTTP ${getIt.status}`);
+
+  // THE LIMITER. A public POST that writes a row, so it is the strict limiter: ten an hour per IP.
+  // Spent on this gate's own forwarded address and swept in teardown.
+  const burst = [];
+  for (let i = 0; i < 12; i++) burst.push((await post({ email: `burst${i}${MARK}` })).status);
+  check('a burst past the limit is REFUSED',
+    burst.includes(429), `${burst.filter((s) => s === 200).length} accepted, ${burst.filter((s) => s === 429).length} refused of 12`);
+  check('  …after letting the honest ones through first',
+    burst[0] === 200, 'a limiter that refuses the first request is an outage, not a limit');
+
+  // ── 10c. AND THE OWNER CAN READ IT ───────────────────────────────────────────────────────────
+  // The other end of the pipe, through the REAL Engine Room screen on the REAL host. A clause on
+  // the table alone would prove the write and nothing about whether anyone can see it.
+  console.log('\n— and the owner reads it in the Engine Room —');
+  const op = await prisma.operator.create({ data: {
+    email: OP_EMAIL, name: 'Affiliate site gate', role: 'owner', status: 'active',
+    regions: ['GB'], passwordHash: await bcrypt.hash(OP_PASS, 10) }, select: { id: true } });
+  browser = await chromium.launch({ channel: 'chrome', args: ER_RESOLVER_ARGS });
+  const page = await (await browser.newContext({ viewport: { width: 1280, height: 1400 } })).newPage();
+  const onLogin = (path) => underPath(path, '/superadmin/login');
+  await page.goto(`${erOrigin()}/superadmin/login`, { waitUntil: 'domcontentloaded' });
+  await page.fill('input[type="email"]', OP_EMAIL);
+  await page.fill('input[type="password"]', OP_PASS);
+  await page.click('button[type="submit"]');
+  await page.waitForURL((u) => !onLogin(u.pathname), { timeout: 60000 }).catch(() => {});
+  check('an owner operator is signed in to the Engine Room', !onLogin(new URL(page.url()).pathname), page.url());
+
+  await page.goto(`${erOrigin()}/superadmin/affiliates`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="waitlist-count"]', { timeout: 30000 }).catch(() => {});
+  const inDb = await prisma.affiliateWaitlist.count();
+  const rows = await page.locator('[data-testid="waitlist-row"]').count();
+  check('the waiting-list screen shows EVERY row the table holds',
+    rows === inDb && rows > 0, `${rows} rows on the screen, ${inDb} in the table`);
+  const countLabel = await page.locator('[data-testid="waitlist-count"]').innerText().catch(() => '');
+  check('  …and the count beside the heading is that same number',
+    countLabel.replace(/[()]/g, '') === String(inDb), `"${countLabel}" vs ${inDb} — a label claiming WHICH number it is, asserted against the maths`);
+  const screen = await page.locator('[data-testid="waitlist-table"]').innerText().catch(() => '');
+  check('  …the address a person actually left is on it', screen.includes(SAM), SAM);
+  check('  …and "they did not say" reads as a dash, not an empty cell',
+    screen.includes('—'), 'an empty cell cannot be told from a rendering fault');
+  // THE SWITCH'S STATE IS ON THE SCREEN. Joining is OPEN at this point in the run (section 8 left
+  // it so), which is the harder case: the list only grows while it is shut, so a screen that did
+  // not say which way the switch was set would invite "why has nobody joined?".
+  const stateLine = await page.locator('[data-testid="joining-state"]').innerText().catch(() => '');
+  check('  …and the screen says which way the joining switch is set',
+    /New affiliates can join/.test(stateLine), stateLine.replace(/\s+/g, ' ').slice(0, 90));
+
+  // AND IT IS OWNER-ONLY. erMinRole falls back to 'support' for an unregistered href, so this is
+  // also the clause that proves the nav line exists.
+  const { erMinRole } = await import('../lib/operator-roles.ts');
+  check('the screen is registered as OWNER-only',
+    erMinRole('/superadmin/affiliates') === 'owner',
+    'an unregistered href falls back to support, which would open a list of the public’s email addresses');
+
   // ── 11. THE MIDDLEWARE SOURCE SAYS WHY ───────────────────────────────────────────────────────
   // ONE source clause, and it is about a TRAP rather than about behaviour the probes above cover:
   // the next person to add a portal here will reach for underPath(p, '/api/affiliate'), which is the
@@ -298,6 +435,7 @@ try {
   console.log(`\n✗ THREW: ${describeError(e).slice(0, 700)}`);
   out.push('F');
 } finally {
+  await browser?.close().catch(() => {});
   const put = await restore().catch(() => -1);
   const now = await prisma?.programmeSettings.findUnique({
     where: { id: 'singleton' },

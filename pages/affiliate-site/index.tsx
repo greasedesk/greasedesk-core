@@ -92,6 +92,11 @@ const COPY = {
       'One code and one link, both of which work on the price page and at signup.',
       'The offer is checkable: a viewer who types your code sees it named on our price page, with the figures.',
       'If you’d rather look at it properly before you mention it, say so and we’ll show you the real thing.',
+      // UK ADVERTISING RULES, AND WE ASK FOR IT (owner, 2026-10-30). Affiliate content is an ad
+      // under the CAP Code and has to be obviously identifiable as one. Said in the creator's own
+      // section, in the video question, and in the terms — all three, because a rule a person meets
+      // only after they have signed up is a rule we sprang on them.
+      'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the post or the description — and we ask everyone to do it.',
     ],
   },
 
@@ -149,7 +154,7 @@ const COPY = {
     },
     {
       q: 'Can I talk about the offer in a video?',
-      a: 'Yes, and you can quote the figures on this page as they stand. If we change the programme we’ll tell you 30 days before it changes.',
+      a: 'Yes, and you can quote the figures on this page as they stand. UK advertising rules require affiliate content to be labelled as an ad — put “#ad” at the start of the post or the description — and we ask everyone to do it. If we change the programme we’ll tell you 30 days before it changes.',
     },
     {
       q: 'Is this the same as being a reseller?',
