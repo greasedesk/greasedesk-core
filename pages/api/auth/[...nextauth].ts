@@ -11,6 +11,7 @@ import { UserRole } from '@prisma/client'; // Import the Role enum
 import { isEnabled, verifySecondFactor } from '@/lib/two-factor'; // 2FA gate — operator AND tenant, one chokepoint
 import { spendRepLink, repSessionExpired, REP_SESSION_HOURS } from '@/lib/rep-magic-link';
 import { clientIp } from '@/lib/auth-rate-limit';
+import { systemUnavailable } from '@/lib/sign-in-failure';
 
 export const authOptions: NextAuthOptions = {
   // Use the Prisma Adapter
@@ -36,7 +37,23 @@ export const authOptions: NextAuthOptions = {
         // (no-such-email and wrong-password must be indistinguishable to the client).
         const FAIL = new Error('Invalid email or password.');
 
-        const user = await prisma.user.findUnique({ where: { email: credentials.email } });
+        // ── A LOOKUP THAT COULD NOT BE MADE IS NOT A WRONG PASSWORD (2026-10-30) ───────────────
+        // On 30 October the production database hit its Neon quota and refused every connection.
+        // This line threw, the login page collapsed every non-2FA error into
+        // "Invalid email or password", and two garages spent a morning doubting credentials that
+        // were correct. The distinction is made HERE because this is the only place that knows the
+        // difference between "no such user" and "we could not ask".
+        //
+        // IT LEAKS NOTHING: the marker is raised by the lookup THROWING, before anything has been
+        // learned about the address. Same answer for an email that exists, one that does not, a
+        // suspended account and an archived tenant.
+        const user = await prisma.user.findUnique({ where: { email: credentials.email } })
+          .catch((e: unknown) => {
+            // THE DETAIL STAYS SERVER-SIDE. next-auth passes the thrown message to the browser, and
+            // a Prisma initialisation error carries the connection target in its text.
+            console.error('[auth] credentials lookup failed — reporting SYSTEM_UNAVAILABLE, not bad credentials:', e);
+            throw systemUnavailable();
+          });
         if (!user) throw FAIL;
 
         // No usable password hash yet (never set, or still the invite placeholder) → cannot log in.
@@ -48,7 +65,15 @@ export const authOptions: NextAuthOptions = {
         // ARCHIVED tenant → login blocked (SuperAdmin soft-delete). Same generic failure — never
         // reveal that the tenant was archived. Reversible: un-archiving restores login instantly.
         if (user.group_id) {
-          const g = await prisma.group.findUnique({ where: { id: user.group_id }, select: { archived_at: true } });
+          // SAME TREATMENT, SAME REASON: an unanswerable archived-check must not read as a bad
+          // password either. A garage whose tenant row cannot be read is not a garage with a wrong
+          // password, and by this point the account is already known to exist — so saying "we
+          // can't reach our systems" discloses nothing it has not already established.
+          const g = await prisma.group.findUnique({ where: { id: user.group_id }, select: { archived_at: true } })
+            .catch((e: unknown) => {
+              console.error('[auth] archived-tenant check failed — reporting SYSTEM_UNAVAILABLE:', e);
+              throw systemUnavailable();
+            });
           if (g?.archived_at) throw FAIL;
         }
 
@@ -102,7 +127,14 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials.password) throw new Error('Please enter an email and password.');
         const FAIL = new Error('Invalid email or password.');
-        const op = await prisma.operator.findUnique({ where: { email: credentials.email } });
+        // THE SAME DEFECT LIVED HERE TOO, and is fixed in the same breath: an operator locked out
+        // by an outage would have been told their password was wrong, on the one screen whose user
+        // can actually do something about an outage.
+        const op = await prisma.operator.findUnique({ where: { email: credentials.email } })
+          .catch((e: unknown) => {
+            console.error('[auth] operator lookup failed — reporting SYSTEM_UNAVAILABLE:', e);
+            throw systemUnavailable();
+          });
         if (!op || op.status !== 'active') throw FAIL;           // suspended operators cannot log in
         // INVITE_PENDING has no valid bcrypt hash, so compare fails → a not-yet-set operator can't log in.
         if (!op.passwordHash || op.passwordHash === 'INVITE_PENDING' || !(await bcrypt.compare(credentials.password, op.passwordHash))) throw FAIL;

@@ -13,6 +13,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/router';
+import { classifySignInError, SIGN_IN_MESSAGE } from '@/lib/sign-in-failure';
 
 export default function OperatorLoginForm() {
   const [email, setEmail] = useState('');
@@ -36,7 +37,19 @@ export default function OperatorLoginForm() {
       }
       const r = await signIn('operator', { redirect: false, email, password, totp: needCode ? code : undefined });
       setLoading(false);
-      if (r?.error) setErr(needCode ? 'Invalid code — check your authenticator app, or enter a recovery code.' : 'Invalid email or password.');
+      if (r?.error) {
+        // ── THE SAME COLLAPSE LIVED HERE (2026-10-30) ────────────────────────────────────────
+        // Every error became "Invalid email or password", so an operator locked out by an outage
+        // was told their password was wrong — on the one screen whose user can actually do
+        // something about an outage. The outage case comes FIRST and beats the 2FA wording: a
+        // database that cannot be reached while somebody types a code is still an outage.
+        const failure = classifySignInError(r.error);
+        setErr(
+          failure === 'system_unavailable' ? SIGN_IN_MESSAGE.system_unavailable
+            : needCode ? 'Invalid code — check your authenticator app, or enter a recovery code.'
+              : SIGN_IN_MESSAGE.invalid_credentials,
+        );
+      }
       else router.push('/superadmin'); // front door → role landing
     } catch {
       setLoading(false); setErr('Something went wrong. Please try again.');

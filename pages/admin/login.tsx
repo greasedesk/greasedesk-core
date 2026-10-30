@@ -11,6 +11,9 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import SiteChrome from '@/components/marketing/SiteChrome';
 import Link from 'next/link'; // <<< CRITICAL FIX: ADDED IMPORT
+import {
+  classifySignInError, SIGN_IN_MESSAGE, SYSTEM_UNAVAILABLE_CODE, INVALID_CREDENTIALS_CODE,
+} from '@/lib/sign-in-failure';
 
 // We get the CSRF token on the server side to secure the form
 export async function getServerSideProps(context: any) {
@@ -75,20 +78,26 @@ export default function AdminLoginPage({ csrfToken, error, email, status, demo, 
     setLoading(false);
 
     if (result && result.error) {
+      // ── ONE CLASSIFIER, FOUR CAUSES, AND ONLY THE LAST ONE GUESSES ─────────────────────────
       // A 2FA refusal is NOT a credentials failure and must not be reported as one — bouncing to
-      // "invalid email or password" would send someone resetting a password that is correct.
-      if (result.error.includes('TWO_FACTOR_LOCKED')) {
+      // "invalid email or password" would send someone resetting a password that is correct. On
+      // 2026-10-30 an OUTAGE did exactly that to two garages, because every non-2FA error fell
+      // through to InvalidCredentials. The branches now come from lib/sign-in-failure, where the
+      // order is the rule and `invalid_credentials` is the fallback rather than the default.
+      const failure = classifySignInError(result.error);
+      if (failure === 'two_factor_locked') {
         setNeedCode(true); setTotp('');
-        setCodeError('Too many incorrect codes. Wait 15 minutes and try again.');
+        setCodeError(SIGN_IN_MESSAGE.two_factor_locked);
         return;
       }
-      if (result.error.includes('TWO_FACTOR_REQUIRED')) {
+      if (failure === 'two_factor_required') {
         setNeedCode(true); setTotp('');
-        setCodeError(totp.trim() ? 'That code didn’t match. Try the current one from your app.' : null);
+        setCodeError(totp.trim() ? SIGN_IN_MESSAGE.two_factor_required : null);
         return;
       }
       // Keep the callbackUrl through the retry — a failed first try at /m must still return to /m.
-      router.push(`/admin/login?error=InvalidCredentials&callbackUrl=${encodeURIComponent(callbackUrl)}`);
+      const code = failure === 'system_unavailable' ? SYSTEM_UNAVAILABLE_CODE : INVALID_CREDENTIALS_CODE;
+      router.push(`/admin/login?error=${code}&callbackUrl=${encodeURIComponent(callbackUrl)}`);
     } else if (result && result.url) {
       router.push(result.url);
     }
@@ -101,8 +110,14 @@ export default function AdminLoginPage({ csrfToken, error, email, status, demo, 
     if (demo === 'expired') {
       return 'Your demo garage has ended and its invented data has been deleted. Start a trial to begin with your own.';
     }
-    if (error === 'InvalidCredentials') {
-      return 'Invalid email or password.';
+    // AHEAD OF InvalidCredentials, and it is not the same thing: the database could not be reached,
+    // which says nothing about the password that was typed. The sentence says so in as many words,
+    // because the whole cost of the incident was people acting on the other reading.
+    if (error === SYSTEM_UNAVAILABLE_CODE) {
+      return SIGN_IN_MESSAGE.system_unavailable;
+    }
+    if (error === INVALID_CREDENTIALS_CODE) {
+      return SIGN_IN_MESSAGE.invalid_credentials;
     }
     if (status === 'verified') {
       return 'Email verified! Please enter your password to continue.';

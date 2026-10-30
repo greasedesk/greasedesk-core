@@ -197,6 +197,10 @@ const TIERS = {
     // The Engine Room side: the affiliates list, suspend/unsuspend, and the rule that a suspended
     // code earns nothing from that moment — which was selected and ignored until 2026-10-30.
     'affiliate-admin-gate',
+    // The 2026-10-30 incident: a database that cannot be reached must not be reported as a wrong
+    // password. Drives a lookup that genuinely throws (a NUL byte Postgres refuses) rather than
+    // breaking the database to arrange one.
+    'sign-in-failure-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',
