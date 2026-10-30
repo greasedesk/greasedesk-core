@@ -33,6 +33,7 @@ const { gatePrisma, describeError, gateOrigin, affiliateOrigin, serverReady, onT
 const http = await import('node:http');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const JOIN = await import('../lib/affiliate-join.ts');
+const { urlUnder } = await import('../lib/anchored-match.ts');
 const ENV = await import('../lib/environment.ts');
 const PV = await import('../lib/phone-verification.ts');
 const EV = await import('../lib/affiliate-email-verify.ts');
@@ -230,7 +231,7 @@ try {
   // correctly: issueCode slows a user hammering "send again" because every issue is a text. So the
   // code is read from the response the browser actually got, which also means the clause is about
   // the request the FORM made rather than one the gate made to look like it.
-  const signupResponse = page.waitForResponse((r) => r.url().includes('/api/affiliate-site/signup'), { timeout: 30000 });
+  const signupResponse = page.waitForResponse((r) => urlUnder(r.url(), '/api/affiliate-site/signup'), { timeout: 30000 });
   await page.click('[data-testid="join-submit"]');
   const signupBody = await (await signupResponse).json().catch(() => ({}));
   await page.waitForSelector('[data-testid="join-code-form"]', { timeout: 30000 }).catch(() => {});
@@ -271,7 +272,9 @@ try {
   // clause that it is WITHHELD on production is about the predicate (section 6) — so this is the
   // other half: that the handler is actually wired to the predicate's true branch, rather than
   // returning null always and passing section 6 by never revealing anything at all.
-  const confirmResponse = page.waitForResponse((r) => r.url().includes('/api/affiliate-site/confirm'), { timeout: 30000 });
+  // urlUnder here too: '/api/affiliate-site/confirm' as a SUBSTRING also matches
+  // /api/affiliate-site/confirm-email, which is a different endpoint on this very site.
+  const confirmResponse = page.waitForResponse((r) => urlUnder(r.url(), '/api/affiliate-site/confirm'), { timeout: 30000 });
   await page.click('[data-testid="join-confirm"]');
   const confirmBody = await (await confirmResponse).json().catch(() => ({}));
   await page.waitForSelector('[data-testid="join-done"]', { timeout: 30000 }).catch(() => {});
@@ -286,8 +289,12 @@ try {
   check('  …and the QR is a real image of it', !!qrSrc && qrSrc.startsWith('data:image/png;base64,') && qrSrc.length > 500,
     `${qrSrc?.slice(0, 30)}… ${qrSrc?.length} chars`);
 
+  // urlUnder, NOT .includes(): a substring test is true of /affiliate-site/confirm-emails-archive
+  // and of anything that merely contains the words. anchored-match-gate bans the hand-written form
+  // across the whole suite, and caught this line in the core tier — after I had run that gate and
+  // then added one more clause.
   check('the test database hands back the verification URL as well',
-    typeof confirmBody.verifyUrl === 'string' && confirmBody.verifyUrl.includes('/affiliate-site/confirm-email/'),
+    typeof confirmBody.verifyUrl === 'string' && urlUnder(confirmBody.verifyUrl, '/affiliate-site/confirm-email'),
     `${String(confirmBody.verifyUrl).slice(0, 60)} — the link that was never emailed, for the same reason the code is handed back`);
   check('  …and says the email did NOT go, rather than claiming it did',
     confirmBody.emailed === false, `emailed ${confirmBody.emailed}`);
