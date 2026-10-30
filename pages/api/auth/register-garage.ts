@@ -14,8 +14,12 @@ import { trialEndsAt, trialDays } from '@/lib/programme-settings';
 import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
 import { attributeAtSignup } from '@/lib/affiliate';
+import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/lib/signup-source';
 
-type Payload = { name: string; email: string; password: string; ref?: string };
+type Payload = {
+  name: string; email: string; password: string; ref?: string;
+  heardAbout?: unknown; heardAboutOther?: unknown; utm?: unknown;
+};
 
 export const config = {
   api: { bodyParser: true },
@@ -40,9 +44,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { name, email, password, ref } = (req.body || {}) as Payload;
+    const { name, email, password, ref, heardAbout, heardAboutOther, utm } = (req.body || {}) as Payload;
     // Marketing attribution (dormant): sanitise + cap; never trust the client's raw value. null when absent.
     const signupRef = (typeof ref === 'string' ? ref.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) : '') || null;
+
+    // HOW THEY SAY THEY FOUND US, AND WHAT THE LINK SAID. THE ONLY WRITER of these five columns,
+    // and therefore the only thing enforcing the option list: heard_about carries no CHECK (the
+    // set is marketing copy, and a CHECK would make a rewording a constraining migration), so
+    // normaliseHeardAbout IS the constraint. Anything not on the list lands as NULL rather than
+    // putting a client's own string into our figures. None of this is validated in the sense of
+    // being REQUIRED — a signup must never fail over an optional marketing question.
+    const heard = normaliseHeardAbout(heardAbout);
+    const heardOther = normaliseHeardAboutOther(heard, heardAboutOther);
+    const utmParts = normaliseUtm(utm);
     // ... (Validation logic remains unchanged) ...
     if (!name || !email || !password) {
       return res
@@ -89,7 +103,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
         // asks the real garage name and it's mandatory there (item-13). "Iain Gunn's Garage" was this
         // personal-name default surviving because setup used to be skippable; it no longer is.
-        data: { group_name: 'New garage', billing_email: emailNorm, trial_ends_at: await trialEndsAt(), signup_ref: signupRef },
+        data: {
+          group_name: 'New garage', billing_email: emailNorm, trial_ends_at: await trialEndsAt(), signup_ref: signupRef,
+          heard_about: heard, heard_about_other: heardOther,
+          utm_source: utmParts.source, utm_medium: utmParts.medium, utm_campaign: utmParts.campaign,
+        },
       });
 
       const user = await tx.user.create({

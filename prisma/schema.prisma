@@ -314,6 +314,39 @@ model Group {
   // capped at write; null when the signup carried no ref.
   signup_ref                    String?
 
+  // ── HOW THEY SAY THEY FOUND US, AND WHAT THE LINK SAID (slice F, 2026-10-30) ─────────────────
+  // signup_ref above is WHO SENT THEM, and it is the only one of these that money depends on.
+  // These five are marketing signal, and every one of them is NULL for most rows.
+  /// The answer to "How did you hear about us?" on /register. One of the values in
+  /// lib/signup-source (the ONE list), validated at the single writer, pages/api/auth/
+  /// register-garage. NULL = NOT ASKED OR NOT ANSWERED, which is every garage that signed up
+  /// before today and every one that skips an optional question. It is NOT "direct" — the Engine
+  /// Room's Came via panel says "not recorded", because inventing direct would turn an absence
+  /// into a claim about how somebody found us.
+  ///
+  /// DELIBERATELY NO CHECK CONSTRAINT, unlike the eight other enum-ish columns in this schema.
+  /// The set is MARKETING COPY and the next option the owner wants is a line in a form, not a
+  /// schema change: a CHECK would make every wording change a constraining migration and a second
+  /// push. The list is enforced in code at the one writer instead, and a value whose label has
+  /// since been reworded still renders — as itself (lib/signup-source::heardAboutLabel).
+  heard_about                   String?
+  /// The free text behind "Something else". NULL unless that option was chosen. Trimmed and capped
+  /// at the writer; blank becomes NULL, because an empty string is a typed answer of nothing.
+  heard_about_other             String?
+  // WHAT THE LINK SAID, captured on the FIRST visit (gd_utm, lib/consent) under the SAME
+  // functional-consent rule as gd_ref — so NULL is also what a visitor who refused the cookie
+  // leaves behind, and we cannot tell that apart from a visitor who arrived with no campaign on
+  // the URL at all. Either way: not recorded. Never used to decide money.
+  /// NULL = no campaign parameter on the link, OR the visitor refused the functional cookie —
+  /// and we cannot tell those two apart, which is why the Engine Room says "not recorded" rather
+  /// than naming a reason. Never used to decide money.
+  utm_source                    String?
+  /// NULL = the same absence as utm_source. The three are captured together and absent together,
+  /// but each is independently nullable: a link may carry a source and no medium.
+  utm_medium                    String?
+  /// NULL = the same absence as utm_source: nothing on the link, or no functional consent.
+  utm_campaign                  String?
+
   // ── TaxProfile (item-13 onboarding groundwork). The Group is the LEGAL entity that files one
   // tax return, so tax identity lives here; currency + locale are TRADING identity and stay on Site
   // (a UK group may open a Dublin site — same VAT branch, different rate). Assembled + consumed ONLY

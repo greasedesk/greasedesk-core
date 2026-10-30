@@ -32,6 +32,7 @@ import { requireOperatorPage, operatorTenantScope, type OperatorRoleName } from 
 import { TMBS_GROUP_ID } from '@/lib/superadmin';
 import { PHONE_STEP_REQUIRED_FROM } from '@/lib/onboarding';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
+import { cameVia, referrerSentence, type CameVia } from '@/lib/came-via';
 
 type SiteRow = { name: string; address: string | null; phone: string | null; currency: string; hours: string | null; labourRate: number | null };
 type UserRow = { id: string; name: string | null; email: string; role: string; active: boolean; twoFactorEnabled: boolean };
@@ -53,11 +54,17 @@ type Detail = {
   users: UserRow[];
   account: {
     created: string; subscriptionStatus: string | null; tenantStatus: string; trialEnds: string | null;
-    modules: string[]; signupSource: string; lastActivity: string | null;
+    modules: string[]; lastActivity: string | null;
     phoneExempt: { at: string; reason: string | null } | null;
     phoneStepApplies: boolean;
     counts: { sites: number; users: number; jobCards: number; invoices: number };
   };
+  /**
+   * WHERE THIS GARAGE CAME FROM — three separate axes, assembled in lib/came-via. `sentence` is
+   * computed on the SERVER and carried as a string so the page needs only the type: the component
+   * renders it, and nothing that reaches the database follows the import into the client bundle.
+   */
+  cameVia: CameVia & { sentence: string };
   /** Accruals the commission engine refused for this tenant, still open. Money a rep is owed. */
   refusals: Array<{ id: string; sourceRef: string; code: string; message: string; occurredAt: string }>;
 };
@@ -86,7 +93,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
-  const b = d.business, a = d.account;
+  const b = d.business, a = d.account, v = d.cameVia;
   const router = useRouter();
   const [busy2fa, setBusy2fa] = React.useState<string | null>(null);
   const [busyExempt, setBusyExempt] = React.useState(false);
@@ -379,7 +386,6 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
               )}
             </Field>
             <Field label="Modules entitled">{a.modules.length ? a.modules.join(', ') : <Muted>{NS}</Muted>}</Field>
-            <Field label="Signup source">{a.signupSource}</Field>
             <Field label="Phone step">
               {a.phoneExempt ? (
                 <>
@@ -414,6 +420,67 @@ export default function TenantDetail({ role, operatorEmail, d }: PageProps) {
               <span className="tabular-nums">{a.counts.sites} sites · {a.counts.users} users · {a.counts.jobCards} job cards · {a.counts.invoices} invoices</span>
             </Field>
           </Section>
+
+          {/* CAME VIA — three axes, deliberately not collapsed into one line. Who introduced them is
+              a money question answered by the frozen terms; how they heard of us is a self-reported
+              marketing answer; the campaign is what the link said. Each says "not recorded" in its
+              own words when it has nothing, because one blank standing for three absences is how
+              "we don't know" came to be printed as "Direct". */}
+          <Section title="Came via">
+            <Field label="Introduced by">
+              <span data-testid="came-via-referrer">{v.sentence}</span>
+              {(v.referrer.kind === 'affiliate' || v.referrer.kind === 'reseller') && (
+                <>
+                  <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
+                    · since {new Date(v.referrer.since).toLocaleDateString('en-GB')}
+                    {v.referrer.frozen
+                      ? ' · terms frozen at signup'
+                      : ' · NO frozen terms row — the reward would be read from today’s settings'}
+                  </span>
+                  {v.referrer.suspendedAt && (
+                    <span className="text-xs ml-2" data-testid="came-via-suspended" style={{ color: 'var(--warn)' }}>
+                      · suspended {new Date(v.referrer.suspendedAt).toLocaleDateString('en-GB')} — earns nothing from that date
+                    </span>
+                  )}
+                </>
+              )}
+              {v.referrer.kind === 'unmatched_code' && (
+                <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
+                  · the code is kept, and resolves on its own if somebody is issued it
+                </span>
+              )}
+              {v.referrer.kind === 'conflict' && (
+                <span className="text-xs ml-2" style={{ color: 'var(--danger)' }}>· two records disagree</span>
+              )}
+            </Field>
+            <Field label="How they heard of us">
+              <span data-testid="came-via-heard">
+                {v.heardAbout
+                  ? <>{v.heardAbout.label}{v.heardAbout.other ? <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>· “{v.heardAbout.other}”</span> : null}</>
+                  : <Muted>not recorded</Muted>}
+              </span>
+              {!v.heardAbout && (
+                <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
+                  · optional at signup, and not asked at all before 30 Oct 2026
+                </span>
+              )}
+            </Field>
+            <Field label="Campaign the link carried">
+              <span data-testid="came-via-campaign">
+                {v.utm.source || v.utm.medium || v.utm.campaign
+                  ? [v.utm.source, v.utm.medium, v.utm.campaign].map((x) => x ?? '—').join(' / ')
+                  : <Muted>not recorded</Muted>}
+              </span>
+              {!(v.utm.source || v.utm.medium || v.utm.campaign) && (
+                <span className="text-xs ml-2" style={{ color: 'var(--text-muted)' }}>
+                  · no campaign on the link, or the functional cookie was refused — we cannot tell which
+                </span>
+              )}
+            </Field>
+            {v.fromCountryWaitlist && (
+              <Field label="Waiting list">Came in from the country waiting list</Field>
+            )}
+          </Section>
         </div>
       </div>
     </EngineRoomLayout>
@@ -436,7 +503,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       id: true, ref: true, group_name: true, trading_name: true, company_number: true,
       company_number_not_applicable: true, vat_number: true, vat_registered: true, country_code: true,
       tax_model: true, tax_label: true, tax_default_rate_bp: true, default_vat_rate: true, address: true, phone: true,
-      billing_email: true, created_at: true, status: true, trial_ends_at: true, signup_ref: true,
+      billing_email: true, created_at: true, status: true, trial_ends_at: true,
       phone_step_exempt_at: true, phone_step_exempt_reason: true,
       is_internal: true,
       billing: { select: { subscription_status: true } },
@@ -496,21 +563,16 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
     where: { group_id: g.id, enabled: true }, select: { feature_key: true },
   })).map((f: { feature_key: string }) => f.feature_key);
 
-  // Signup source — DERIVED from signup_ref + attribution (+ waitlist), not a single field.
-  const [attribCount, waitlistCount, staffUserCount, jobCardCount, invoiceCount, lastAct] = await Promise.all([
-    prisma.tenantAttribution.count({ where: { group_id: g.id, ended_at: null } }),
-    prisma.countryWaitlist.count({ where: { group_id: g.id } }).catch(() => 0),
+  // CAME VIA — through lib/came-via, which reads the FROZEN TERMS and the attribution's own
+  // party_type. The expression that used to sit here counted active attributions and called every
+  // one of them a reseller, so every affiliate referral was mislabelled on this screen.
+  const [via, staffUserCount, jobCardCount, invoiceCount, lastAct] = await Promise.all([
+    cameVia(prisma, g.id),
     prisma.user.count({ where: { group_id: g.id, customerId: null } }),
     prisma.jobCard.count({ where: { group_id: g.id } }),   // COUNT ONLY — no contents
     prisma.invoice.count({ where: { group_id: g.id } }),   // COUNT ONLY — no contents
     prisma.auditLog.aggregate({ where: { group_id: g.id }, _max: { created_at: true } }), // created_at ONLY
   ]);
-  const ref = g.signup_ref as string | null;
-  const signupSource = attribCount > 0 ? `Reseller${ref ? ` (ref ${ref})` : ''}`
-    : ref ? `Referral (ref ${ref})`
-    : waitlistCount > 0 ? 'Waitlist'
-    : 'Direct';
-
   const operator = await prisma.operator.findUnique({ where: { id: gate.op.userId }, select: { email: true } });
   const currencies = Array.from(new Set(g.sites.map((s: any) => s.currency_code).filter(Boolean)));
   const taxRatePct = g.tax_default_rate_bp != null ? g.tax_default_rate_bp / 100
@@ -545,7 +607,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
           subscriptionStatus: g.billing?.subscription_status ?? null,
           tenantStatus: g.status,
           trialEnds: g.trial_ends_at ? (g.trial_ends_at as Date).toISOString() : null,
-          modules, signupSource,
+          modules,
           // The exemption is shown WITH its reason, because an exemption nobody can explain is
           // indistinguishable from a mistake when it is found months later.
           phoneExempt: g.phone_step_exempt_at
@@ -555,6 +617,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
           lastActivity: lastAct._max.created_at ? (lastAct._max.created_at as Date).toISOString() : null,
           counts: { sites: g.sites.length, users: staffUserCount, jobCards: jobCardCount, invoices: invoiceCount },
         },
+        cameVia: { ...via, sentence: referrerSentence(via.referrer) },
         refusals: refusalRows.map((r: any) => ({
           id: r.id, sourceRef: r.source_ref, code: r.code, message: r.message,
           occurredAt: (r.occurred_at as Date).toISOString(),

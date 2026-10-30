@@ -2,12 +2,17 @@
  * File: lib/consent.ts
  * THE cookie-consent core — isomorphic (no React, no DB), so the server (SSR read) and client (banner,
  * gd_ref gate) share one definition of what consent is. Categories, the consent cookie, encode/decode,
- * and the ONE gated writer (gd_ref) live here. lib/consent-config carries the per-region copy/defaults.
+ * and the gated writers (gd_ref, gd_utm) live here. lib/consent-config carries the per-region copy/defaults.
  *
  * DISCIPLINE: consent GATES loading, not just setting. Nothing non-necessary fires until its category
  * is consented. A future tracker (GA, a pixel) registers with the ConsentProvider under its category and
  * is injected only on consent — so adding tracker N+1 is a config line, not a compliance rebuild.
  */
+
+// lib/signup-source is a LEAF (it imports nothing) and this file ships to the browser — the
+// campaign cleaner is shared with the API route so the cookie and the column cannot drift apart.
+import { normaliseUtm, UTM_EMPTY, type UtmParts } from '@/lib/signup-source';
+
 export const CONSENT_COOKIE = 'gd_consent'; // strictly-necessary, consent-exempt (stores the choice)
 export const CONSENT_MAX_AGE_DAYS = 180;    // ICO: re-ask periodically; 6 months is a common cadence
 
@@ -108,7 +113,7 @@ export function writeConsentCookie(rec: ConsentRecord): void {
   setCookie(CONSENT_COOKIE, encodeConsent(rec), CONSENT_MAX_AGE_DAYS);
 }
 
-// ── The ONE consent-gated first-party writer today: gd_ref (functional / referral attribution). ──
+// ── The consent-gated first-party writers: gd_ref (who sent them) and gd_utm (what the link said). ──
 export const GD_REF_COOKIE = 'gd_ref';
 export const GD_REF_MAX_AGE_DAYS = 90;
 /** Sanitise a raw ?ref= value the same way capture always has (alnum . _ - only, capped 64). */
@@ -143,4 +148,46 @@ export function writeGdRef(clean: string): boolean {
 /** Remove gd_ref (e.g. functional consent withdrawn) — expired at both scopes. */
 export function clearGdRef(): void {
   expireCookie(GD_REF_COOKIE);
+}
+
+// ── AND THE SECOND ONE: gd_utm (functional / campaign attribution, slice F 2026-10-30) ──────────
+// The campaign parameters a visitor arrived with, held exactly as gd_ref is held: written only on
+// functional consent, FIRST VISIT WINS, cleared when consent is withdrawn. It is marketing signal
+// and nothing is paid on it — but it rides the same cookie rule because it is the same kind of
+// thing being stored about the same person, and a second rule would be a second thing to get wrong.
+export const GD_UTM_COOKIE = 'gd_utm';
+export const GD_UTM_MAX_AGE_DAYS = GD_REF_MAX_AGE_DAYS; // the same window, deliberately: one story to tell
+
+/** The three parts this cookie carries, cleaned by the ONE cleaner the column is written through. */
+export function readGdUtm(): UtmParts {
+  const raw = readCookie(GD_UTM_COOKIE);
+  if (!raw) return UTM_EMPTY;
+  try {
+    const o = JSON.parse(raw);
+    // Through normaliseUtm, not trusted as read: a cookie is client-side storage and anybody can
+    // edit it. The same clean the API applies, so what the field submits is what the column accepts.
+    return normaliseUtm({ source: o?.s, medium: o?.m, campaign: o?.c });
+  } catch {
+    return UTM_EMPTY; // unparseable → nothing recorded, not a crash on a page nobody can get past
+  }
+}
+
+/**
+ * Write gd_utm. Callers MUST have checked functional consent first — this is the sink, not the gate.
+ * FIRST VISIT WINS, enforced here for the reason writeGdRef enforces it there: the campaign that
+ * introduced somebody is the one that did the work, and a later visit with no parameters at all
+ * must not blank it. Returns whether this call wrote.
+ */
+export function writeGdUtm(u: UtmParts): boolean {
+  if (typeof document === 'undefined') return false;
+  if (!u.source && !u.medium && !u.campaign) return false; // nothing to store
+  if (readCookie(GD_UTM_COOKIE)) return false;             // already carried — the first visit keeps it
+  const payload = JSON.stringify({ s: u.source ?? undefined, m: u.medium ?? undefined, c: u.campaign ?? undefined });
+  setCookie(GD_UTM_COOKIE, encodeURIComponent(payload), GD_UTM_MAX_AGE_DAYS);
+  return true;
+}
+
+/** Remove gd_utm (functional consent withdrawn) — expired at both scopes, like gd_ref. */
+export function clearGdUtm(): void {
+  expireCookie(GD_UTM_COOKIE);
 }

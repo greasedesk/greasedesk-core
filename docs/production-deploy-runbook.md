@@ -10,6 +10,28 @@ Written for the night of the deploy and kept afterwards as the record of what wa
 
 ---
 
+## WHICH DATABASE IS PRODUCTION (standing, not just for this deploy)
+
+**Production is the Neon project named `greasedesk`, in the `iain@gunn.tv` account, on the Launch
+plan.** It is **NOT** in the Scale account/organisation, and there are two accounts, which is the
+whole reason this is written down.
+
+- The gate database is a **separate Neon project** (`ep-dry-forest-…`). Nothing in a gate run can
+  reach production: `gatePrisma()` refuses unless the `Environment` row inside the database reads
+  `test`, and the row is the only thing that distinguishes one connection from the other.
+- `.migrate-target.production` holds the production `DATABASE_URL`. Every read-only snapshot and
+  every migration in this runbook passes it explicitly, and the wrapper prints
+  `target: production` before it does anything. **If that line says anything else, stop.**
+- **The plan matters operationally.** On 2026-10-30 this project was still on the FREE plan and hit
+  its 5 GB monthly network-transfer allowance: Neon refused every connection, and the symptom was
+  that nobody could sign in on greasedesk.com for about an hour and a half — "Invalid email or
+  password" on a correct password. It was upgraded to **Launch** that afternoon. Transfer, not
+  storage, is the limit that bites: the database itself is under 100 MB.
+- When a sign-in fails across accounts and locations at once, **check the Neon project's usage
+  before anything else**. A quota refusal looks exactly like a credentials problem from the outside.
+
+---
+
 ## 0 — WHAT CHANGES, AND WHERE THE RISK IS
 
 What a garage will see:

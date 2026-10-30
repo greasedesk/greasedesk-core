@@ -14,6 +14,7 @@ import AdminLayout from '@/components/layout/AdminLayout';
 import { ConsentProvider, useConsent } from '@/components/consent/ConsentProvider';
 import ConsentBanner from '@/components/consent/ConsentBanner';
 import { parseConsentCookie, sanitiseRef, type ConsentRecord } from '@/lib/consent';
+import { readUtmFromQuery, hasUtm } from '@/lib/signup-source';
 import { resolveConsentRegion } from '@/lib/consent-config';
 import { NavProvider, type ResolvedNav } from '@/components/marketing/NavProvider';
 // NOTE: serverSideTranslations (server-only, uses `fs`) is dynamically imported inside the
@@ -52,13 +53,23 @@ if (typeof window !== 'undefined' && !window.__gd_json_patched) {
 // REFERRAL CAPTURE — now CONSENT-GATED. A public ?ref= is routed through the consent manager, which
 // writes gd_ref only if functional consent is (or becomes) granted; refuse → no attribution cookie.
 // Runs inside ConsentProvider so it can read the choice.
-function RefCapture({ refValue, ready }: { refValue: unknown; ready: boolean }) {
-  const { noteRef } = useConsent();
+// AND THE CAMPAIGN PARAMETERS WITH IT (slice F, 2026-10-30), through the same gate: utm_source,
+// utm_medium and utm_campaign are read from the URL and handed to the consent manager, which holds
+// or writes them exactly as it does the ref. Captured on EVERY public page, not only the signup
+// form, because the first visit is where the campaign is named and the signup is usually later.
+function RefCapture({ refValue, query, ready }: { refValue: unknown; query: Record<string, unknown>; ready: boolean }) {
+  const { noteRef, noteUtm } = useConsent();
   useEffect(() => {
     if (!ready) return;
     const clean = sanitiseRef(refValue);
     if (clean) noteRef(clean);
-  }, [ready, refValue, noteRef]);
+    const utm = readUtmFromQuery(query);
+    if (hasUtm(utm)) noteUtm(utm);
+    // `query` is a fresh object on every render, so it is NOT a dependency: the capture is keyed on
+    // readiness and the ref, and noteUtm refuses a second hold anyway. Depending on the object
+    // identity would re-run this on every render of every public page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, refValue, noteRef, noteUtm]);
   return null;
 }
 
@@ -102,7 +113,7 @@ function GreaseDeskApp({ Component, pageProps, router }: AppProps) {
     <SessionProvider session={pageProps.session}>
       <ConsentProvider initialRecord={initialConsent} region={region}>
         <NavProvider value={nav}>
-          <RefCapture refValue={router.query.ref} ready={router.isReady} />
+          <RefCapture refValue={router.query.ref} query={router.query as Record<string, unknown>} ready={router.isReady} />
           {useAdminShell ? <AdminLayout fullHeight={resolveFullHeight(Component, router.query)}>{page}</AdminLayout> : page}
           {!isAppRoute && <ConsentBanner />}
         </NavProvider>

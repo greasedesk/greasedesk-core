@@ -293,3 +293,106 @@ says "signups" about the garage offer.
 `affiliate_offer_open` and copy the value (an `UPDATE`, so constraining); push code that reads the
 new column; then drop the old one. Worth bundling with the next constraining migration that has to
 wait for a push anyway, rather than spending two pushes on a name.
+
+---
+
+## Cron runs leave no record — boarded 2026-10-30, during the Neon outage
+
+**The gap.** Nothing records that a scheduled job ran. The 2026-10-30 outage (Neon refused every
+connection for about an hour and a half) crossed two hourly cron windows, and the honest answer to
+"did anything fail to write?" for the crons was **I cannot tell you** — not "nothing failed". There
+is no table, so there is no absence to find. `AuditLog`, `NotificationLog` and the Stripe event
+dedupe each answered their own half; the crons answered nothing.
+
+**What exists today.** Five Vercel crons: hourly `confirm-paid`, `inbound-bodies`,
+`prospect-sequence`; daily `reap-rate-limits`, `demo-lifecycle`. Each logs to Vercel's runtime log,
+which is retention-limited and is not queryable from the product.
+
+**The shape of the fix.** One append-only `CronRun` row per invocation — name, started, finished,
+outcome, a short detail — written by a wrapper the handlers go through, so a new cron cannot forget
+to record itself. The *valuable* half is the row that says a run was ATTEMPTED and threw: a missing
+row for an expected window is then evidence, which is exactly what `BackupRun` was built to give
+the nightly backup. Cheap, and it converts "I cannot tell you" into an answer.
+
+---
+
+## `BackupRun` has never had a row — boarded 2026-10-30
+
+**The state.** The evidence spine for the nightly backup is built — the `BackupRun` table, the
+endpoint, the Engine Room screen, and a verdict that counts CONSECUTIVE failures and names the
+number. The table is **empty: zero rows, ever.** The backups themselves have been running and
+verifying; what is broken is the reporting leg, which fails before it can write.
+
+**The cause.** The workflow pipes the report into a reader that refuses a pipe — the same
+refusal every gate carries, for the same reason (a reader closing early kills the producer
+mid-write). So the report step dies, and the row that would have recorded the run is never written.
+The owner deferred the fix on 2026-10-30 ("leave the backup-report fix for later") while the
+production incident was being worked.
+
+**Why it matters more than it looks.** The screen's verdict is derived from the rows. With no rows
+it cannot say "the backup has failed three nights running" — and it cannot say the opposite either.
+A clean verdict over an empty population is a positive report of safety that nothing supports.
+
+---
+
+## An index on `AuditLog.created_at` for the Engine Room tenants list — boarded 2026-10-30
+
+**The query.** `pages/superadmin/tenants.tsx` runs
+`auditLog.groupBy({ by: ['group_id'], _max: { created_at: true } })` with **no `where`**, to show a
+"last activity" column. `AuditLog` is indexed on `group_id` and `user_id` only — nothing on
+`created_at` — so this is a full scan of every audit row the product has ever written (52,483 on
+production as at 2026-10-30, and that table only grows). It runs on the Engine Room tenants list,
+which is the Support role's landing page.
+
+**The measurement.** `pg_stat_user_tables` on production: `AuditLog` has taken **91,502 sequential
+scans and read 2,571,423,510 rows** in its lifetime — the worst offender in the database by rows
+read, against 52,483 live rows. Most of that is gate traffic from before the gate database was
+split out (2026-10-26), but this query is the one deployed reader that scans the whole table on a
+page load.
+
+**The fix, and the choice inside it.** An index on `(group_id, created_at)` serves the per-tenant
+`_max` directly. Either way the better fix may be to stop asking: the same answer could come from a
+column on `Group` maintained where activity is already written. Decide which before adding the
+index, because an index that a changed query stops using is cost with no reader.
+
+---
+
+## Move the Neon project into the Scale organisation — boarded 2026-10-30
+
+**The state.** Production is the Neon project `greasedesk` in the **`iain@gunn.tv` account**, now on
+the **Launch** plan. The Scale organisation is a different account. Two accounts means the usage
+that matters is not on the dashboard anybody is looking at — which is how a free-plan transfer
+allowance came to be exhausted without warning, taking sign-in down for about an hour and a half on
+2026-10-30.
+
+**Why it is not just tidying.** Billing, usage alerts, branch limits and support all follow the
+organisation. While production sits outside it, every "check the usage" instruction has to name
+which account to log into, and the one that is easy to reach is the wrong one.
+
+**What to establish first.** Whether a project transfer preserves the endpoint host — the connection
+strings in `.migrate-target.production` and in Vercel's environment are per-endpoint, and a
+transfer that re-homes the project means a connection-string change on a live product. That is a
+planned maintenance step, not a console click, and it belongs in the deploy runbook if it moves.
+
+---
+
+## `/pricing` has no working client JavaScript in DEVELOPMENT — boarded 2026-10-30
+
+**The finding.** In dev, webpack does not tree-shake. `pages/pricing.tsx` imports
+`lib/programme-settings` at module scope and uses it only inside `getStaticProps` — which Next
+removes — but the import's module graph reaches `lib/db`, so in development the browser loads
+`PrismaClient`, throws `PrismaClient is unable to run in this browser environment`, and **every bit
+of client JavaScript on the page dies**. The consent banner there does nothing.
+
+**Production is clean**: the deployed pricing chunk is 11,598 bytes and contains no reference to
+Prisma or `DATABASE_URL` (checked read-only, 2026-10-30). This is dev-only — which is exactly why
+it is invisible.
+
+**Why it is worth a line on the board.** It already cost something. A clause in `came-via-gate`
+drove the first visit through `/pricing`, clicked "reject", and asserted that no campaign cookie
+was written. It passed — because the page had no JavaScript, so nothing was written whatever the
+visitor chose. The clause now drives `/` instead and first asserts that the refusal was RECORDED,
+so the absence it checks follows a decision rather than a dead page. `client-bundle-gate` is a
+static source gate and correctly reports nothing here: the import IS gSP-only, and it is webpack's
+dev-mode behaviour, not the source, that ships it. Options: make the page import the setting
+through a leaf module, or teach a gate to check a dev chunk for the Prisma marker.

@@ -16,7 +16,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import SiteChrome from '@/components/marketing/SiteChrome';
-import { readGdRef, sanitiseRef } from '@/lib/consent';
+import { readGdRef, readGdUtm, sanitiseRef } from '@/lib/consent';
+import {
+  HEARD_ABOUT_OPTIONS, HEARD_ABOUT_OTHER, HEARD_ABOUT_OTHER_MAX,
+  readUtmFromQuery, hasUtm, normaliseHeardAbout, UTM_EMPTY, type UtmParts,
+} from '@/lib/signup-source';
 
 /* ─────────────────────  SAFE JSON PATCH (browser + dev only)  ───────────────────── */
 
@@ -58,6 +62,11 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [refCode, setRefCode] = useState('');
   const [refNote, setRefNote] = useState<string | null>(null);
+  // OPTIONAL, AND IT STARTS EMPTY — no pre-selected option. A default would make "the first one on
+  // the list" the most common answer in our own figures, which is worse than not asking.
+  const [heardAbout, setHeardAbout] = useState('');
+  const [heardAboutOther, setHeardAboutOther] = useState('');
+  const [utm, setUtm] = useState<UtmParts>(UTM_EMPTY);
 
   /**
    * THE REFERRAL CODE, PREFILLED AND VISIBLE.
@@ -80,6 +89,24 @@ export default function RegisterPage() {
     const prefill = fromUrl || sanitiseRef(readGdRef());
     if (prefill) setRefCode((cur) => cur || prefill);
   }, [router.isReady, router.query.ref]);
+
+  /**
+   * THE CAMPAIGN, THE SAME WAY ROUND AS THE REF: the URL beats the cookie.
+   *
+   * utm_* on the signup page itself describes THIS arrival and needs no cookie and no consent —
+   * it is read from the URL and submitted with the form, and nothing is stored to ask about. The
+   * cookie (gd_utm, functional consent, first visit wins) is the fallback for the ordinary case:
+   * somebody clicked a campaign link a fortnight ago and has come back to sign up today.
+   *
+   * It is INVISIBLE on the form. The referral field is shown because a person can correct it and a
+   * mistyped code costs an affiliate money; a campaign parameter is ours, not theirs, and putting
+   * it on screen would invite editing of the one field nobody has an opinion about.
+   */
+  useEffect(() => {
+    if (!router.isReady) return;
+    const fromUrl = readUtmFromQuery(router.query as Record<string, unknown>);
+    setUtm(hasUtm(fromUrl) ? fromUrl : readGdUtm());
+  }, [router.isReady, router.query]);
 
   /** Advisory only — it never blocks the form. Silent while the field is empty. */
   const checkRefCode = async (code: string) => {
@@ -147,7 +174,15 @@ export default function RegisterPage() {
         },
         // THE FIELD IS THE ANSWER. It was prefilled from the URL or the cookie and may have been
         // corrected since; whatever it says now is what this person is telling us.
-        body: JSON.stringify({ name: nameTrim, email: emailNorm, password: pass, ref: sanitiseRef(refCode) || null }),
+        // THE ANSWER AND THE CAMPAIGN RIDE ALONG, and both are optional: `heardAbout` is null
+        // unless an option was chosen, and the free text is sent only with the option that opens
+        // it. The server validates both again against the same list — this side is convenience.
+        body: JSON.stringify({
+          name: nameTrim, email: emailNorm, password: pass, ref: sanitiseRef(refCode) || null,
+          heardAbout: normaliseHeardAbout(heardAbout),
+          heardAboutOther: heardAbout === HEARD_ABOUT_OTHER ? heardAboutOther.trim() || null : null,
+          utm,
+        }),
       });
 
       const status = res.status;
@@ -268,6 +303,39 @@ export default function RegisterPage() {
             />
             {refNote && (
               <p data-testid="ref-note" className="mt-1 text-xs text-warn">{refNote}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="heard-about" className="block text-sm font-medium text-muted mb-1">
+              How did you hear about us? <span className="font-normal">(optional)</span>
+            </label>
+            <select
+              id="heard-about"
+              data-testid="heard-about"
+              value={heardAbout}
+              onChange={(e) => setHeardAbout(e.target.value)}
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+            >
+              {/* The empty option is the DEFAULT and says so, so a skipped question reads as
+                  skipped rather than as the first answer on the list. */}
+              <option value="">Prefer not to say</option>
+              {HEARD_ABOUT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {heardAbout === HEARD_ABOUT_OTHER && (
+              <input
+                id="heard-about-other"
+                data-testid="heard-about-other"
+                type="text"
+                value={heardAboutOther}
+                onChange={(e) => setHeardAboutOther(e.target.value)}
+                maxLength={HEARD_ABOUT_OTHER_MAX}
+                placeholder="Where did you hear about us?"
+                autoComplete="off"
+                className="mt-2 w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+              />
             )}
           </div>
 

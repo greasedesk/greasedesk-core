@@ -6,8 +6,9 @@
  * fires until that category is consented, and a future tracker (GA, a pixel) registers here and is
  * injected only on its category's consent. Adding tracker N+1 is a registerTracker() call, not a rebuild.
  *
- * gd_ref (the only consent-gated writer today) is handled through here too: a ?ref= seen before the
- * visitor has chosen is held pending, and written iff/when functional consent is granted.
+ * gd_ref and gd_utm (the consent-gated writers) are handled through here too: a ?ref= or a utm_*
+ * seen before the visitor has chosen is held pending, and written iff/when functional consent is
+ * granted. Both are also CLEARED together on a refusal — one withdrawal, both cookies.
  *
  * IT IS NO LONGER THE ONLY PATH TO ATTRIBUTION, and that matters for what this gate costs. A ?ref=
  * on the signup page itself prefills the referral field straight from the URL and is submitted with
@@ -16,9 +17,10 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  POLICY_VERSION, isCurrent, writeConsentCookie, writeGdRef, clearGdRef,
+  POLICY_VERSION, isCurrent, writeConsentCookie, writeGdRef, clearGdRef, writeGdUtm, clearGdUtm,
   type ConsentRecord, type ConsentChoice, type ConsentCategory, CONSENTABLE,
 } from '@/lib/consent';
+import { hasUtm, type UtmParts } from '@/lib/signup-source';
 
 type Tracker = { id: string; category: ConsentCategory; load: () => void };
 
@@ -32,6 +34,7 @@ type ConsentCtx = {
   manageOpen: boolean;
   registerTracker: (t: Tracker) => void; // future trackers register here; injected on consent
   noteRef: (clean: string) => void;  // ?ref= capture routes through here (gated on functional consent)
+  noteUtm: (parts: UtmParts) => void; // utm_* capture, through the same gate and the same pending slot
 };
 
 const Ctx = createContext<ConsentCtx | null>(null);
@@ -47,6 +50,7 @@ export function ConsentProvider({ initialRecord, region, children }: { initialRe
   const trackers = useRef<Map<string, Tracker>>(new Map());
   const loaded = useRef<Set<string>>(new Set());
   const pendingRef = useRef<string | null>(null);
+  const pendingUtm = useRef<UtmParts | null>(null);
 
   const consented = useCallback((c: ConsentCategory) => !!record && record.choice[c] === true, [record]);
 
@@ -64,8 +68,15 @@ export function ConsentProvider({ initialRecord, region, children }: { initialRe
   // On any consent change: fire eligible trackers, and flush/withdraw the pending gd_ref.
   useEffect(() => {
     runTrackers();
-    if (consented('functional')) { if (pendingRef.current) { writeGdRef(pendingRef.current); pendingRef.current = null; } }
-    else if (record) { clearGdRef(); } // functional refused/withdrawn → ensure no gd_ref lingers
+    if (consented('functional')) {
+      if (pendingRef.current) { writeGdRef(pendingRef.current); pendingRef.current = null; }
+      if (pendingUtm.current) { writeGdUtm(pendingUtm.current); pendingUtm.current = null; }
+    } else if (record) {
+      // functional refused/withdrawn → ensure NEITHER cookie lingers. gd_utm was added second and
+      // omitting it here is exactly how a withdrawal comes to clear one of two cookies.
+      clearGdRef();
+      clearGdUtm();
+    }
   }, [record, runTrackers, consented]);
 
   const persist = useCallback((choice: ConsentChoice) => {
@@ -91,10 +102,23 @@ export function ConsentProvider({ initialRecord, region, children }: { initialRe
     // functional explicitly refused → do nothing (attribution intentionally lost)
   }, [consented, record]);
 
+  /**
+   * The campaign the visitor arrived under, held exactly as the ref is. FIRST VISIT WINS: the sink
+   * refuses a second write, and the pending slot refuses a second hold — two campaigns seen before
+   * anybody has chosen would otherwise leave the LAST one in the slot and invert the rule.
+   */
+  const noteUtm = useCallback((parts: UtmParts) => {
+    if (!hasUtm(parts)) return;
+    if (pendingUtm.current) return;
+    if (consented('functional')) writeGdUtm(parts);
+    else if (!record) pendingUtm.current = parts;
+    // functional explicitly refused → do nothing (the campaign is intentionally not recorded)
+  }, [consented, record]);
+
   const value = useMemo<ConsentCtx>(() => ({
     record, decided: !!record, region, consented, setChoice: persist,
-    openManage: () => setManageOpen(true), manageOpen, registerTracker, noteRef,
-  }), [record, region, consented, persist, manageOpen, registerTracker, noteRef]);
+    openManage: () => setManageOpen(true), manageOpen, registerTracker, noteRef, noteUtm,
+  }), [record, region, consented, persist, manageOpen, registerTracker, noteRef, noteUtm]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
