@@ -53,6 +53,18 @@ export const REP_REQUEST_LIMITS = { perIp: { max: 10, windowMinutes: 60 } };
 export const REF_CODE_LIMITS = { perIp: { max: 60, windowMinutes: 60 } };
 export const refCodeIpKey = (ip: string) => `refcode:ip:${ip}`;
 
+/**
+ * THE AFFILIATE WAITING LIST — a public POST that WRITES A ROW, which is the difference from the
+ * ref-code check above. Tighter for that reason: nobody legitimately leaves ten email addresses in
+ * an hour, and the honeypot on the form only catches the bots that fill hidden fields.
+ *
+ * STRICT, unlike the one above: takeTokenStrict, so a limiter outage refuses rather than opening an
+ * unbounded write to an anonymous caller. Nothing is lost when it refuses — the person is asked to
+ * try again, and the page still tells them everything about the programme.
+ */
+export const WAITLIST_LIMITS_BY_IP = { perIp: { max: 10, windowMinutes: 60 } };
+export const waitlistIpKey = (ip: string) => `waitlist:ip:${ip}`;
+
 export const emailKey = (email: string) => `email:${hashToken(email.trim().toLowerCase())}`;
 export const ipKey = (ip: string) => `ip:${ip}`;
 
@@ -146,6 +158,7 @@ export const RATE_LIMIT_RETENTION_MINUTES =
     ...Object.values(SMS_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(REP_REQUEST_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(REF_CODE_LIMITS).map((l) => l.windowMinutes),
+    ...Object.values(WAITLIST_LIMITS_BY_IP).map((l) => l.windowMinutes),
   );
 
 /**

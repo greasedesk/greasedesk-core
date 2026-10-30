@@ -43,6 +43,26 @@ export function absoluteRepSiteUrl(path = '/'): string {
   return `${REP_SITE_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/**
+ * THE AFFILIATE SITE'S OWN ORIGIN — a THIRD public host, and the same reasoning as REP_SITE_URL
+ * above: every page on affiliates.greasedesk.com must canonicalise to itself, or a crawler is told
+ * this site duplicates apex pages that 404 on it.
+ *
+ * AFFILIATES ARE NOT RESELLERS and this is not the same site. A reseller visits garages on a round,
+ * logs visits and invoices us; an affiliate makes an introduction and never visits anybody. Two
+ * programmes, two hosts, two sets of terms — sharing an origin would put one programme's wording in
+ * front of the other's people.
+ *
+ * A CONSTANT, not an env read, for the reason given above: a canonical tag pointing at localhost is
+ * the one mistake that cannot be noticed from the page.
+ */
+export const AFFILIATE_SITE_URL = 'https://affiliates.greasedesk.com';
+
+/** Absolute URL on the affiliate host, for its canonical tags, robots and sitemap. */
+export function absoluteAffiliateSiteUrl(path = '/'): string {
+  return `${AFFILIATE_SITE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 
 /** One-line registered office, verbatim: "Unit 7 Tinsley Street, Tipton, England, DY4 7LH". */
 export function officeOneLine(): string {

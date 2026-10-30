@@ -14,8 +14,13 @@
  *     rewrite). A rep is self-employed, belongs to no garage, and invoices US; the portal must not
  *     sit on the tenant origin, where it would share the tenant cookie jar. EVERYTHING else 404s.
  *     The ROOT serves the public page to a visitor and the portal to a signed-in rep.
- *   • On the apex (greasedesk.com and anything else) — BOTH other doors are CLOSED: /superadmin/*,
- *     /api/superadmin/*, /rep/* and /api/rep/* all 404. The tenant app is otherwise untouched.
+ *   • On affiliates.greasedesk.com — expose the PUBLIC AFFILIATE SITE: /affiliate-site/* and
+ *     /api/affiliate-site/*, plus this host's own /robots.txt, /sitemap.xml and /terms (by rewrite).
+ *     An affiliate makes an introduction and never visits a garage; they are not resellers and this
+ *     is not their site. EVERYTHING else 404s. The ROOT serves the public page.
+ *   • On the apex (greasedesk.com and anything else) — the other doors are CLOSED: /superadmin/*,
+ *     /api/superadmin/*, /rep/*, /api/rep/* and /affiliate-site/* all 404. The tenant app is
+ *     otherwise untouched.
  *
  * 404 not redirect, and not 403: undiscoverable, and we never leak that the door moved. The operator
  * and rep GUARDS (lib/operator-auth, lib/rep-auth) are unchanged and still fire — this only decides
@@ -33,6 +38,7 @@ import { underPath } from '@/lib/anchored-match';
 
 const ER_HOST = 'er.greasedesk.com';
 const REP_HOST = 'reps.greasedesk.com';
+const AFFILIATE_HOST = 'affiliates.greasedesk.com';
 
 const isEngineRoom = (p: string) => underPath(p, '/superadmin') || underPath(p, '/api/superadmin');
 /**
@@ -58,6 +64,20 @@ const isRepPortal = (p: string) => underPath(p, '/rep') || underPath(p, '/api/re
  * which is why isRepPortal above uses the same helper. '/rep-site' is not a path under '/rep'.
  */
 const isRepSite = (p: string) => underPath(p, '/rep-site') || underPath(p, '/api/rep-site');
+/**
+ * THE PUBLIC AFFILIATE SITE — one named prefix, exactly as /rep-site, and for the same reasons.
+ *
+ * ── /api/affiliate IS NOT THIS, AND MUST NOT BE CLOSED ON THE APEX ─────────────────────────────
+ * The obvious copy of isRepPortal would read `underPath(p, '/api/affiliate')`, and closing THAT on
+ * the apex would break the garage signup: /api/affiliate/check-code is a PUBLIC APEX endpoint, called
+ * from /register and /pricing to turn a ?ref= code into "Referral code X: your first year is twelve
+ * months for the price of eight". It is rate-limited (refcode:ip) precisely because it is public.
+ *
+ * So the affiliate SITE lives under its own prefix and the apex keeps /api/affiliate open. When the
+ * portal arrives it needs its own decision, not this one — and the endpoints it brings belong
+ * somewhere that does not share a path prefix with a public apex endpoint.
+ */
+const isAffiliateSite = (p: string) => underPath(p, '/affiliate-site') || underPath(p, '/api/affiliate-site');
 const isAuth = (p: string) => underPath(p, '/api/auth'); // shared: operator login on er., tenant login on apex
 const isNextInternal = (p: string) => underPath(p, '/_next'); // matcher already drops /_next/static + image
 /**
@@ -123,6 +143,30 @@ export function middleware(req: NextRequest) {
     return notFound(); // the tenant app AND the Engine Room both 404 on reps.
   }
 
+  if (host === AFFILIATE_HOST) {
+    // affiliates. is the PUBLIC AFFILIATE SITE and nothing else — an allow-list, like its two
+    // neighbours, because a block-list on an isolated host is a list somebody forgets to add to.
+    //
+    // THE ROOT IS THE PUBLIC PAGE. There is no portal on this host yet; when there is, the decision
+    // about who the root serves belongs in that page's getServerSideProps, where the session already
+    // is, and not in a JWT decrypt per request here — the reasoning lib/rep-auth records.
+    if (pathname === '/') return NextResponse.rewrite(new URL('/affiliate-site', req.url));
+    /**
+     * TERMS AT /terms, the address a person types — the lesson the reseller site paid for by
+     * shipping them at /rep-site/terms and 404ing the obvious URL in production for a day. The page
+     * FILE stays inside /affiliate-site so it keeps 404ing on the apex for free; only the public
+     * address moves. A rewrite does not re-enter middleware, so this cannot loop.
+     */
+    if (pathname === '/terms') return NextResponse.rewrite(new URL('/affiliate-site/terms', req.url));
+    // THIS HOST'S OWN robots AND sitemap. public/robots.txt is static and cannot vary by Host, so
+    // served here it would advertise the APEX sitemap from the affiliate domain and point crawlers
+    // at URLs that 404 here. The apex files are untouched.
+    if (pathname === '/robots.txt') return NextResponse.rewrite(new URL('/affiliate-site/robots.txt', req.url));
+    if (pathname === '/sitemap.xml') return NextResponse.rewrite(new URL('/affiliate-site/sitemap.xml', req.url));
+    if (isAffiliateSite(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
+    return notFound(); // the tenant app, the Engine Room and the reseller site all 404 here
+  }
+
   /**
    * /reseller MOVED TO ITS OWN HOST (2026-09-12) — and the redirect lives HERE, not in
    * next.config.js's redirects(), because it is a decision about a host and this is the file that
@@ -144,7 +188,9 @@ export function middleware(req: NextRequest) {
   // Apex / any other host: neither the Engine Room, the rep portal, nor the reseller site is here.
   // The reseller site is closed on the apex for the same reason the portal is — ONE door per surface.
   // Its former apex page, /reseller, is a 308 to this host — see the apex branch below.
-  if (isEngineRoom(pathname) || isRepPortal(pathname) || isRepSite(pathname)) return notFound();
+  // NOTE WHAT IS *NOT* HERE: /api/affiliate. check-code is a public apex endpoint — see
+  // isAffiliateSite above — and closing it would break the referral prefill on /register.
+  if (isEngineRoom(pathname) || isRepPortal(pathname) || isRepSite(pathname) || isAffiliateSite(pathname)) return notFound();
   return NextResponse.next(); // tenant app unchanged
 }
 

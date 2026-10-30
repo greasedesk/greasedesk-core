@@ -187,6 +187,9 @@ const TIERS = {
     // which costs the window's 60 tokens. Its own key, swept before and after the run and cleared
     // by the loopback reaper like the rest, so nothing carries over to a real visitor.
     'public-pricing-gate',
+    // The third public host. Needs the server AND the db: it moves the settings singleton to prove
+    // the page's figures follow it, and puts it back in a registered teardown.
+    'affiliate-site-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',

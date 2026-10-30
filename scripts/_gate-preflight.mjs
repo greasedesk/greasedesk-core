@@ -407,6 +407,19 @@ export function repOrigin() {
 export const REP_RESOLVER_ARGS = ['--host-resolver-rules=MAP reps.greasedesk.com 127.0.0.1'];
 
 /**
+ * The affiliate site's own origin, on the SAME port — the third instance of the arrangement above,
+ * written the same way on purpose.
+ *
+ * NO RESOLVER ARGS BESIDE IT, unlike er. and reps., and that is not an omission: the affiliate site
+ * is SERVER-RENDERED and its gate drives it with raw HTTP and a Host header, which needs no browser
+ * and no DNS rule. Add them the day a clause needs a real browser here.
+ */
+export function affiliateOrigin() {
+  const { port, protocol } = new URL(gateOrigin());
+  return `${protocol}//affiliates.greasedesk.com${port ? `:${port}` : ''}`;
+}
+
+/**
  * ── OFF THE CUSTOMER BUDGET (2026-09-09) ───────────────────────────────────────────────────────
  * This asked /c/aaaaaaaaaaaaaaaa — a CUSTOMER MAGIC LINK path, rate-limited at 60 per IP per hour —
  * and read the guard's banner out of the HTML. Twenty-five gates call this FROM THEIR CATCH, so

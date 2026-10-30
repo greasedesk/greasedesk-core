@@ -5553,6 +5553,34 @@ model ProspectSendingLease {
 /// is stripped after lib/prospects::RETENTION_MONTHS (24) measured from the enquiry, and
 /// personal_stripped_at is what makes an absent email unambiguous: never given, or removed. The
 /// ENQUIRY row itself is kept, exactly as a prospect's garage record is kept.
+/// WHO IS WAITING FOR THE AFFILIATE PROGRAMME TO OPEN.
+///
+/// An email address and the day it was left, and deliberately nothing else. This is NOT a signup:
+/// no Rep row, no referral code, no terms accepted. When joining opens these people are told, and
+/// they then sign up like anybody else — keeping the two apart is what stops a waiting list quietly
+/// becoming a list of affiliates who never agreed to anything.
+///
+/// NOT ResellerEnquiry, which holds interest in the RESELLER programme with a name, a round and an
+/// area. Two populations under one table makes every count ambiguous and puts one programme's people
+/// in the other's list.
+model AffiliateWaitlist {
+  id         String   @id @default(uuid())
+  created_at DateTime @default(now())
+
+  /// LOWER-CASED BY THE WRITER (lib/affiliate-waitlist), because this unique index decides who is
+  /// already waiting and Postgres uniqueness is case-sensitive: without the fold, Sam@x.com and
+  /// sam@x.com are two places in one queue for one person.
+  email      String   @unique
+
+  /// 'trade' | 'creator' (lib/affiliate-waitlist::WAITLIST_AUDIENCES), held by
+  /// AffiliateWaitlist_audience_chk. NULL = THEY DID NOT SAY, which the form allows and which is a
+  /// real answer — never defaulted to the commoner one, and never inferred from which button they
+  /// pressed, because a guess recorded as a fact is indistinguishable from the fact later.
+  audience   String?
+
+  @@index([created_at])
+}
+
 model ResellerEnquiry {
   id         String   @id @default(uuid())
   created_at DateTime @default(now())
