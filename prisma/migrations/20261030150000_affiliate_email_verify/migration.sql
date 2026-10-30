@@ -1,4 +1,5 @@
 -- @migration: constraining it REPLACES RepMagicLink_purpose_chk, and for the moment between the DROP and the ADD there is no CHECK on that column at all — the only write it can affect, and it accepts strictly more than before
+-- @precedes-deploy: it REPLACES RepMagicLink_purpose_chk with one that accepts strictly more — `email_verify` as well as `sign_in` — so nothing deployed can be refused by it, and it ADDS Rep.email_verified_at, which nothing deployed writes. The affiliate email verification in this push DEPENDS on both: lib/affiliate-email-verify mints a link with purpose `email_verify` and stamps that column.
 --
 -- PROVING AN AFFILIATE'S EMAIL ADDRESS (owner's slice D: "email verification and a live SMS code").
 --

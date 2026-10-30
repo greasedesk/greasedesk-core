@@ -136,24 +136,22 @@ are also before the push, and here is why each is safe in the window:
 | 5 | `group_signup_source` | additive — five nullable columns, no backfill |
 | 6 | `operator_alert_emails` | additive — one `TEXT[]` with a default on a one-row table |
 
-### The wrapper WILL REFUSE this set, and that refusal is correct
+### Both constraining migrations now DECLARE that they precede their code
 
-Neither constraining migration carries `-- @precedes-deploy:`, so `deployDecision` sees two
-constraining migrations whose code is not live and blocks with:
+They did not when this file was first written, and the wrapper would have refused the set with
+*"push the code, wait for /api/version to report this commit, then apply"*. **That advice is wrong
+for this deploy**, and the reason is worth keeping: `getProgrammeSettings` selects every scalar on
+`ProgrammeSettings`, so the moment the new code is live it asks for `alert_emails` — and `/`,
+`/pricing` and `/llms.txt` all read that row. **Push-first takes the public site down** until the
+migration catches up. Migrations first is the only safe order for this set.
 
-> production is running 965557c; N app file(s) in this tree are not live yet … Push the code, wait
-> for /api/version to report this commit, then apply.
-
-**That advice is wrong for THIS deploy, and the reason matters.** Pushing first is not an option
-here: `getProgrammeSettings` selects every scalar on `ProgrammeSettings`, so the moment the new code
-is live it asks for `alert_emails` — and until migration 6 lands, that column does not exist.
-`/`, `/pricing` and `/llms.txt` all read that row. **Push-first takes the public site down** until
-the migration catches up. Migrations first is the only safe order for this set.
-
-So the window is accepted deliberately, with a reason that goes into the file:
+So on 2026-10-30, with the owner's approval, each of the two constraining files gained a
+`-- @precedes-deploy:` line stating what nothing deployed is constrained by and what in this push
+depends on it. That is the mechanism for exactly this inversion, and it means **no
+`--even-if-not-live` and no file is edited during the deploy**:
 
 ```bash
-cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes-production --expect=20261030090000_affiliate_joining_open,20261030110000_affiliate_waitlist,20261030140000_rep_ref_code_case_unique,20261030150000_affiliate_email_verify,20261030170000_group_signup_source,20261030190000_operator_alert_emails --even-if-not-live="Migrations must precede this push: the new code selects ProgrammeSettings.alert_emails, so pushing first 500s the public site. Nothing deployed writes a case-colliding ref_code (checked, step 1c) and the replaced CHECK accepts strictly more than the old one." > /tmp/migrate.txt 2>&1; echo "exit $?"; cat /tmp/migrate.txt
+cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes-production --expect=20261030090000_affiliate_joining_open,20261030110000_affiliate_waitlist,20261030140000_rep_ref_code_case_unique,20261030150000_affiliate_email_verify,20261030170000_group_signup_source,20261030190000_operator_alert_emails > /tmp/migrate.txt 2>&1; echo "exit $?"; cat /tmp/migrate.txt
 ```
 
 - **`--expect` names all six.** If the pending set differs by one in either direction the wrapper
@@ -161,44 +159,29 @@ cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes
 - **It will print the endpoint and ask you to TYPE IT BACK.** Not a y/n. Anything else aborts and
   applies nothing. `--yes-production` also refuses when stdin is not a terminal, which is why
   Claude cannot run this step even if asked to.
-- **It writes the override reason into the two constraining migration files before applying** —
-  deliberately, so whoever reads them in six months knows which migrations went in ahead of their
-  code and why. **See the note below about what that costs.**
+- **It writes nothing into any migration file**, which is the point of the declaration.
 
-### ⚠ ONE CONSEQUENCE I FOUND WHILE WRITING THIS, AND IT IS NEW
+> **The one verdict this file cannot predict.** `deployDecision` has a third blocker beyond the two
+> that `@precedes-deploy` lifts: it refuses if `prisma/schema.prisma` adds a **client-generated**
+> default that production does not have. The decision is computed before the dry-run exit, so
+> **step 1b prints it**. If the dry run still refuses, stop and say so — the answer would be a
+> different one, not `--even-if-not-live`.
 
-Prisma stores a **sha256 of migration.sql** when it applies it — I checked the three most recent
-against the gate database and all three match byte for byte. The override note above is written
-INTO two files that have **already been applied to the gate database**. So after this deploy, the
-gate database's stored checksums for those two will no longer match the files, and **the next
-`migrate deploy` against the gate database will refuse**.
+### What that declaration cost, and why it is already paid
 
-`prisma migrate status` does NOT notice (I tested: it still said "Database schema is up to date"),
-so nothing will go red until the next time a migration is applied to the gate database — which is
-the next slice.
+Prisma stores a **sha256 of migration.sql** at apply time, and both files had already been applied
+to the **gate** database — so adding a line to them left the gate's ledger holding the old hash,
+and the next `migrate deploy` there would have refused. `prisma migrate status` does **not** notice
+(measured), so it would have surfaced in the middle of the next slice rather than now.
 
-This is the override mechanism meeting the gate-database split of 26 October: it was written when a
-migration file was applied to exactly one database, and now each is applied to two, at different
-times. Two ways out, and **neither should be done without your say-so**:
+Two rows on the gate database were updated to the new hashes at the same time as the edit, and read
+back to confirm they match the files. **Production is unaffected**: it has never applied either
+file, so it will store the new checksum when it applies them.
 
-- **(a) Declare `@precedes-deploy` on both files BEFORE the deploy** — which is what those two
-  migrations genuinely are: nothing deployed is constrained by either, and the next deploy depends
-  on them. The wrapper then allows the set with no override and writes nothing during the deploy.
-  Cost: the same checksum drift, but caused now and fixable now, by re-syncing two rows on the gate
-  database (a write to our own test database, which I will not make unasked).
-- **(b) Use the override above and re-sync the gate database afterwards.** Same two rows, later,
-  and the file then records "a window was accepted" rather than "this precedes its deploy".
-
-**I recommend (a)** — it is the truthful declaration, it keeps the deploy itself free of file
-edits, and it fails now rather than in the middle of the next slice. Say the word and I will make
-the change and show you the two checksum updates before anything runs.
-
-**The last line must say the migrations were applied and that schema.prisma and the database
-agree.** If it reports `prisma/schema.prisma and the database now DISAGREE`, **stop and tell me
-before pushing** — the file and the database have parted company and the push would deploy code
-written against the wrong one.
-
-**The database is now ahead of the deployed code. Keep the next step to minutes.**
+This is the `--even-if-not-live` mechanism meeting the gate-database split of 26 October — it was
+written when a migration file was applied to one database, and each is now applied to two, at
+different times. **For the next constraining migration: declare `@precedes-deploy` when the file is
+written**, not at deploy time, and the problem does not arise.
 
 ---
 

@@ -1,4 +1,5 @@
 -- @migration: constraining it refuses an INSERT or UPDATE of Rep.ref_code that would make two codes differ only by case — the only write it can reject, and production has none
+-- @precedes-deploy: nothing deployed can be constrained by it — the only write it refuses is a Rep.ref_code that would collide with an existing code on lower(), the sole deployed writer is an operator creating a rep by hand, and production holds no such pair (scripts/check-ref-code-case.mjs, clean 2026-10-30). The affiliate signup in this push DEPENDS on it: lib/affiliate-join mints case-insensitively and lib/attribution answers `ambiguous` for both codes if two ever differ only by case, which pays nobody.
 --
 -- NO TWO REFERRAL CODES MAY DIFFER ONLY BY CASE (owner's ruling of 2026-10-28, measured again
 -- 2026-10-30 before this was written).
