@@ -166,6 +166,52 @@ try {
     return !d.allow && d.refusals.some((r) => /are not live yet/.test(r));
   })(), 'the waiver is per BATCH, not per file: applying one early drags the other with it');
 
+  // ── 3c. THE NARROW EXCEPTION: --defaults-are-db-backed (2026-10-30) ────────────────────────
+  // The schema-default rule is a TEXT rule over the diff: it keeps every added line containing
+  // `@default(` and cannot see that the SQL supplies a database DEFAULT, or that the table did not
+  // exist a moment ago. Both close the hazard, which needs production to omit a value AND the
+  // database to reject the omission. So on 2026-10-30 it refused a set whose four flagged defaults
+  // were two DB-backed columns and two on a table the same set CREATEs.
+  //
+  // The exception clears THAT BLOCKER AND NOTHING ELSE, and these clauses are mostly about the
+  // "nothing else" half — a waiver that quietly widens is worse than the refusal it replaced.
+  console.log('\n— the schema-default blocker, and the one stated exception to it —');
+  const DEFAULTS = ['affiliate_joining_open Boolean @default(false)', 'id String @id @default(uuid())'];
+  check('a client-generated default refuses, as before',
+    !decide({ schemaDefaults: DEFAULTS }).allow);
+  check('  …and the refusal now NAMES the way through',
+    decide({ schemaDefaults: DEFAULTS }).refusals.some((r) => /--defaults-are-db-backed/.test(r)),
+    'a refusal that does not say what would satisfy it gets satisfied by the biggest hammer to hand');
+  const cleared = decide({ schemaDefaults: DEFAULTS, defaultsDbBacked: 'two are DB-backed, two are on a table this set creates' });
+  check('the exception clears it', cleared.allow === true);
+  check('  …and says what it cleared, and why, for the wrapper to print',
+    cleared.defaultsAccepted?.lines.length === 2 && /DB-backed/.test(cleared.defaultsAccepted?.reason ?? ''),
+    'an exception taken on the night is still read out loud');
+  check('  …and it is NOT recorded as the big override',
+    cleared.overridden === false && cleared.note === null,
+    'note is what gets written into a migration file; this one writes nothing, which is the point');
+
+  // AND IT WAIVES NOTHING ELSE — the same sweep the @precedes-deploy waiver gets, because this is
+  // the second waiver in this function and the first one needed it.
+  for (const [what, o, want] of [
+    ['production unreachable', { version: { ok: false, why: 'fetch failed' } }, /unreachable production is not a safe production/],
+    ['a null commit', { version: { ok: true, commit: null, ref: null, env: 'production', source: 'unknown' } }, /no commit/],
+    ['a commit this clone cannot see', { liveIsAncestor: null }, /does not have even after a fetch/],
+    ['a commit that is not an ancestor', { liveIsAncestor: false }, /not an ancestor of HEAD/],
+    ['app code that is not live', { appFilesNotLive: ['pages/api/jobcard-details.ts'] }, /are not live yet/],
+    ['uncommitted app code', { uncommittedAppFiles: ['pages/api/jobcard-details.ts'] }, /uncommitted, so it certainly is not live/],
+  ]) {
+    const d = decide({ schemaDefaults: DEFAULTS, defaultsDbBacked: 'the defaults are safe', ...o });
+    check(`  …but ${what} STILL refuses`, !d.allow && d.refusals.some((r) => want.test(r)),
+      (d.refusals[0] ?? 'ALLOWED — the waiver is too wide').split('\n')[0].slice(0, 100));
+  }
+  check('  …and a CLASSIFICATION refusal is still not overridable by it',
+    !R.deployDecision({ ...base, pending: [wrongWayRound], schemaDefaults: DEFAULTS, defaultsDbBacked: 'the defaults are safe' }).allow,
+    'the exception accepts a known window; it does not accept "we do not know what this migration does"');
+  check('with nothing flagged, the exception reports clearing NOTHING',
+    decide({ schemaDefaults: [], defaultsDbBacked: 'passed out of habit' }).defaultsAccepted == null,
+    'which is what the wrapper refuses on — a flag that quietly does nothing ends up on every command line');
+
   console.log('\n— what the comparison ignores, and the hole that leaves —');
   check('prisma/migrations is ignored — under two pushes it is applied before it is pushed', !R.comparedByDeployCheck('prisma/migrations/20260911090000_x/migration.sql'));
   check('prisma/schema.prisma is ignored — it cannot safely travel in push 1', !R.comparedByDeployCheck('prisma/schema.prisma'),

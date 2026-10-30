@@ -321,6 +321,19 @@ export type DeployFacts = {
   uncommittedAppFiles: string[];
   schemaDefaults: string[];
   override: string | null;        // the operator's reason, already trimmed
+  /**
+   * THE NARROW ONE: the operator's reason for accepting the schema-default blocker ALONE, because
+   * every added default in this set is backed by a database DEFAULT or sits on a table the same
+   * migration creates. Clears that blocker and NOTHING else — unlike `override`, which accepts the
+   * liveness window, and unlike `override` it is never written into a migration file.
+   *
+   * It exists because the schema-default rule is a TEXT RULE over the diff: it keeps every added
+   * line containing `@default(` and cannot see that the SQL supplies a database default, or that
+   * the table did not exist a moment ago. So it fires on a routine additive migration, which is
+   * the shape that teaches people to reach for the big override. Narrowing the rule to the real
+   * hazard is the actual fix and is boarded; this is the stated, recorded exception until then.
+   */
+  defaultsDbBacked?: string | null;
 };
 
 export type DeployDecision = {
@@ -330,6 +343,11 @@ export type DeployDecision = {
   overridden: boolean;
   /** The durable record, to be written into the migration file BEFORE applying. */
   note: string | null;
+  /**
+   * What --defaults-are-db-backed cleared, and why. Printed by the wrapper before it applies, so an
+   * exception taken on the night is still read out loud. Null when the flag was not used.
+   */
+  defaultsAccepted?: { reason: string; lines: string[] } | null;
 };
 
 /**
@@ -347,8 +365,10 @@ export function deployDecision(f: DeployFacts): DeployDecision {
 
   // A CLASSIFICATION REFUSAL IS NEVER OVERRIDABLE. The override accepts a known window against a
   // known production; it does not accept "we do not know what this migration does".
-  if (refusals.length) return { allow: false, constraining, refusals, overridden: false, note: null };
-  if (!constraining.length) return { allow: true, constraining, refusals, overridden: false, note: null };
+  if (refusals.length) return { allow: false, constraining, refusals, overridden: false, note: null, defaultsAccepted: null };
+  // NO CONSTRAINING MIGRATION, NOTHING TO DECIDE — and note that the schema-default check below
+  // never runs in that case either, which is why this flag is only ever needed alongside one.
+  if (!constraining.length) return { allow: true, constraining, refusals, overridden: false, note: null, defaultsAccepted: null };
 
   const blocking: string[] = [];
   if (!f.version.ok) {
@@ -373,20 +393,36 @@ export function deployDecision(f: DeployFacts): DeployDecision {
       blocking.push(`production is running ${f.version.commit.slice(0, 12)}; ${f.appFilesNotLive.length} app file(s) in this tree are not live yet:\n      ${f.appFilesNotLive.slice(0, 20).join('\n      ')}`
         + `\n    Push the code, wait for /api/version to report this commit, then apply.`);
     }
-    if (f.schemaDefaults.length) {
+    // THE SCHEMA-DEFAULT HAZARD, AND THE ONE STATED EXCEPTION TO IT.
+    //
+    // The hazard needs TWO things true: production's client omits a value this tree would send,
+    // AND the database then rejects the omission. This rule only sees the first — it is a text
+    // rule over the diff and cannot tell a column the SQL gives a DEFAULT, or one on a table the
+    // same migration creates, from a NOT NULL column with nothing behind it.
+    //
+    // So the exception is NARROW and SAID: --defaults-are-db-backed clears this blocker alone, on
+    // a reason that is printed before applying. It does not touch the liveness blockers above and
+    // it writes nothing into any file. Narrowing the rule itself is the real fix, and is boarded.
+    if (f.schemaDefaults.length && !f.defaultsDbBacked) {
       blocking.push(`prisma/schema.prisma adds a client-generated default that production does not have:\n      ${f.schemaDefaults.join('\n      ')}`
-        + `\n    A default is generated in the client, so production would send no value where this tree sends one.`);
+        + `\n    A default is generated in the client, so production would send no value where this tree sends one.`
+        + `\n    If every one of them is backed by a database DEFAULT, or sits on a table this same set CREATEs,`
+        + `\n    then nothing can be rejected and the window is safe: --defaults-are-db-backed="<why, per line>"`);
     }
   }
 
-  if (!blocking.length) return { allow: true, constraining, refusals, overridden: false, note: null };
-  if (!f.override) return { allow: false, constraining, refusals: blocking, overridden: false, note: null };
+  const defaultsAccepted = f.schemaDefaults.length && f.defaultsDbBacked
+    ? { reason: f.defaultsDbBacked, lines: f.schemaDefaults }
+    : null;
+  if (!blocking.length) return { allow: true, constraining, refusals, overridden: false, note: null, defaultsAccepted };
+  if (!f.override) return { allow: false, constraining, refusals: blocking, overridden: false, note: null, defaultsAccepted };
   return {
     allow: true,
     constraining,
     refusals: blocking,
     overridden: true,
     note: overrideNote({ when: new Date(), live: f.version.ok ? f.version.commit : null, head: f.head, appFilesNotLive: f.appFilesNotLive, reason: f.override, blocking }),
+    defaultsAccepted,
   };
 }
 

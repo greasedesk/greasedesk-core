@@ -151,7 +151,7 @@ depends on it. That is the mechanism for exactly this inversion, and it means **
 `--even-if-not-live` and no file is edited during the deploy**:
 
 ```bash
-cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes-production --expect=20261030090000_affiliate_joining_open,20261030110000_affiliate_waitlist,20261030140000_rep_ref_code_case_unique,20261030150000_affiliate_email_verify,20261030170000_group_signup_source,20261030190000_operator_alert_emails > /tmp/migrate.txt 2>&1; echo "exit $?"; cat /tmp/migrate.txt
+cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes-production --expect=20261030090000_affiliate_joining_open,20261030110000_affiliate_waitlist,20261030140000_rep_ref_code_case_unique,20261030150000_affiliate_email_verify,20261030170000_group_signup_source,20261030190000_operator_alert_emails --defaults-are-db-backed="All four added defaults are closed by this same set: affiliate_joining_open and alert_emails are ADD COLUMN NOT NULL DEFAULT on ProgrammeSettings, so an omission by production is filled by the database; id and created_at are on AffiliateWaitlist, a table this set CREATEs and production's client has no model for." > /tmp/migrate.txt 2>&1; echo "exit $?"; cat /tmp/migrate.txt
 ```
 
 - **`--expect` names all six.** If the pending set differs by one in either direction the wrapper
@@ -161,11 +161,29 @@ cd /Users/hugh/Developer/greasedesk-core && node scripts/migrate-apply.mjs --yes
   Claude cannot run this step even if asked to.
 - **It writes nothing into any migration file**, which is the point of the declaration.
 
-> **The one verdict this file cannot predict.** `deployDecision` has a third blocker beyond the two
-> that `@precedes-deploy` lifts: it refuses if `prisma/schema.prisma` adds a **client-generated**
-> default that production does not have. The decision is computed before the dry-run exit, so
-> **step 1b prints it**. If the dry run still refuses, stop and say so — the answer would be a
-> different one, not `--even-if-not-live`.
+### The third blocker, which fired — and the narrow flag on that command
+
+`@precedes-deploy` lifts the two liveness blockers. It does **not** lift the schema-default one,
+and on the night that is what refused the set, naming four lines:
+
+| flagged | where | why it cannot break production |
+|---|---|---|
+| `affiliate_joining_open Boolean @default(false)` | `ProgrammeSettings` | `ADD COLUMN … NOT NULL DEFAULT false` in this set — an omission is filled by the database |
+| `alert_emails String[] @default([])` | `ProgrammeSettings` | `ADD COLUMN … NOT NULL DEFAULT '{}'` — same |
+| `id String @id @default(uuid())` | `AffiliateWaitlist` | a table this set `CREATE TABLE`s; production's client has no model for it |
+| `created_at DateTime @default(now())` | `AffiliateWaitlist` | same |
+
+The hazard needs production to omit a value **and** the database to reject the omission. Two of
+these are database-backed and two are on a table old code cannot write. `schemaRisk` is a text rule
+over the schema diff and reads neither fact, which is why it fires on a routine additive migration
+— **narrowing it is boarded** (`docs/deferred-slices.md`).
+
+So the command carries `--defaults-are-db-backed="<reason>"`, which clears **that blocker alone**:
+it does not touch the liveness blockers or a classification refusal, it writes into no migration
+file, it prints the reason before applying, and it refuses outright if there is nothing to clear.
+
+> **If the dry run refuses for any OTHER reason, stop and say so.** This flag is for the four lines
+> above and nothing else.
 
 ### What that declaration cost, and why it is already paid
 

@@ -396,3 +396,44 @@ so the absence it checks follows a decision rather than a dead page. `client-bun
 static source gate and correctly reports nothing here: the import IS gSP-only, and it is webpack's
 dev-mode behaviour, not the source, that ships it. Options: make the page import the setting
 through a leaf module, or teach a gate to check a dev chunk for the Prisma marker.
+
+---
+
+## Narrow the schema-default rule to the real hazard — boarded 2026-10-30, for next week
+
+**What happened.** `deployDecision` refused the affiliate deploy on its schema-default blocker,
+naming four lines:
+
+```
+affiliate_joining_open  Boolean  @default(false)     ProgrammeSettings — ADD COLUMN ... NOT NULL DEFAULT false
+alert_emails            String[] @default([])        ProgrammeSettings — ADD COLUMN ... NOT NULL DEFAULT '{}'
+id         String   @id @default(uuid())             AffiliateWaitlist — a table this same set CREATEs
+created_at DateTime @default(now())                  AffiliateWaitlist — same
+```
+
+**Not one of them could break production.** The hazard needs TWO things true at once: production's
+client omits a value this tree would send, AND the database rejects the omission. Two of these are
+filled by a database DEFAULT, and two are on a table production's client has no model for.
+
+**Why the rule could not tell.** `schemaRisk` is a text rule over `git diff <live>..HEAD --
+prisma/schema.prisma`: it keeps every added line containing `@default(` and returns it. It never
+reads the migration SQL, so it cannot see either escape. That means **it fires on a completely
+routine shape** — any additive migration adding a NOT NULL column with a database default — and a
+guard that fires on the ordinary case is the one the module's own comment warns about: *"the kind
+that trains people to override without reading."*
+
+**Tonight's answer** was `--defaults-are-db-backed="<reason>"`, which clears that blocker and
+nothing else, writes into no file, and refuses when there is nothing to clear
+(`migration-class-gate`, 111 clauses, including a sweep proving it waives nothing else and five
+red-proofs). It is an exception, not a fix: the rule still fires next time.
+
+**The fix.** Keep flagging an added `@default(…)` UNLESS the pending SQL closes the hazard — the
+column is added WITH a database default, or its table is `CREATE TABLE`d by the same set.
+
+**The one judgement inside it,** and the reason this is boarded rather than done at speed: matching
+a schema line to the SQL by column name alone is loose — two tables can both gain a `created_at`,
+one defaulted and one not, and clearing the wrong one would put a hole in a safety rule. Resolve
+each flagged line to its MODEL first (parse the current `schema.prisma`, find the model whose body
+holds that exact field line), then check that model's table in the SQL. Red-prove that a NOT NULL
+column with no database default on an EXISTING table still blocks — that is the case the whole rule
+is for, and it is the one a narrowing can quietly lose.

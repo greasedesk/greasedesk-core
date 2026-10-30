@@ -103,6 +103,37 @@ const OVERRIDE = (() => {
 })();
 
 /**
+ * --defaults-are-db-backed="<reason>" — THE NARROW EXCEPTION, 2026-10-30.
+ *
+ * Clears the SCHEMA-DEFAULT blocker and nothing else. The liveness blockers, the classification
+ * refusals and --expect are all untouched, and unlike --even-if-not-live this writes NOTHING into
+ * any migration file — which matters now that every file is applied to two databases (the gate
+ * split of 26 October), where an edit after the fact leaves the other ledger holding a stale
+ * checksum.
+ *
+ * WHY IT IS NEEDED AT ALL: schemaRisk keeps every added line containing `@default(` and cannot see
+ * that the SQL supplies a database DEFAULT, or that the table is one the same set CREATEs. Both
+ * close the hazard completely — production can only break if it omits a value AND the database
+ * rejects the omission. So the rule fires on a routine additive migration, and a guard that fires
+ * on the ordinary case is how people learn to reach for the big override. Narrowing the rule to
+ * the real hazard is boarded; until then the exception is stated, reasoned and printed.
+ *
+ * IT REFUSES WHEN THERE IS NOTHING TO CLEAR, deliberately: a flag that quietly does nothing is a
+ * flag that ends up on every command line.
+ */
+const DEFAULTS_DB_BACKED = (() => {
+  const a = process.argv.find((x) => x.startsWith('--defaults-are-db-backed'));
+  if (!a) return null;
+  const reason = (a.split('=').slice(1).join('=') || '').trim().replace(/^["']|["']$/g, '');
+  if (!reason) {
+    console.error('\n--defaults-are-db-backed needs a reason: --defaults-are-db-backed="why every added default is backed by a database DEFAULT or sits on a new table"');
+    console.error('It is printed before applying, so an exception taken on the night is still read out loud.\n');
+    process.exit(2);
+  }
+  return reason;
+})();
+
+/**
  * THE ONE TEST SEAM, AND WHY IT CANNOT BE ABUSED.
  *
  * migration-class-gate has to drive this script on migrations that are actually pending — a header
@@ -292,8 +323,24 @@ if (TARGET.safe) {
 
 
 // ── 4. THE DECISION ─────────────────────────────────────────────────────────────────────────────
-const d = R.deployDecision({ pending: classified, version, liveIsAncestor, head, appFilesNotLive, uncommittedAppFiles, schemaDefaults, override: OVERRIDE });
+const d = R.deployDecision({ pending: classified, version, liveIsAncestor, head, appFilesNotLive, uncommittedAppFiles, schemaDefaults, override: OVERRIDE, defaultsDbBacked: DEFAULTS_DB_BACKED });
 if (!d.allow) die(d.refusals);
+
+// A FLAG THAT CLEARED NOTHING IS A MISTAKE, NOT A NO-OP. Either the set changed since it was
+// decided on, or it is being passed out of habit — and both are worth stopping for.
+if (DEFAULTS_DB_BACKED && !d.defaultsAccepted) {
+  // THE REMEDY IS TO REMOVE THE FLAG, said explicitly: die()'s generic footer offers
+  // --even-if-not-live, which is the wrong answer to this refusal and the one somebody reaching
+  // for a tidy ending at midnight would take.
+  die(['--defaults-are-db-backed was given, but no schema-default blocker was raised.',
+    'Nothing to clear means the facts have moved since the dry run that justified it.',
+    'REMOVE THE FLAG and read the dry run again — the footer below is not the remedy for this one.']);
+}
+if (d.defaultsAccepted) {
+  say('\n  SCHEMA DEFAULTS ACCEPTED — this blocker, and only this one:\n');
+  for (const l of d.defaultsAccepted.lines) say(`    ${l}`);
+  say(`\n  Reason given: ${d.defaultsAccepted.reason}\n`);
+}
 
 if (d.overridden) {
   say('\n  OVERRIDDEN with --even-if-not-live. What is being accepted:\n');
