@@ -16,10 +16,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/db';
+import { alertFirstPayment } from '@/lib/operator-alerts';
 import { recordTopUpFromSession } from '@/lib/sms-topup';
 import { getStripe, stripeWebhookSecret } from '@/lib/stripe';
 import { sendTrialEndingReminder } from '@/lib/trial-reminder';
-import { applyStripeSubscriptionToCache, recordFirstPayment } from '@/lib/stripe-billing-cache';
+import { applyStripeSubscriptionToCache, groupIdForInvoiceCustomer, recordFirstPayment } from '@/lib/stripe-billing-cache';
 import {
   accrueFromInvoicePaid, clawbackFromChargeRefunded,
   rewardFromInvoicePaid, reverseAffiliateFromChargeRefunded,
@@ -171,7 +172,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // the same reason: the simpler unconditional writes first, then the ones that resolve
         // attributions and can legitimately refuse.
         const aff = await rewardFromInvoicePaid(prisma, invoice);
-        console.log('[stripe] invoice.paid → first payment:', paid, '| accrual:', JSON.stringify(r), '| affiliate:', JSON.stringify(aff));
+        // ── AND TELL THE OWNER, ONCE ────────────────────────────────────────────────────────────
+        // GATED ON 'recorded', which recordFirstPayment returns exactly once for exactly this
+        // event — so "the first time we were paid" is decided by the thing that stamps the date,
+        // not by a second rule here that could disagree with it. Every later invoice answers
+        // 'already recorded' and no alert goes.
+        //
+        // AFTER the three writes above, and it cannot fail them: sendOperatorAlert catches its own
+        // errors, so a Stripe webhook never retries because an email to us did not go. CAPPED at
+        // three seconds for the other half of that promise — Stripe times a webhook out and retries
+        // it, so a slow email provider would turn one payment into a handful of deliveries. The
+        // send continues past the cap and writes its own row; the hourly sweep reads it.
+        let alerted: unknown = paid;
+        if (paid === 'recorded') {
+          const groupId = await groupIdForInvoiceCustomer(prisma, invoice);
+          if (groupId) {
+            alerted = await alertFirstPayment(prisma, groupId, {
+              amountPennies: (invoice as any).amount_paid ?? 0,
+              currency: (invoice as any).currency ?? null,
+              invoiceRef: (invoice as any).number ?? invoice.id,
+              paidAt: (invoice as any).status_transitions?.paid_at ? new Date((invoice as any).status_transitions.paid_at * 1000) : null,
+            });
+          }
+        }
+        console.log('[stripe] invoice.paid → first payment:', paid, '| accrual:', JSON.stringify(r), '| affiliate:', JSON.stringify(aff), '| owner alert:', JSON.stringify(alerted));
         break;
       }
       case 'charge.refunded': {

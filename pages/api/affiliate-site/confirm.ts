@@ -29,6 +29,7 @@ import { confirmPhoneVerification } from '@/lib/phone-verification';
 import { mintEmailVerifyLink } from '@/lib/affiliate-email-verify';
 import { publicPlanChoice } from '@/lib/plan-choice';
 import { readEnvironment, revealTestOnlySecrets } from '@/lib/environment';
+import { alertAffiliateJoined } from '@/lib/operator-alerts';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ ok: false, message: 'Method Not Allowed' }); }
@@ -58,6 +59,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const terms = await currentTerms(prisma);
   const choice = await publicPlanChoice(prisma, { referred: true });
+
+  // AND TELL THE OWNER. Before the welcome email, because this one is about the business and the
+  // other is about the affiliate — if the provider is down we would rather lose the welcome than
+  // the notification that somebody joined. Neither can fail the approval.
+  // Capped at three seconds, like the garage signup: this is a person waiting on a form.
+  const alerted = await alertAffiliateJoined(prisma, rep.id);
+  if (alerted.timedOut) console.warn('[affiliate-site/confirm] owner alert did not answer in 3s — the sweep will finish it:', rep.id);
+  if (alerted.error) console.error('[affiliate-site/confirm] owner alert not sent:', alerted.error);
 
   let emailed = false;
   let verifyUrl: string | null = null;

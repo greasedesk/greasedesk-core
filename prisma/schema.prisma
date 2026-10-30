@@ -1312,6 +1312,17 @@ model ProgrammeSettings {
   /// the last attempt failed and the live site may still be stale. Cleared on success.
   copy_revalidated_at        DateTime?
   copy_revalidate_error      String?
+  /// WHO GETS THE OWNER'S ALERTS (slice G, 2026-10-30) — a new affiliate, a new garage, a garage
+  /// that registered and never reached checkout, a first payment. Set on /superadmin/billing.
+  ///
+  /// EMPTY IS "NOBODY HAS CHOSEN", not "send to nobody": lib/operator-alerts then resolves the one
+  /// platform contact address (lib/platform-contact), which is where the public contact form has
+  /// always delivered. That is why the owner's address is NOT a DEFAULT on this column — it would
+  /// need a constraining migration to change and could silently disagree with the contact form.
+  /// There is no "alerts off" switch, deliberately: emptying the list restores the default
+  /// recipient rather than silencing anything. Addresses are cleaned at the single writer
+  /// (refuseAlertEmails), which is why the column carries no CHECK.
+  alert_emails               String[] @default([])
   updated_at                 DateTime @updatedAt
 }
 

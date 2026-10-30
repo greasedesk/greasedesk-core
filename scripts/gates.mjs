@@ -197,6 +197,9 @@ const TIERS = {
     // The Engine Room side: the affiliates list, suspend/unsuspend, and the rule that a suspended
     // code earns nothing from that moment — which was selected and ignored until 2026-10-30.
     'affiliate-admin-gate',
+    // Slice G: the owner's four alert emails. Needs the server AND the db — it drives the real
+    // signup and the real Engine Room, and every send is refused by the environment marker.
+    'operator-alerts-gate',
     // Slice F parts 2 and 3: where a garage came from — the question on /register, the campaign
     // under the consent rule, and the Engine Room panel that used to call every affiliate referral
     // a reseller signup.

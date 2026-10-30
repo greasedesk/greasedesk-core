@@ -20,8 +20,11 @@ import {
   getProgrammeSettings, saveTrialDays, refuseTrialLength,
   PUBLIC_COPY_PAGES, revalidationTargets, readPublicCopy, publicOrigin,
   savePlanSettings, PLAN_SETTING_FIELDS, PLAN_SETTING_LABEL, PLAN_SETTING_KIND,
+  saveAlertEmails,
   type PlanSettingField,
 } from '@/lib/programme-settings';
+import { alertRecipients, recentAlerts, failedAlertCount } from '@/lib/operator-alerts';
+import { platformContactTo } from '@/lib/platform-contact';
 
 /**
  * WHICH SITE TO READ BACK — and it is NEVER the host this request came in on.
@@ -81,8 +84,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       return;
     }
+    // ── THE OWNER'S ALERTS, BESIDE THE FIELD THAT ADDRESSES THEM ──────────────────────────────
+    // "who gets these" and "did they arrive" on one screen, deliberately: a recipient list with no
+    // delivery record next to it is a setting nobody can tell is working.
+    const alerts = await recentAlerts(prisma, 20).catch(() => []);
+    const alertsFailed = await failedAlertCount(prisma).catch(() => 0);
     res.status(200).json({
       trialDays: s.trial_days,
+      alertEmails: s.alert_emails ?? [],
+      // WHERE THEY GO WHEN THE LIST IS EMPTY. Sent so the screen can say the address rather than
+      // showing an empty box, which reads as "nobody is being told".
+      alertDefault: platformContactTo(),
+      alertRecipients: alertRecipients(s),
+      alerts,
+      alertsFailed,
       planSettings: Object.fromEntries(PLAN_SETTING_FIELDS.map((f) => [f, s[f]])),
       planLabels: PLAN_SETTING_LABEL,
       planKinds: PLAN_SETTING_KIND,
@@ -121,6 +136,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : `Saved: new garages now get ${result.days} days. NOT YET CONFIRMED ON THE PUBLIC SITE — ${result.note}. Reload this screen in a moment; it corrects itself within the minute.`,
       ...result,
     });
+    return;
+  }
+
+  if (req.method === 'POST') {
+    // ── WHO GETS THE ALERTS ─────────────────────────────────────────────────────────────────
+    // ITS OWN METHOD, like the two above: PATCH is the trial length and also refreshes the public
+    // site, PUT is the plan figures and also refreshes the public site. This changes an address
+    // list and refreshes nothing, and a shared handler would have to explain which parts of its
+    // answer applied.
+    try {
+      const saved = await saveAlertEmails(prisma, { emails: (req.body ?? {}).alertEmails, actorId: actor.userId });
+      res.status(200).json({
+        ...saved,
+        recipients: alertRecipients({ alert_emails: saved.emails }),
+        message: saved.usingDefault
+          ? `Cleared. Alerts go to ${platformContactTo()}, the address the contact form uses.`
+          : `Saved. Alerts go to ${saved.emails.join(', ')}.`,
+      });
+    } catch (e: any) {
+      res.status(400).json({ message: String(e?.message ?? e) });
+    }
     return;
   }
 
@@ -173,6 +209,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  res.setHeader('Allow', ['GET', 'PATCH', 'PUT']);
+  res.setHeader('Allow', ['GET', 'PATCH', 'POST', 'PUT']);
   res.status(405).json({ message: 'Method not allowed.' });
 }

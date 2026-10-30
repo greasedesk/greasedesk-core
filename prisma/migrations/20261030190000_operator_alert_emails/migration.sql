@@ -1,0 +1,33 @@
+-- @migration: additive
+--
+-- WHO GETS THE OWNER'S ALERTS (slice G, 2026-10-30).
+--
+-- One column on the platform settings singleton: the addresses the four operator alerts go to —
+-- a new affiliate, a new garage, a garage that registered and did not reach checkout, and a first
+-- payment. Set in the Engine Room (/superadmin/billing, owner only).
+--
+-- TEXT[] AND NOT A COMMA-SEPARATED STRING, because the thing being stored is a list and
+-- Operator.regions already proves the shape works here. The screen takes one address per line and
+-- the writer splits, trims, lowercases and de-duplicates — so the column holds a list that has
+-- already been cleaned rather than a string every reader has to parse the same way.
+--
+-- EMPTY IS NOT A MISSING SETTING, AND IT IS NOT "SEND TO NOBODY".
+-- `{}` means NOBODY HAS CHOSEN, and the code then resolves the one platform contact address
+-- (lib/platform-contact: CONTACT_FORM_TO, falling back to hugh@greasedesk.com) — the same address
+-- the public contact form has always delivered to. So the default is the owner's address without
+-- that address being written into a DEFAULT clause here, where changing it later would mean a
+-- constraining migration and where it would silently disagree with the contact form.
+--
+-- There is deliberately no "alerts off" switch. Emptying the list does not silence the alerts; it
+-- returns them to the default recipient. A switch is a second question and this column answers one.
+--
+-- NO CHECK CONSTRAINT on the contents. Address validity is enforced at the single writer
+-- (refuseAlertEmails, lib/operator-alerts), for the reason heard_about carries none: the rule is
+-- about what a person may type, and a CHECK would make every change to it a constraining migration.
+-- An empty array and an array of valid addresses are the only two states the writer can produce.
+--
+-- ADDITIVE: one new column with a default on a one-row table. Nothing deployed writes it, nothing
+-- deployed reads it, and a Prisma client that has never heard of it selects the other columns
+-- exactly as before — which is what makes this safe to apply in the window before the push.
+
+ALTER TABLE "ProgrammeSettings" ADD COLUMN "alert_emails" TEXT[] NOT NULL DEFAULT '{}';

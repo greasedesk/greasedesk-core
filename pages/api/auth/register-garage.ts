@@ -15,6 +15,7 @@ import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
 import { attributeAtSignup } from '@/lib/affiliate';
 import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/lib/signup-source';
+import { alertGarageRegistered } from '@/lib/operator-alerts';
 
 type Payload = {
   name: string; email: string; password: string; ref?: string;
@@ -167,6 +168,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (prospectErr) {
       console.error('markSignedUpByEmail at signup failed (non-fatal):', prospectErr);
     }
+
+    // TELL THE OWNER A GARAGE REGISTERED. Fired here, after the garage is committed and before the
+    // response, so he hears about it in seconds rather than on the next hour's sweep — and awaited
+    // deliberately: a signup already waits for the verification email, and an unawaited promise in
+    // a serverless function can be killed when the response is returned.
+    //
+    // IT CANNOT FAIL THIS REQUEST. sendOperatorAlert catches its own errors and returns an
+    // outcome; there is no throw to catch here and no branch on the result, because nothing about
+    // a garage's signup depends on whether we managed to email ourselves about it.
+    // CAPPED AT THREE SECONDS (owner, 2026-10-30). It could never fail this request; it could
+    // still SLOW it, because a provider that accepts a connection and then thinks for thirty
+    // seconds is a thirty-second signup. The send is not cancelled — it goes on, and if it
+    // finishes it writes its own row, which is what the sweep reads. So a slow send is one email,
+    // late, rather than two or none.
+    const alerted = await alertGarageRegistered(prisma, group.id);
+    if (alerted.timedOut) console.warn('[register] owner alert did not answer in 3s — the hourly sweep will finish it:', group.id);
+    if (alerted.error) console.error('[register] owner alert not sent:', alerted.error);
 
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);

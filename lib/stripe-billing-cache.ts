@@ -196,6 +196,21 @@ export type FirstPaymentResult = 'recorded' | 'already recorded' | 'not a paymen
  * never overwritten: this is the date we were FIRST paid, so a later invoice must not move it.
  * Idempotent, so a re-delivered webhook is a no-op.
  */
+/**
+ * WHICH GARAGE AN INVOICE BELONGS TO, resolved exactly as recordFirstPayment resolves it.
+ *
+ * Exported so the webhook can name the garage it has just recorded a first payment for, without a
+ * second copy of "how a Stripe customer becomes a group". recordFirstPayment itself still returns
+ * only its verdict: four clauses in annual-billing-gate assert that string, and widening the
+ * return type to carry an id would have been a change to the money path to save one read.
+ */
+export async function groupIdForInvoiceCustomer(db: typeof prisma, invoice: Stripe.Invoice): Promise<string | null> {
+  const customerId = idOfC((invoice as any).customer);
+  if (!customerId) return null;
+  const billing = await db.groupBilling.findUnique({ where: { stripe_customer_id: customerId }, select: { group_id: true } });
+  return billing?.group_id ?? null;
+}
+
 export async function recordFirstPayment(db: typeof prisma, invoice: Stripe.Invoice): Promise<FirstPaymentResult> {
   const inv = invoice as any;
   const amountPaid: number = inv.amount_paid ?? 0;

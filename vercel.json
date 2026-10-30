@@ -22,6 +22,10 @@
     {
       "path": "/api/cron/prospect-sequence",
       "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/operator-alerts",
+      "schedule": "40 * * * *"
     }
   ]
 }

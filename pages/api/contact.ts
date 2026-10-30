@@ -26,8 +26,9 @@ import { verifyTurnstile, clientIp } from '@/lib/turnstile';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { prisma } from '@/lib/db';
-
-const CONTACT_TO = process.env.CONTACT_FORM_TO || 'hugh@greasedesk.com';
+// ONE SOURCE for the address GreaseDesk reads its own post at. It was a literal here; the owner's
+// operator alerts need the same address, and a second copy of it is a second thing to forget.
+import { platformContactTo } from '@/lib/platform-contact';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const esc = (s: string) => s.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] as string));
@@ -78,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     <p style="white-space:pre-wrap">${esc(cleanMessage)}</p>
   `;
 
-  const sent = await sendEmail(CONTACT_TO, tenant ? `Support: ${tenantGroup?.group_name ?? cleanName}` : `Contact form: ${cleanName}`, html, {
+  const sent = await sendEmail(platformContactTo(), tenant ? `Support: ${tenantGroup?.group_name ?? cleanName}` : `Contact form: ${cleanName}`, html, {
     fromName: 'GreaseDesk Contact Form',
     replyTo: cleanEmail, // replies go to the ENQUIRER — never exposes the destination address
   });

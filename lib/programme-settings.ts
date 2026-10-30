@@ -21,6 +21,10 @@
 import { prisma as defaultDb } from '@/lib/db';
 import { COMPANY } from '@/lib/company-info';
 import { getProfile, DEFAULT_COUNTRY } from '@/lib/locale-profiles';
+// The CLEAN lives in a LEAF (lib/platform-contact) and the WRITE lives here, with the other
+// writers of this row. Importing lib/operator-alerts for it closed a runtime import cycle:
+// notification-templates → programme-settings → operator-alerts → notify → notification-templates.
+import { refuseAlertEmails } from '@/lib/platform-contact';
 // @ts-ignore — JS config (no type declarations); the shape is ASSERTED on the next line rather
 // than assumed, so the compiler keeps checking every use of it below.
 // WITH THE .js EXTENSION, unlike lib/gssp-i18n's copy of this import. That one is only ever loaded
@@ -507,6 +511,46 @@ export type SaveTrialResult = {
  * `actorId` may be null only for the gate; every route through the Engine Room carries an operator,
  * and an unaudited change to what every new garage is offered is not a thing this should allow.
  */
+/**
+ * WHO GETS THE OWNER'S ALERTS. The writer of ProgrammeSettings.alert_emails, here with the other
+ * writers of this row rather than in lib/operator-alerts — one module writes this table.
+ *
+ * NO REVALIDATION, and that is the difference between this setting and the two above it: nothing
+ * on the public site prints these addresses, so there is no page to refresh and nothing to read
+ * back. A save that claimed to have refreshed something would be the exact half-truth the trial
+ * length told for an hour.
+ *
+ * THE AUDIT ROW CARRIES BOTH LISTS. Alerts naming a customer's details go to these addresses, so
+ * "who was being told, before and after" is a question somebody may need answered later.
+ */
+export async function saveAlertEmails(
+  db: Db,
+  opts: { emails: unknown; actorId: string | null },
+): Promise<{ emails: string[]; before: string[]; usingDefault: boolean }> {
+  const cleaned = refuseAlertEmails(opts.emails);
+  if (!cleaned.ok) throw new Error(cleaned.message);
+
+  const before = (await getProgrammeSettings(db)).alert_emails ?? [];
+  await db.programmeSettings.update({ where: { id: SETTINGS_ID }, data: { alert_emails: cleaned.emails } });
+
+  if (opts.actorId) {
+    await db.superAdminAudit.create({
+      data: {
+        operator_user_id: opts.actorId,
+        action: 'programme_alert_emails',
+        target_group_id: null,
+        target_operator_id: null,
+        target_name_snapshot: 'Alert recipients',
+        target_ref_snapshot: `${before.length ? before.join(', ') : 'the default address'} → ${cleaned.emails.length ? cleaned.emails.join(', ') : 'the default address'}`,
+        detail: { from: before, to: cleaned.emails },
+      },
+    });
+  }
+  // EMPTY IS NOT OFF. Reported back explicitly so the screen can say where they are going instead
+  // of showing an empty box that reads as "nobody".
+  return { emails: cleaned.emails, before, usingDefault: cleaned.emails.length === 0 };
+}
+
 export async function saveTrialDays(
   db: Db,
   opts: {

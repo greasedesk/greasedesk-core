@@ -132,6 +132,30 @@ const replyRoute = (d: TemplateData, body: string): string =>
 /** Attach the reply route to a finished body, with the right separator for how that body ends. */
 const withReplyRoute = (d: TemplateData, body: string): string => `${body}${replyRoute(d, body)}`;
 
+/**
+ * THE GARAGE, AND WHERE IT CAME FROM — two fragments shared by the three garage alerts, so one
+ * garage reads identically in all of them. Every value is a string computed by
+ * lib/operator-alerts::garagePayload; this renders and escapes, and does nothing else.
+ */
+const row = (label: string, value: unknown): string =>
+  `<tr><td style="padding:2px 12px 2px 0;color:#475569;white-space:nowrap">${esc(label)}</td><td>${esc(value)}</td></tr>`;
+
+const garageTable = (d: TemplateData): string => `
+  <table style="font-size:14px;border-collapse:collapse">
+    ${row('Garage', d.garage)}${row('Legal name', d.legalName)}${row('Tenant ref', d.ref)}
+    ${row('Contact email', d.contactEmail)}${row('Phone', d.contactPhone)}${row('Country', d.country)}
+    ${row('Sites', d.sites)}${row('Plan', d.plan)}
+    ${row('Tenant status', d.tenantStatus)}${row('Subscription', d.subscriptionStatus)}
+    ${row('Registered', d.registered)}${row('Trial ends', d.trialEnds)}
+  </table>`;
+
+/** THE THREE AXES, KEPT APART — see lib/came-via. A blank for all three would read as one answer. */
+const cameViaTable = (d: TemplateData): string => `
+  <h3 style="margin:16px 0 4px;font-size:14px">Came via</h3>
+  <table style="font-size:14px;border-collapse:collapse">
+    ${row('Introduced by', d.introducedBy)}${row('How they heard of us', d.heardAbout)}${row('Campaign', d.campaign)}
+  </table>`;
+
 const button = (href: string, label: string): string =>
   `<p style="margin:24px 0"><a href="${esc(href)}" style="background:#2563eb;color:#fff;padding:12px 22px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:600">${esc(label)}</a></p>`;
 
@@ -604,6 +628,74 @@ export const NOTIFICATION_TEMPLATES = {
         <p>Press the button below to sign in. There is no password — this link is how you get in.</p>
         ${button(String(d.link ?? ''), 'Sign in')}
         <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
+    }),
+  },
+  // ── THE OWNER'S OWN ALERTS (slice G, 2026-10-30) ──────────────────────────────────────────────
+  // Four messages from GreaseDesk to GreaseDesk. They are `security: true` for a narrow reason:
+  // that flag is what stops a send counting against a garage's SMS allowance and what exempts it
+  // from the marketing opt-out machinery — and these are neither marketing nor a garage's message.
+  // They are addressed to US. Everything they print was formatted by lib/operator-alerts; nothing
+  // here does arithmetic or formats a date, so the email and the Engine Room say the same words.
+  //
+  // THEY NAME A PERSON'S DETAILS, which is why there is no unsubscribe link and no tenant scope:
+  // the recipient is the business owner reading his own post, not a subscriber.
+  alert_affiliate_joined: {
+    label: 'Alert to us — a new affiliate joined',
+    security: true,
+    email: (d) => ({
+      subject: `New affiliate: ${String(d.name ?? '')} (${String(d.refCode ?? '')})`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">A new affiliate joined</h2>
+        <table style="font-size:14px;border-collapse:collapse">
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Name</td><td><strong>${esc(d.name)}</strong></td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Email</td><td>${esc(d.email)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Mobile</td><td>${esc(d.mobile)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Mobile verified</td><td>${esc(d.smsVerified)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Email verified</td><td>${esc(d.emailVerified)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Code</td><td><strong>${esc(d.refCode)}</strong></td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Social handle</td><td>${esc(d.socialHandle)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">How they'll find garages</td><td>${esc(d.findMethod)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Joined</td><td>${esc(d.joined)}</td></tr>
+        </table>`),
+    }),
+  },
+  alert_garage_registered: {
+    label: 'Alert to us — a garage registered',
+    security: true,
+    email: (d) => ({
+      subject: `New garage: ${String(d.garage ?? '')} (${String(d.ref ?? '')})`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">A garage registered</h2>
+        ${garageTable(d)}
+        ${cameViaTable(d)}`),
+    }),
+  },
+  alert_garage_no_checkout: {
+    label: 'Alert to us — registered, no checkout after an hour',
+    security: true,
+    email: (d) => ({
+      subject: `No checkout after an hour: ${String(d.garage ?? '')} (${String(d.ref ?? '')})`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">Registered, and never reached checkout</h2>
+        <p style="font-size:14px">Registered ${esc(d.registered)} and has no payment method on file. Worth a call.</p>
+        ${garageTable(d)}
+        ${cameViaTable(d)}`),
+    }),
+  },
+  alert_first_payment: {
+    label: 'Alert to us — a trial became a paying customer',
+    security: true,
+    email: (d) => ({
+      subject: `First payment: ${String(d.garage ?? '')} — ${String(d.amount ?? '')}`,
+      html: shell(`
+        <h2 style="margin:0 0 8px">A trial became a paying customer</h2>
+        <table style="font-size:14px;border-collapse:collapse">
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Amount</td><td><strong>${esc(d.amount)}</strong></td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Paid</td><td>${esc(d.paidAt)}</td></tr>
+          <tr><td style="padding:2px 12px 2px 0;color:#475569">Invoice</td><td>${esc(d.invoiceRef)}</td></tr>
+        </table>
+        ${garageTable(d)}
+        ${cameViaTable(d)}`),
     }),
   },
   affiliate_welcome: {

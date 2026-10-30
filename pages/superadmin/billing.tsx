@@ -22,8 +22,15 @@ import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type CopyCheck = { url: string; shows: number | null; agrees: boolean };
 type PlanKindMap = Record<string, 'months' | 'pennies' | 'switch'>;
+type AlertRow = { id: string; label: string; subjectId: string | null; recipient: string; status: string; error: string | null; at: string };
 type State = {
   trialDays: number;
+  alertEmails: string[];
+  /** Where alerts go when nobody has chosen — shown, so an empty box never reads as "nobody". */
+  alertDefault: string;
+  alertRecipients: string[];
+  alerts: AlertRow[];
+  alertsFailed: number;
   planSettings: Record<string, number>;
   planLabels: Record<string, string>;
   planKinds: PlanKindMap;
@@ -46,12 +53,16 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
   const [pub, setPub] = useState<{ copy: CopyCheck[]; agrees: boolean } | null>(null);
   const [plan, setPlan] = useState<Record<string, string>>({});
   const [planBusy, setPlanBusy] = useState(false);
+  // One address per line, which is how a person writes a list.
+  const [alertTo, setAlertTo] = useState('');
+  const [alertBusy, setAlertBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await fetch('/api/superadmin/programme-settings');
     if (r.ok) {
       const d: State = await r.json();
       setS(d); setDays(String(d.trialDays));
+      setAlertTo((d.alertEmails ?? []).join('\n'));
       setPlan(Object.fromEntries(Object.entries(d.planSettings).map(([k, v]) => [k, String(v)])));
     }
   }, []);
@@ -79,7 +90,25 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
     }
   }
 
+  async function saveAlerts(e: React.FormEvent) {
+    e.preventDefault();
+    setAlertBusy(true); setMsg(null);
+    try {
+      const r = await fetch('/api/superadmin/programme-settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alertEmails: alertTo }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setMsg({ ok: r.ok, text: d.message || (r.ok ? 'Saved.' : 'Failed.') });
+      if (r.ok) await refresh();
+    } finally {
+      // Clear busy in the finally: a thrown fetch must not leave the button dead.
+      setAlertBusy(false);
+    }
+  }
+
   const dirty = s != null && String(s.trialDays) !== days.trim();
+  const alertsDirty = s != null && (s.alertEmails ?? []).join('\n') !== alertTo.trim();
   const planDirty = s != null && Object.entries(plan).some(([k, v]) => String(s.planSettings[k]) !== v.trim());
 
   async function savePlan(e: React.FormEvent) {
@@ -260,6 +289,67 @@ export default function ProgrammeBilling({ role }: { role: OperatorRoleName }) {
                 {planDirty && !planBusy && <span className="text-xs text-warn">Unsaved.</span>}
               </div>
             </form>
+          </div>
+        )}
+
+        {/* ── THE OWNER'S ALERTS ──────────────────────────────────────────────────────────────
+            The recipient list and the delivery record in one place. A list of addresses with no
+            evidence beside it is a setting nobody can tell is working, and these alerts fire from
+            a signup and a webhook that are deliberately not allowed to fail when a send does. */}
+        {s && (
+          <div className="rounded-xl border border-line bg-surface p-5">
+            <h2 className="text-sm font-semibold mb-1">Alerts to you</h2>
+            <p className="text-xs text-muted mb-3">
+              A new affiliate, a new garage, a garage that registered and never reached checkout after an hour,
+              and a trial becoming a paying customer.
+            </p>
+            <form onSubmit={saveAlerts} className="space-y-3">
+              <label className="block text-xs text-muted" htmlFor="alert-emails">One address per line</label>
+              <textarea id="alert-emails" data-testid="alert-emails" rows={3} value={alertTo}
+                onChange={(e) => setAlertTo(e.target.value)}
+                placeholder={s.alertDefault}
+                className={`${input} w-full font-mono text-xs`} />
+              <p className="text-xs text-muted" data-testid="alert-recipients">
+                {(s.alertEmails ?? []).length === 0
+                  ? `Nobody has chosen, so alerts go to ${s.alertDefault} — the address the contact form uses. Clearing this box restores that; it does not switch the alerts off.`
+                  : `Going to ${s.alertRecipients.join(', ')}.`}
+              </p>
+              <div className="flex items-center gap-3">
+                <button disabled={alertBusy || !alertsDirty} data-testid="save-alert-emails"
+                  className="bg-surface text-ink border border-line rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
+                  {alertBusy ? 'Saving…' : 'Save recipients'}
+                </button>
+                {alertsDirty && !alertBusy && <span className="text-xs text-warn">Unsaved.</span>}
+              </div>
+            </form>
+
+            <h3 className="text-xs font-semibold mt-5 mb-2">Recent alerts</h3>
+            {s.alertsFailed > 0 && (
+              <p className="text-xs text-danger mb-2" data-testid="alerts-failed">
+                {s.alertsFailed} alert{s.alertsFailed === 1 ? '' : 's'} could not be delivered. They are not retried
+                automatically once the attempts are used up — the reason is on the row below.
+              </p>
+            )}
+            {s.alerts.length === 0
+              ? <p className="text-xs text-muted" data-testid="alerts-none">Nothing sent yet.</p>
+              : (
+                <ul className="text-xs divide-y divide-line" data-testid="alert-log">
+                  {s.alerts.map((a) => (
+                    <li key={a.id} className="py-2 flex flex-wrap gap-x-3 gap-y-1" data-testid="alert-row">
+                      <span className="text-muted tabular-nums">{when(a.at)}</span>
+                      <span className="text-ink">{a.label}</span>
+                      <span className="text-muted">{a.recipient}</span>
+                      {/* THE WORD, not a colour: a failed row and a sent row must not be
+                          distinguishable only by something a printout or a colour-blind reader loses. */}
+                      <span data-testid="alert-status"
+                        style={{ color: a.status === 'sent' ? 'var(--ok)' : a.status === 'failed' ? 'var(--danger)' : 'var(--text-muted)' }}>
+                        {a.status}
+                      </span>
+                      {a.error && <span className="text-danger" data-testid="alert-error">{a.error}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
           </div>
         )}
       </div>
