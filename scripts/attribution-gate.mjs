@@ -167,9 +167,23 @@ try {
   const rep = await mkParty(`${PREFIX}REP`, { party_type: 'rep' });
   const susp = await mkParty(`${PREFIX}SUSP`, { suspended_at: new Date() });
   const dupA = await mkParty(`${PREFIX}DUP`);
-  // A DISTINCT EMAIL, because the two codes differ only by case and the email is derived from
-  // the code — the first draft collided on User.email and never reached the clause it exists for.
-  const dupB = await mkParty(`${PREFIX.toLowerCase()}dup`, { email: `${PREFIX.toLowerCase()}-dup-lower@example.invalid` });
+  // ── THE AMBIGUOUS PAIR CAN NO LONGER BE PLANTED (2026-10-30) ────────────────────────────────
+  // It used to be: two rows whose codes differ only by case, a distinct email on the second one,
+  // and a clause that findPartyByRefCode REFUSES rather than picks. Since
+  // Rep_ref_code_lower_uniq the database will not hold the pair at all, so the second create
+  // throws P2002 and this gate died before it reached anything.
+  //
+  // THE REFUSAL IS STILL ASSERTED, in two halves that between them say more than the old one did:
+  //   • the DATABASE refuses the pair — below, which is the guarantee;
+  //   • findPartyByRefCode still refuses when handed one — further down, against a STUB db, because
+  //     the only way to reach that branch now is to hand it two rows by hand.
+  // The branch is deliberately kept rather than deleted: it is what answers if the index is ever
+  // dropped, and a guard whose hazard has expired is only a blindfold when nobody says so.
+  const dupB = await mkParty(`${PREFIX.toLowerCase()}dup`, { email: `${PREFIX.toLowerCase()}-dup-lower@example.invalid` })
+    .then((r) => ({ ok: true, row: r }), (e) => ({ ok: false, err: e }));
+  check('the DATABASE refuses a second code differing only by case',
+    dupB.ok === false && /lower\(ref_code\)|unique/i.test(String(dupB.err?.message ?? '')),
+    dupB.ok ? 'IT WAS ACCEPTED — Rep_ref_code_lower_uniq is not doing its job' : String(dupB.err?.code ?? '').slice(0, 20));
 
   const m = (code) => AT.findPartyByRefCode(prisma, code);
   check('an affiliate code matches whatever case it was retyped in',
@@ -182,9 +196,21 @@ try {
   check('a suspended party is NAMED as suspended, not reported as unknown',
     (await m(`${PREFIX}SUSP`)).status === 'suspended',
     'they are different things to say and they get different messages');
+  // AGAINST A STUB DB, and that is the point: the index makes the state unreachable in the real
+  // one, so the only way to prove the matcher still refuses is to hand it the pair directly. It
+  // takes its db as a parameter, which is what makes this possible without a fixture.
+  const twoRows = [
+    { id: 'stub-a', ref_code: `${PREFIX}DUP`, party_type: 'affiliate', suspended_at: null, name: 'A', share_bp: 10000 },
+    { id: 'stub-b', ref_code: `${PREFIX.toLowerCase()}dup`, party_type: 'affiliate', suspended_at: null, name: 'B', share_bp: 10000 },
+  ];
+  const stubDb = { rep: { findUnique: async () => null, findMany: async () => twoRows } };
+  const ambiguous = await AT.findPartyByRefCode(stubDb, `${PREFIX}DUP`);
   check('two codes differing only by case REFUSE rather than pick one',
-    (await m(`${PREFIX.toLowerCase()}DUP`)).status === 'ambiguous',
-    `${dupA.ref_code} and ${dupB.ref_code} — paying the wrong person on an invisible difference`);
+    ambiguous.status === 'ambiguous' && (ambiguous.codes ?? []).length === 2,
+    `${JSON.stringify(ambiguous.codes)} — paying the wrong person on an invisible difference`);
+  check('  …and the real code still matches through the real database',
+    (await m(`${PREFIX}DUP`)).partyId === dupA.id,
+    'otherwise the stub above is the only thing being tested');
   check('an unknown code is unknown, and a blank one is not an error',
     (await m('ZZATTRNOSUCH')).status === 'none' && (await m('')).status === 'none' && (await m(null)).status === 'none');
 

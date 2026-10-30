@@ -1,0 +1,47 @@
+-- @migration: constraining it refuses an INSERT or UPDATE of Rep.ref_code that would make two codes differ only by case — the only write it can reject, and production has none
+--
+-- NO TWO REFERRAL CODES MAY DIFFER ONLY BY CASE (owner's ruling of 2026-10-28, measured again
+-- 2026-10-30 before this was written).
+--
+-- ── THE MEASUREMENT THIS WAITED ON ─────────────────────────────────────────────────────────────
+-- scripts/check-ref-code-case.mjs, read-only against production, 2026-10-30:
+--     target: production
+--     2 partner row(s): 2 rep, 0 affiliate.
+--     NO collisions: no two ref codes differ only by case.
+-- So this index can be created without rewriting or refusing anything that exists.
+--
+-- ── WHY IT IS NEEDED NOW ───────────────────────────────────────────────────────────────────────
+-- Affiliate codes are matched case-insensitively: a code is read off a card or a bio link and
+-- retyped by somebody who was never shown the capitals. lib/attribution::findPartyByRefCode
+-- already refuses an ambiguous fold -- `{ status: 'ambiguous' }`, two codes differing only by case
+-- -- which is correct and is also an admission that the state can exist. From this slice the
+-- public signup MINTS codes, so the state stops being hypothetical. This index makes it
+-- unreachable, which makes that refusal unreachable too.
+--
+-- ── ACROSS ALL PARTNER ROWS, NOT JUST AFFILIATES ───────────────────────────────────────────────
+-- A partial index on party_type = 'affiliate' would still allow 'ABC' on a rep and 'abc' on an
+-- affiliate. Both would resolve -- exactly, to DIFFERENT parties -- and a card printed 'Abc' would
+-- fold to the affiliate. One code typed by a human must mean one party, so the namespace is shared
+-- and the constraint is global.
+--
+-- ── WHY NOT A CHEAPER FORM ─────────────────────────────────────────────────────────────────────
+-- A CHECK that codes are stored in one case needs no index and causes no schema drift, and it was
+-- the first choice. Measured on production the same day: of the two rep codes, ZERO are all-upper
+-- and ZERO are all-lower -- they are mixed case. The CHECK could not be applied without rewriting
+-- live attribution keys that are printed on cards, so it is out.
+-- A folded SIBLING COLUMN with its own UNIQUE needs a backfill and a SET NOT NULL, which breaks
+-- every deployed INSERT into Rep until the code that fills it ships: the exact hazard the two-push
+-- policy exists for, and worse than this.
+--
+-- ── CONSTRAINING, AND HONESTLY SO ──────────────────────────────────────────────────────────────
+-- A UNIQUE INDEX on an existing table: a deployed writer could in principle breach it. The only
+-- insert it can refuse is one that would create a case-collision, which is the thing being
+-- forbidden, and production has none -- but the classification is the conservative one by design
+-- and this does not argue with it. Two pushes: the code first, then this.
+--
+-- ── IT IS AN EXPRESSION INDEX, WHICH PRISMA CANNOT DECLARE ─────────────────────────────────────
+-- There is no @@unique for lower(col), so this index lives in SQL only and prisma/schema.prisma
+-- carries a /// comment saying so. Whether `migrate diff` SEES it decides whether schema-drift-gate
+-- stays green; that is checked the moment this is applied, not assumed.
+
+CREATE UNIQUE INDEX "Rep_ref_code_lower_uniq" ON "Rep" (lower(ref_code));

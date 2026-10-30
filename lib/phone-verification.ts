@@ -21,11 +21,12 @@
  * never store one either, so `phone_e164` cannot hold junk.
  */
 import { prisma } from '@/lib/db';
+import { readEnvironment, revealTestOnlySecrets } from '@/lib/environment';
 import { toE164Digits } from '@/lib/contact-routes';
 import { issueCode, verifyCode, clearCodes, cooldownRemaining, CODE_TTL_MINUTES, type CodeSubject } from '@/lib/delivered-code';
-import { sendNotification } from '@/lib/notify';
+import { sendNotification, PLATFORM_SEND } from '@/lib/notify';
 import {
-  takeTokenStrict, SMS_LIMITS, smsSubjectKey, smsDestinationKey, smsIpKey, smsTenantKey,
+  takeTokenStrict, SMS_LIMITS, smsSubjectKey, smsDestinationKey, smsIpKey, smsTenantKey, smsPlatformKey,
 } from '@/lib/auth-rate-limit';
 
 export type SendRefusal =
@@ -36,6 +37,15 @@ export type SendRefusal =
   /** The adapter has no provider/key/sender — the feature is OFF, not broken. Visibly distinct from
    *  not_sent so nobody is told to retry against something that was never switched on. */
   | { code: 'sms_unavailable'; message: string }
+  /**
+   * THIS IS THE TEST DATABASE, so nothing was sent — and UNLIKE every other refusal here the code
+   * is still LIVE and is handed back, because a gate has to be able to finish the flow it is
+   * driving. Keyed on Environment.kind, a row inside the data: it travels with the data, so a
+   * connection string repointed at a copy of production cannot turn this on, and an UNREADABLE
+   * marker refuses the send without taking this branch. In production the marker says production
+   * (the migration that created it defaults to that), so this is unreachable there.
+   */
+  | { code: 'test_environment'; message: string; testCode: string }
   /** A DEMO tenant never sends. Its own code because the sms_unavailable sentence is FALSE here:
    *  texting is switched on, the tenant is a demo. Telling a demo user the product's messaging is
    *  broken is a lie about the product, told at the moment they are evaluating it. */
@@ -49,7 +59,17 @@ export type SendOk = { ok: true; destination: string; expiresInMinutes: number; 
  */
 export async function sendPhoneVerification(args: {
   subject: CodeSubject;
-  groupId: string;
+  /**
+   * The tenant whose allowance this spends, or PLATFORM_SEND for a message from GreaseDesk itself
+   * to somebody who is not a customer — an affiliate confirming their mobile at signup.
+   *
+   * IT IS SAID, NOT INFERRED FROM ABSENCE, for the reason lib/notify records at length: an absent
+   * tenant used to mean four different things at once, and three tenant-scoped guards fail OPEN
+   * without one. The platform case spends its own daily axis (SMS_LIMITS.perPlatform) rather than
+   * no axis at all — otherwise per-IP and per-destination are the only ceiling, and a caller
+   * rotating both has none.
+   */
+  groupId: string | typeof PLATFORM_SEND;
   rawPhone: string;
   ip: string;
   countryDialCode?: string;
@@ -104,7 +124,9 @@ export async function sendPhoneVerification(args: {
     takeTokenStrict(smsSubjectKey(args.subject.type, args.subject.id), SMS_LIMITS.perSubject.max, SMS_LIMITS.perSubject.windowMinutes),
     takeTokenStrict(smsDestinationKey(e164), SMS_LIMITS.perDestination.max, SMS_LIMITS.perDestination.windowMinutes),
     takeTokenStrict(smsIpKey(args.ip), SMS_LIMITS.perIp.max, SMS_LIMITS.perIp.windowMinutes),
-    takeTokenStrict(smsTenantKey(args.groupId), SMS_LIMITS.perTenant.max, SMS_LIMITS.perTenant.windowMinutes),
+    args.groupId === PLATFORM_SEND
+      ? takeTokenStrict(smsPlatformKey(), SMS_LIMITS.perPlatform.max, SMS_LIMITS.perPlatform.windowMinutes)
+      : takeTokenStrict(smsTenantKey(args.groupId), SMS_LIMITS.perTenant.max, SMS_LIMITS.perTenant.windowMinutes),
   ]);
   if (gates.some((g) => !g)) {
     // ONE MESSAGE for every axis. Telling somebody which limit they hit tells an attacker which
@@ -146,6 +168,38 @@ export async function sendPhoneVerification(args: {
 
 
   if (!sent.ok) {
+    // ── THE TEST DATABASE IS NOT AN OUTAGE, AND THE CODE MUST SURVIVE ───────────────────────────
+    // FIRST, before the code is cleared and before the generic "skipped" sentence, because both
+    // are wrong here. Until 2026-10-30 a gate driving a real verification got "text messaging isn't
+    // switched on for GreaseDesk yet" — false, it is switched on, this is the gate database — and
+    // the code it needed had already been deleted, so no flow could be driven to the end at all.
+    //
+    // The plaintext code goes back to the CALLER. It exists nowhere else: DeliveredCode stores
+    // sha256(code), so there is no reading it out of the table afterwards. Guarded by the same
+    // marker that refused the send, which fails closed in both other states — production sends, and
+    // an unreadable marker refuses WITHOUT taking this branch.
+    //
+    // THE MARKER IS THE WHOLE GUARD, AND THE SKIP CODE IS NOT PART OF IT.
+    //
+    // The first draft required `sent.skipCode === 'test_environment'`, which reads as careful and
+    // is a bug the gate caught on its first run: sendNotification checks whether the ADAPTER is
+    // configured BEFORE it checks which database this is, so on a machine with no SMS provider the
+    // skip is `not_configured` and this branch was never reached. The code was cleared, nothing came
+    // back, and a signup that ends in a texted code could not be driven to the end — the exact
+    // defect this branch was added to fix, surviving inside the fix.
+    //
+    // Whether the plaintext may be handed BACK is a question about WHICH DATABASE THIS IS, with
+    // three states, answered by the one predicate both test-only payloads share
+    // (lib/environment::revealTestOnlySecrets). Why the send did not happen is a different
+    // question, and it rides along in the message so a gate is never told "no message was sent"
+    // without being told why.
+    if (revealTestOnlySecrets(await readEnvironment())) {
+      return {
+        code: 'test_environment',
+        message: `This is the test database, so no message was sent (${sent.skipCode ?? sent.status}). The code is returned here instead.`,
+        testCode: (issued as { code: string }).code,
+      };
+    }
     // The code is now live but undeliverable. Drop it: leaving it would let the user sit on an
     // "enter the code" screen for a code that never left the building.
     await clearCodes(args.subject, 'phone_verify');

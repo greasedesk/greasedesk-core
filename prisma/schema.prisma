@@ -964,6 +964,14 @@ model Rep {
   /// THE FACT, NOT THE DATE. 18+ is checked at join from a date of birth that is never stored:
   /// we need to know they are old enough, not when they were born. NULL = not yet verified.
   age_verified_at   DateTime?
+  /// WHEN THIS ADDRESS WAS PROVED REACHABLE — a verification link we emailed was followed
+  /// (lib/affiliate-email-verify). NULL = not yet, which is the honest state for an affiliate who
+  /// signed up a minute ago and for every rep an operator created by hand.
+  ///
+  /// NOT a gate on anything. The mobile is what the signup checks, because a code typed back proves
+  /// a handset; this proves somebody reachable at the address opened an email. The first stamp wins:
+  /// a second confirmation does not move the date.
+  email_verified_at DateTime?
   find_method       String? // the join form's "how will you find garages" — NULL on a rep, who did not join that way
   social_handle     String? // optional, affiliate only. NULL = not given, which is most of them
   terms_accepted_at DateTime? // NULL = a rep, who signs no affiliate terms
@@ -973,7 +981,14 @@ model Rep {
   /// NEVER change it — the change is operator-only, in the Engine Room, and audited.
   email             String    @unique
   name              String
-  ref_code          String    @unique // the `?ref=<code>` marketing token that attributes a signup
+  /// the `?ref=<code>` marketing token that attributes a signup.
+  ///
+  /// THERE IS A SECOND UNIQUE INDEX ON THIS COLUMN THAT PRISMA CANNOT DECLARE:
+  /// Rep_ref_code_lower_uniq, on lower(ref_code), added 2026-10-30. Matching folds the case (a code
+  /// is retyped by somebody who never saw the capitals), so two codes differing only by case would
+  /// make lib/attribution answer `ambiguous` for both and nobody would be paid. There is no
+  /// @@unique for an expression, so it lives in SQL only and is recorded here instead.
+  ref_code          String    @unique
   country_code      String    @default("GB")
   /// THE PUBLISHED CONTACT NUMBER, and deliberately not the login email's neighbour.
   /// NULL = this rep has not published a number, which is an ordinary state and not a missing

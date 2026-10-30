@@ -190,6 +190,10 @@ const TIERS = {
     // The third public host. Needs the server AND the db: it moves the settings singleton to prove
     // the page's figures follow it, and puts it back in a registered teardown.
     'affiliate-site-gate',
+    // The signup. Needs the server AND the db, and it moves the Environment marker to `production`
+    // for two in-process calls — it declines outright if an SMS adapter is configured, so it can
+    // never send a real text to do it.
+    'affiliate-join-gate',
     'mot-banner-gate',
     'mot-urgency-gate',
     'customer-car-gate',

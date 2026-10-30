@@ -127,6 +127,17 @@ export const SMS_LIMITS = {
   perDestination: { max: 5, windowMinutes: 60 },
   perIp: { max: 10, windowMinutes: 60 },
   perTenant: { max: 100, windowMinutes: 60 * 24 },
+  /**
+   * THE PLATFORM'S OWN DAILY CEILING, for a send that belongs to no tenant — today the affiliate
+   * signup's mobile check, which is a message from GreaseDesk to somebody who is not a customer.
+   *
+   * It exists because the alternative was worse in both directions. Spending a tenant's allowance
+   * would bill a garage for a stranger's verification; spending NO axis at all would leave the
+   * per-IP and per-destination limits as the only ceiling, and a determined caller rotating both
+   * has no cap. The same number as perTenant, deliberately: there is no evidence either way yet,
+   * and a figure invented to look considered is worse than a figure copied for a stated reason.
+   */
+  perPlatform: { max: 100, windowMinutes: 60 * 24 },
 };
 
 export const smsSubjectKey = (t: string, id: string) => `sms:sub:${t}:${id}`;
@@ -134,6 +145,20 @@ export const smsSubjectKey = (t: string, id: string) => `sms:sub:${t}:${id}`;
 export const smsDestinationKey = (e164: string) => `sms:dst:${hashToken(e164)}`;
 export const smsIpKey = (ip: string) => `sms:ip:${ip}`;
 export const smsTenantKey = (groupId: string) => `sms:grp:${groupId}`;
+/** ONE key for every tenantless send. Not per-subject or per-anything: it is the total. */
+export const smsPlatformKey = () => 'sms:platform';
+
+/**
+ * THE AFFILIATE SIGNUP. A public POST that creates a row AND spends a text, so it is the tightest
+ * of the public keys and it is STRICT: a limiter outage refuses rather than opening an unmetered
+ * path to both. Five an hour per connection — a person signing up does it once, and the two retries
+ * a mistyped number needs are inside that.
+ *
+ * It is a SECOND ceiling, not the only one: sendPhoneVerification spends its own four axes on top
+ * (subject, destination, IP, and the platform's daily total). This one bounds the Rep rows.
+ */
+export const JOIN_LIMITS_BY_IP = { perIp: { max: 5, windowMinutes: 60 } };
+export const joinIpKey = (ip: string) => `join:ip:${ip}`;
 
 /**
  * ── RETENTION, AND WHY THE OPPORTUNISTIC PRUNE IS NOT ENOUGH ────────────────────────────────────
@@ -159,6 +184,7 @@ export const RATE_LIMIT_RETENTION_MINUTES =
     ...Object.values(REP_REQUEST_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(REF_CODE_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(WAITLIST_LIMITS_BY_IP).map((l) => l.windowMinutes),
+    ...Object.values(JOIN_LIMITS_BY_IP).map((l) => l.windowMinutes),
   );
 
 /**

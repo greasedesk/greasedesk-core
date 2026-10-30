@@ -606,6 +606,30 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
     }),
   },
+  affiliate_welcome: {
+    label: 'Affiliate welcome — code, link and sign-in',
+    // A SECURITY MESSAGE, for the reason rep_sign_in is: it CARRIES THE SIGN-IN LINK, which is the
+    // only way into the affiliate portal. A contact preference is a commercial-messaging right and
+    // was never a request not to receive one's own credential. It is also the email whose arrival
+    // is how we know the address is real, so suppressing it would leave an affiliate with a code
+    // and no way back in and nothing to show the address was ever reachable.
+    security: true,
+    email: (d) => ({
+      subject: 'Your GreaseDesk affiliate code',
+      html: shell(`
+        <h2 style="margin:0 0 8px">You’re in</h2>
+        <p>Your referral code is <strong style="font-size:18px;letter-spacing:1px">${esc(d.refCode ?? '')}</strong>.</p>
+        <p>Your link, which carries the code for them:<br>
+           <a href="${esc(d.referralLink ?? '')}">${esc(d.referralLink ?? '')}</a></p>
+        <p>A garage that signs up through either one gets ${esc(d.monthsGiven ?? '')} months for the price of
+           ${esc(d.monthsPaid ?? '')} on their first year, and you earn on the months they pay for.</p>
+        ${button(String(d.link ?? ''), 'Open your affiliate page')}
+        <p style="font-size:13px;color:#475569">That button signs you in — there is no password. It lasts
+           ${esc(d.expiryMinutes ?? 30)} minutes and works once; ask for another from the site whenever you need one.</p>
+        <p style="font-size:13px;color:#475569">UK advertising rules require affiliate content to be labelled as an
+           ad — “#ad” at the start of a post or description — and we ask everyone to do it.</p>`),
+    }),
+  },
   // ── PROSPECTING SEQUENCE — PLACEHOLDER COPY (2026-09-10) ───────────────────────────────────────
   // NOT FINAL: the wording and the video link are the owner's to write. What is final is the frame
   // every step shares — prospectFooter — because that is the compliance: who is writing, from where,

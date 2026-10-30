@@ -78,3 +78,26 @@ export async function environmentSendRefusal(db: any = defaultDb): Promise<SendR
   }
   return { refuse: false };
 }
+
+/**
+ * ── MAY A RESPONSE CARRY SOMETHING ONLY A GATE SHOULD SEE? ─────────────────────────────────────
+ * The one predicate behind every "test database only" payload — the SMS code
+ * (lib/phone-verification) and the email-verification URL (pages/api/affiliate-site/confirm). Both
+ * exist so a gate can drive a flow whose messages never leave the building; both would be a hole if
+ * they ever answered on production.
+ *
+ * ONE FUNCTION, TWO CALLERS, THREE STATES, and the third is the one that matters:
+ *   'test'        → yes. Nothing was sent, so the only copy is the one handed back.
+ *   'production'  → no. The message went out; a response carrying it as well would mean anybody who
+ *                   can post a form can read somebody else's code.
+ *   unreadable    → NO. The same ruling as the send refusal and for the same reason: an unreadable
+ *                   marker cannot rule out that this is production, and "we were not sure" is not a
+ *                   reason to hand out a credential. Refusing costs a gate run; the other way round
+ *                   costs an account.
+ *
+ * It takes the READ rather than calling readEnvironment itself, so a caller that has already read
+ * the marker does not read it twice, and so this stays pure and holdable by a clause.
+ */
+export function revealTestOnlySecrets(env: EnvironmentRead): boolean {
+  return env.kind === 'test';
+}

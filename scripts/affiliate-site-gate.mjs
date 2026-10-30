@@ -256,8 +256,11 @@ try {
   // behind it is a stub until the signup slice, and a stub is the point — a live button pointing at
   // nothing is worse than no button.
   const join = await ask(AFF_HOST, '/affiliate-site/join');
+  // THE SIGNUP ITSELF LANDED (slice D), so what is behind the button is the real form rather than
+  // the stub this clause was written against. It still asks the only question that matters here:
+  // the live button does not point at a 404. affiliate-join-gate holds the form's behaviour.
   check('  …and the button it shows does NOT point at a 404',
-    join.status === 200 && /data-testid="join-stub"/.test(join.body), `HTTP ${join.status}`);
+    join.status === 200 && /data-testid="join-form"/.test(join.body), `HTTP ${join.status}`);
   check('  …and the page still shows the terms, the steps and the questions',
     /data-testid="terms-card"/.test(open.body) && /data-testid="how-steps"/.test(open.body) && /data-testid="faq"/.test(open.body));
 
