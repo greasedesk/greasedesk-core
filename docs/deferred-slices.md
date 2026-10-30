@@ -316,22 +316,38 @@ the nightly backup. Cheap, and it converts "I cannot tell you" into an answer.
 
 ---
 
-## `BackupRun` has never had a row — boarded 2026-10-30
+## `BackupRun` has never had a row — DIAGNOSED AND FIXED 2026-10-30, kept for the lesson
 
-**The state.** The evidence spine for the nightly backup is built — the `BackupRun` table, the
-endpoint, the Engine Room screen, and a verdict that counts CONSECUTIVE failures and names the
-number. The table is **empty: zero rows, ever.** The backups themselves have been running and
-verifying; what is broken is the reporting leg, which fails before it can write.
+**The diagnosis on this board was wrong, and it was never measured.** It read: *"the workflow pipes
+the report into a reader that refuses a pipe."* Neither half was true. The workflow pipes nothing —
+the step is a bare `node scripts/backup-report.mjs verified` — and that script imports `_ts.mjs`
+only, never `_gate-preflight.mjs`, which is the only place the pipe guard lives. Acting on it would
+have changed an unrelated safety rule and left the cause untouched.
 
-**The cause.** The workflow pipes the report into a reader that refuses a pipe — the same
-refusal every gate carries, for the same reason (a reader closing early kills the producer
-mid-write). So the report step dies, and the row that would have recorded the run is never written.
-The owner deferred the fix on 2026-10-30 ("leave the backup-report fix for later") while the
-production incident was being worked.
+**The real cause.** `backup-report.mjs` has exactly one branch that exits **0** without writing:
+`BACKUP_RUN_URL` or `BACKUP_RUN_TOKEN` unset. That is deliberate — a backup that worked must not be
+reported as broken because its reporting is unconfigured — and every other path either exits 1 (a
+refusal, or any non-2xx, which fails the job) or posts successfully. **So a green job with an empty
+table is consistent with that branch and no other.** The two secrets had never been set.
 
-**Why it matters more than it looks.** The screen's verdict is derived from the rows. With no rows
-it cannot say "the backup has failed three nights running" — and it cannot say the opposite either.
-A clean verdict over an empty population is a positive report of safety that nothing supports.
+**And why nobody noticed:** the workflow's preflight step — written specifically so that *all* the
+missing secrets are named in one run, after nine nights of discovering them one at a time — checked
+six names and not these two. The omission was the whole defect.
+
+**Fixed** by adding them to the preflight as a `::warning::` rather than an error (failing the job
+would mean a backup not taken because its paperwork was unconfigured, which inverts the priority),
+and by making the unconfigured branch emit a GitHub annotation instead of a `console.error` in a
+log nobody opens.
+
+**THE LESSON, which is why this section stays.** The original entry was an inference I wrote while
+working on something else, in the same confident register as the measured items around it. It sat
+here for hours looking like a finding. A board item that names a cause should either carry the
+measurement or say plainly that it is a guess — otherwise the next person to pick it up changes the
+wrong file, and the real cause keeps its cover.
+
+**Still unverified from this machine:** that `BACKUP_RUN_TOKEN` on Vercel matches the GitHub secret.
+An unset variable and a wrong token both answer 401 — the route failing closed, by design. The
+symptom if they disagree is specific and loud: the report step fails the job with `HTTP 401`.
 
 ---
 

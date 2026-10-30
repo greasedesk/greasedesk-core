@@ -28,6 +28,11 @@ name: nightly-backup
 #   R2_SECRET_ACCESS_KEY  its secret
 #   R2_BUCKET             e.g. greasedesk-db-backups, with versioning ON and lifecycle per prefix
 #
+# AND TWO MORE, FOR THE REPORT — the backup runs without them, and records nothing:
+#   BACKUP_RUN_URL        https://greasedesk.com/api/backup-run  (the APEX; er. and affiliates. differ)
+#   BACKUP_RUN_TOKEN      must be the SAME VALUE as the BACKUP_RUN_TOKEN env var on Vercel, or the
+#                         endpoint answers 401 and the report step fails the job
+#
 # RETENTION is R2 lifecycle, by prefix, not this workflow's business: nightly/ 14 days, weekly/ 8
 # weeks, monthly/ 12 months. Versioning on, so a leaked key cannot erase history by overwriting.
 #
@@ -102,6 +107,8 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BACKUP_RUN_URL: ${{ secrets.BACKUP_RUN_URL }}
+          BACKUP_RUN_TOKEN: ${{ secrets.BACKUP_RUN_TOKEN }}
         run: |
           # Deliberately NOT -e: every missing name must be reported, not only the first.
           set -uo pipefail
@@ -110,6 +117,27 @@ jobs:
             if [ -z "${!n:-}" ]; then
               echo "  MISSING  $n"
               missing=$((missing + 1))
+            else
+              echo "  present  $n"
+            fi
+          done
+
+          # ── AND THE TWO THAT REPORT THE RUN — WARNED ABOUT, NOT FAILED ON ───────────────────────
+          # These were missing from this list for the whole life of the file, and that omission is
+          # why BackupRun had never held a row: backup-report.mjs exits 0 when they are unset, on
+          # purpose ("a backup that worked must not be reported as broken because the reporting is
+          # unconfigured") — so every night the dump, the upload and the restore-verify all passed,
+          # the job went green, and the one thing that tells the APP it happened quietly did not run.
+          # Eleven failures in September were invisible for the want of this table; an empty table
+          # is the same silence wearing a different coat.
+          #
+          # A WARNING AND NOT AN ERROR, deliberately. Failing the job here would mean a backup not
+          # taken because its paperwork was unconfigured, which inverts the priority. The point is
+          # only that "unreported" stops being something you have to go and read a log to discover.
+          for n in BACKUP_RUN_URL BACKUP_RUN_TOKEN; do
+            if [ -z "${!n:-}" ]; then
+              echo "::warning::$n is not set — this backup will run and verify, but NOTHING will be recorded in the app. The Engine Room's backup screen will still show nothing."
+              echo "  MISSING  $n  (reporting only — the backup itself continues)"
             else
               echo "  present  $n"
             fi
@@ -137,7 +165,7 @@ jobs:
             echo "  4. it is a VARIABLE (vars.*) rather than a SECRET (secrets.*)"
             exit 1
           fi
-          echo "all six secrets are visible to this job"
+          echo "all six required secrets are visible to this job"
 
       - uses: actions/checkout@v4
 

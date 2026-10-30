@@ -21,7 +21,14 @@ if (!STAMP) { console.error('backup-report: STAMP is not set'); process.exit(2);
 if (!BACKUP_RUN_URL || !BACKUP_RUN_TOKEN) {
   // NOT a hard failure: a backup that worked must not be reported as broken because the reporting
   // is unconfigured. It says so loudly instead, and the screen's 'none' state says the same thing.
-  console.error('backup-report: BACKUP_RUN_URL or BACKUP_RUN_TOKEN is not set — the backup is not reported');
+  //
+  // "LOUDLY" WAS A console.error IN A LOG NOBODY OPENS, and that is how BackupRun came to hold no
+  // row for its entire existence: green job, successful dump, successful restore-verify, and this
+  // line scrolling past in the middle of a step. A GitHub warning annotation surfaces on the run
+  // summary and in the Actions list, which is where somebody actually looks.
+  const which = [!BACKUP_RUN_URL && 'BACKUP_RUN_URL', !BACKUP_RUN_TOKEN && 'BACKUP_RUN_TOKEN'].filter(Boolean).join(' and ');
+  console.log(`::warning::${which} is not set — this backup ran but NOTHING was recorded in the app, so the Engine Room's backup screen still shows nothing.`);
+  console.error(`backup-report: ${which} is not set — the backup is not reported`);
   process.exit(0);
 }
 
