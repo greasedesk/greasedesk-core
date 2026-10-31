@@ -1,7 +1,5 @@
 # GreaseDesk Affiliate Terms
 
-Version 1 · effective from the date joining opens
-
 These are the terms you accept when you join the GreaseDesk affiliate programme at affiliates.greasedesk.com. They cover what you earn, when you are paid, and how you may promote GreaseDesk.
 
 ## 1. About these terms

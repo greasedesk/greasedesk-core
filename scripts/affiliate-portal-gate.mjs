@@ -26,7 +26,7 @@
  * ── THE ENCRYPTION KEY IS THIS PROCESS'S OWN ───────────────────────────────────────────────────
  * An ephemeral 32 bytes, set below. The in-process clauses therefore prove the real rules without
  * depending on a shared secret. The SERVER has its own environment, so the one clause that needs it
- * there probes for it and DECLINES with the reason rather than going green on a 503.
+ * there probes for it and FAILS with the reason rather than going green on a 503.
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
@@ -393,15 +393,30 @@ try {
     staffPost.status === 400 && /garage you introduced/.test(staffPost.body),
     `${staffPost.status} ${staffPost.body.slice(0, 80)}`);
   // THE SUCCESS PATH NEEDS THE SERVER'S OWN KEY, which this process cannot set. It is reported
-  // rather than asserted either way: a clause that passed on 200-or-503 would be vacuous, and one
-  // that demanded 200 would go red for an unconfigured environment instead of for a defect.
+  // asserted on its own terms: a clause that passed on 200-or-503 would be vacuous, and an absent
+  // key is reported as an absent key rather than as a defect in the route.
   const good = await ask(AFF_HOST, '/api/affiliate-portal/payee', {
     method: 'POST', cookie: jarEarly,
     body: JSON.stringify({ payeeKind: 'self', accountName: 'Served Payee', sortCode: '200000', accountNumber: '87654321' }),
   });
+  /**
+   * A MISSING KEY IS A RED, NOT A PRINTED NOTE.
+   *
+   * While the key was absent this printed a line and carried on, which is a silent skip wearing a
+   * circle: the gate reported "0 failures of 143" while the one path that actually stores a bank
+   * detail had never been exercised. declineToRun is the project's idiom for an unmet premise, but
+   * called from here it exits at once and would discard the hundred clauses that follow — one absent
+   * environment variable hiding the whole gate is the worse trade.
+   *
+   * So it fails, and the message says plainly that this is the environment rather than the code: a
+   * red that sends somebody hunting through the route costs an hour for nothing.
+   */
   if (good.status === 503) {
-    console.log('○ the browser-submit path is UNPROVEN here: the dev server has no PAYEE_ENC_KEY, so the');
-    console.log('  route correctly refused with 503. Set it in .env and restart to turn this into a clause.');
+    check('the dev server has a usable PAYEE_ENC_KEY', false,
+      'the route answered 503, which is it REFUSING to store a bank detail it cannot encrypt — correct '
+      + 'behaviour, and it means this environment cannot prove the submit path. Not a defect in the '
+      + 'route: put PAYEE_ENC_KEY (base64 of 32 bytes) in .env and RESTART the dev server, which reads '
+      + '.env at startup.');
   } else {
     check('  …and a good one is stored, encrypted, as a pending request', good.status === 200
       && (await prisma.repPayeeRequest.count({ where: { rep_id: affiliate.id, status: 'pending', account_last4: '4321' } })) === 1,
