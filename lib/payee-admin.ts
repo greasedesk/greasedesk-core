@@ -17,7 +17,8 @@
  */
 import type { PrismaClient } from '@prisma/client';
 import { prisma as defaultDb } from '@/lib/db';
-import { decryptPayee, payeeDigits } from '@/lib/payee-crypto';
+import { decryptPayee, payeeDigits, PayeeCipherError, PayeeKeyError } from '@/lib/payee-crypto';
+import { payeeKeyRefusal } from '@/lib/payee-key-check';
 import { formatSortCode, maskedForOwner } from '@/lib/payee';
 
 type Db = PrismaClient;
@@ -204,6 +205,15 @@ export async function revealPayee(
     return { ok: false, code: 'none_held', message: 'We hold no bank details for them.' };
   }
 
+  /**
+   * THE KEY MUST BELONG TO THIS DATABASE — checked before the audit row is written, so a reveal that
+   * cannot succeed does not leave a record saying somebody looked. With the wrong key the decrypt
+   * below would throw PayeeCipherError and the operator would be told the row was damaged; this says
+   * the true thing instead, which is that the environment holds the wrong key.
+   */
+  const keyRefusal = await payeeKeyRefusal(db);
+  if (keyRefusal) return { ok: false, code: keyRefusal.code, message: keyRefusal.message };
+
   try {
     await db.superAdminAudit.create({
       data: {
@@ -220,14 +230,38 @@ export async function revealPayee(
     return { ok: false, code: 'audit_failed', message: 'We could not record this look, so it was not shown.' };
   }
 
-  return {
-    ok: true,
-    value: {
-      accountName: rep.bank_account_name,
-      sortCode: formatSortCode(decryptPayee(rep.bank_sort_code)),
-      accountNumber: payeeDigits(decryptPayee(rep.bank_account_number)),
-    },
-  };
+  /**
+   * ── THE DECRYPT IS WRAPPED, AND THAT IS DEFENCE IN DEPTH RATHER THAN BELT AND BRACES ──────────
+   * The guard above should make this unreachable: a key that does not match this database never gets
+   * here. But a red-proof that removed the guard did not merely redden a clause — it threw
+   * PayeeCipherError out of this function and killed the caller, which in the Engine Room would be a
+   * 500 on a button press and an operator told nothing.
+   *
+   * So the throw is caught and turned into the same shape every other refusal has. The guard remains
+   * the thing that prevents it; this is what happens if the guard is ever bypassed, and the message
+   * names the likelier cause rather than blaming the row.
+   */
+  try {
+    return {
+      ok: true,
+      value: {
+        accountName: rep.bank_account_name,
+        sortCode: formatSortCode(decryptPayee(rep.bank_sort_code)),
+        accountNumber: payeeDigits(decryptPayee(rep.bank_account_number)),
+      },
+    };
+  } catch (e) {
+    if (e instanceof PayeeCipherError || e instanceof PayeeKeyError) {
+      console.error('[payee-admin] reveal passed the key check and still could not decrypt for', rep.id, e.message);
+      return {
+        ok: false,
+        code: 'undecryptable',
+        message: 'These details will not decrypt with the key this environment holds. The audit row above '
+          + 'records the attempt. Do not re-run it: check which key is deployed before anything else.',
+      };
+    }
+    throw e;
+  }
 }
 
 async function auditRep(

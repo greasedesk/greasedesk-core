@@ -23,7 +23,7 @@
  * fallback and never returns ciphertext as though it were a number. A bank detail we cannot encrypt
  * is a bank detail we do not take.
  */
-import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** The env var, named once so an error message and a setup check cannot disagree about it. */
 export const PAYEE_KEY_ENV = 'PAYEE_ENC_KEY';
@@ -156,6 +156,43 @@ export function decryptPayee(stored: string): string {
     );
   }
 }
+
+/**
+ * ── THE KEY'S FINGERPRINT: WHICH KEY IS THIS, WITHOUT SAYING WHAT IT IS ─────────────────────────
+ * The first 16 hex of HMAC-SHA256(key, "greasedesk-payee-key-check") — the key is the HMAC key and
+ * the label is the message, so the output is a one-way check value. Recovering the key from it
+ * means brute-forcing 256 bits; printing it, committing it and pasting it into a terminal are all
+ * safe, which is the whole point. It is NEVER the key and must never be treated as a secret.
+ *
+ * ── WHY IT EXISTS (owner, 2026-10-31) ───────────────────────────────────────────────────────────
+ * Because nothing could tell the gate key from the production key. Hand the gate key to a tool
+ * pointed at production and it would encrypt real bank details with it, report success, and leave
+ * digits that production can never decrypt — account_last4 and the name surviving in clear, so you
+ * would know whose details you had lost. There is no way to detect that after the fact and no way
+ * to detect it beforehand either, unless something already encrypted with the right key exists to
+ * test against. A fingerprint registered per environment is that something, and it works on a
+ * database with no rows at all — which is exactly when the mistake is invisible and worst.
+ *
+ * TRUNCATED TO 16 HEX (64 bits) deliberately: long enough that two keys colliding is not a thing
+ * that happens, short enough to read out loud and type back.
+ */
+export const PAYEE_KEY_CHECK_LABEL = 'greasedesk-payee-key-check';
+export const PAYEE_FINGERPRINT_HEX = 16;
+
+/** The fingerprint of an ARBITRARY key — for registering one, and for a gate to use a second key. */
+export function fingerprintOf(keyB64: string): string {
+  const key = Buffer.from(String(keyB64 ?? '').trim(), 'base64');
+  if (key.length !== KEY_BYTES) {
+    throw new PayeeKeyError(
+      `cannot fingerprint a key of ${key.length} bytes — AES-256 needs exactly ${KEY_BYTES}, and a `
+      + 'fingerprint of the wrong thing would be registered as if it were right.',
+    );
+  }
+  return createHmac('sha256', Uint8Array.from(key)).update(PAYEE_KEY_CHECK_LABEL).digest('hex').slice(0, PAYEE_FINGERPRINT_HEX);
+}
+
+/** The fingerprint of the key THIS PROCESS holds. Throws, like every other reader, when there is none. */
+export const payeeKeyFingerprint = (): string => fingerprintOf(payeeKey().toString('base64'));
 
 /** Digits only. What a person types has spaces and dashes in it; what we compare and store does not. */
 export const payeeDigits = (raw: string | null | undefined): string => String(raw ?? '').replace(/\D+/g, '');

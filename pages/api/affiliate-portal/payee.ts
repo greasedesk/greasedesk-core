@@ -21,6 +21,7 @@ import { prisma } from '@/lib/db';
 import { requireAffiliateApi } from '@/lib/rep-auth';
 import { refusePayee, normalisedPayee, refuseNomineeIsReferredStaff } from '@/lib/payee';
 import { encryptPayee, payeeLast4, PayeeKeyError } from '@/lib/payee-crypto';
+import { payeeKeyRefusal } from '@/lib/payee-key-check';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).end(); }
@@ -44,6 +45,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     nomineeEmail: clean.nomineeEmail,
   });
   if (staffRefusal) return res.status(400).json({ message: staffRefusal });
+
+  /**
+   * ── THE KEY MUST BELONG TO THIS DATABASE, CHECKED BEFORE ANYTHING IS ENCRYPTED ──────────────
+   * Not merely "a key exists". The gate key against production would encrypt real bank details into
+   * ciphertext production can never read — silently, with a 200 and a ✓. The fingerprint registered
+   * for this environment is what makes that detectable on a database with no rows in it.
+   *
+   * 503 AND NOT 400: the affiliate typed nothing wrong, and a 400 would send them back to correct a
+   * form that is already correct. The detail goes to the log, never to them.
+   */
+  const keyRefusal = await payeeKeyRefusal(prisma);
+  if (keyRefusal) {
+    console.error('[affiliate-portal/payee] REFUSED —', keyRefusal.code, '—', keyRefusal.message);
+    return res.status(503).json({ message: 'We cannot take bank details right now. Please try again shortly.' });
+  }
 
   let sortCodeEnc: string;
   let accountNumberEnc: string;

@@ -796,11 +796,15 @@ reseller site carry the identical fault — `/favicon-32x32.png` and `/apple-tou
 their tabs are blank while `/favicon.ico` answers 200 and hides it. One word each; deliberately not
 taken, because neither host was in this slice.
 
-**6. The browser payee-submit path is UNPROVEN until PAYEE_ENC_KEY is in .env.**
-STILL OPEN 2026-10-31 (second attempt): the owner reported the key was set; `.env` is the only env
-file in the checkout and a case-insensitive grep for "payee" finds no line in it. Reported rather
-than worked around, and no key generated here — the owner holds both values in his password manager
-by his own decision, and a key invented here would not be in it.
+**6. The browser payee-submit path — CLOSED 2026-10-31.** The key is in `.env`, the dev server was
+restarted to read it, and the submit is proved end to end: the form posts, the route answers 200, and
+the stored row holds `v1:` ciphertext with the plaintext nowhere in it.
+
+**The silent skip that hid it is the part worth keeping.** While the key was absent the gate printed
+a circle and carried on, reporting "0 failures of 143" with the only path that stores a bank detail
+never exercised. It now FAILS and names the environment rather than the route. Proved by removing
+the key and restarting: 1 failure of 146 — 146 because the two submit clauses cannot run and the
+premise clause stands in their place.
 Every payee RULE is proved in-process on an ephemeral key, and the route's REFUSALS (400s) are proved
 through the real server. What is not proved is a successful submit through the browser: the dev
 server has no key, so it correctly answers 503, and the gate PRINTS that rather than passing on it —
@@ -820,3 +824,64 @@ out of the body. Nothing published until he says.
 `officeOneLine()`, which yields "Unit 7 Tinsley Street, Tipton, England, DY4 7LH". The owner's draft
 omitted "England". Derived from the single source rather than typed, which is the right mechanism —
 but the exact registered address in a legal document is his to confirm.
+
+### THE PAYEE KEY NOW CARRIES A FINGERPRINT (owner's design, 2026-10-31) — BUILT
+
+**The hazard, in the owner's words: nothing could tell the gate key from the production key.** Point a
+tool at production holding the gate key and it encrypts real bank details with it, reports `✓`, and
+leaves digits production can never read. No error, nothing to notice afterwards — and nothing to
+notice beforehand either, because verifying a key needs something already encrypted with it and a
+fresh database holds nothing.
+
+**The mechanism, with no migration:** 16 hex of HMAC-SHA256(key, `greasedesk-payee-key-check`),
+registered per environment in `lib/payee-key-check` and compared against the ENVIRONMENT MARKER —
+a property of the database, not of whichever URL is pointed at it.
+
+    test        25607c7f6a3f0306      production  72fc846dc8d958fd
+
+A fingerprint is one-way, so committing, printing and reading it aloud are all safe. Four refusals,
+all failing closed: no key, unreadable marker, unregistered environment, mismatch. THREE CALLERS —
+the affiliate's payee POST, the owner's reveal, the one-off script — and the gate sweeps for a fourth
+that forgets.
+
+**THE ONE MISTAKE A FINGERPRINT CANNOT CATCH FOR YOU** is registering the same key for both: it would
+match everywhere and verify nothing. A clause holds them apart, red-proved by pasting the gate
+fingerprint into the production line (3 clauses red). The likeliest real mistake, because the gate
+fingerprint is the value already in front of you when you edit that file.
+
+**What `scripts/payee-key-fingerprint.mjs` deliberately does NOT do** is read `.env`. Only `lib/db`
+loads it in this codebase (measured), and that script never imports it — so the only source of a key
+is what you exported, and forgetting to export REFUSES rather than fingerprinting the gate key and
+letting it be registered as production's.
+
+**Two things fell out of the red-proofs and are now built:**
+  • `revealPayee` catches `PayeeCipherError` and returns a refusal. Removing the guard did not merely
+    redden a clause — the decrypt threw out of the function, which in the Engine Room is a 500 on a
+    button press with the operator told nothing. The guard still prevents it; this is the floor.
+  • `encrypt-rep-bank.mjs`: the DRY RUN needs no key (counting is the question you ask first, and the
+    answer decides whether a key is needed at all), `--yes-production` reads
+    `.migrate-target.production`, requires `--expect-rows=N` to match, prints the endpoint, and makes
+    a person type the endpoint id back on a TTY — refusing outright when stdin is not a terminal.
+
+### A LESSON FROM BREAKING .env (2026-10-31) — WORTH MORE THAN THE PROOF IT WAS DOING
+
+The server-side wrong-key proof swaps the key in `.env`, restarts and restores. The restore used
+`\Q$ORIG\E` on the REPLACEMENT side of a perl substitution — pattern-quoting syntax, which does not
+belong there — and left line 76 reading `PAYEE_ENC_KEY\=…`. The value was never damaged or exposed;
+the variable NAME was, so the app would simply not have seen it.
+
+**The hash check is what caught it, and the original line was in a sentinel file for exactly that.**
+The lesson is the asymmetry: the restore was VERIFIED with a hash and WRITTEN with a regex, and the
+regex was the part that needed the care. A verification that only tells you afterwards is worth
+having and is not a substitute for a restore that cannot go wrong — prefer an exact line replacement
+to a substitution whenever the thing being put back is somebody's secret.
+
+### SLICE E DEPLOY — WHERE IT GOT TO (2026-10-31 evening)
+
+  1. Production `PAYEE_ENC_KEY` in Vercel (Production) and the owner's password manager — DONE.
+  2. M2 (`20261031210000_affiliate_portal`) applied to production, exit 0 — DONE.
+  3. Count bank details on production — TOMORROW:
+         node scripts/encrypt-rep-bank.mjs --yes-production --expect-rows=0 > /tmp/enc.log 2>&1
+     Dry run, no key needed, refuses if the count is not 0. If it reports nothing to do, step 3 is
+     finished and `--write` is never needed.
+  4. Push — TOMORROW. Four commits unpushed. The terms are NOT published and wait for the solicitor.

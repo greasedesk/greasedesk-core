@@ -23,10 +23,10 @@
  * Documents, the audit rows this gate provokes, and its limiter tokens — all swept in a registered
  * teardown. Nothing touches the standing ZZ tenant.
  *
- * ── THE ENCRYPTION KEY IS THIS PROCESS'S OWN ───────────────────────────────────────────────────
- * An ephemeral 32 bytes, set below. The in-process clauses therefore prove the real rules without
- * depending on a shared secret. The SERVER has its own environment, so the one clause that needs it
- * there probes for it and FAILS with the reason rather than going green on a 503.
+ * ── THE ENCRYPTION KEY IS THE APPLICATION'S OWN ────────────────────────────────────────────────
+ * Read from .env, the same key the dev server holds, because the key now carries a fingerprint
+ * registered per environment and a gate holding a different one would test a different
+ * configuration. Absent, the premise clause in section 4c goes red and names the environment.
  */
 import './_gate-preflight.mjs';
 import './_ts.mjs';
@@ -36,9 +36,18 @@ const { randomUUID, randomBytes } = await import('node:crypto');
 const { readFileSync } = await import('node:fs');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
-// SET BEFORE lib/payee-crypto IS FIRST CALLED. The module reads process.env on every call rather
-// than caching at import, precisely so a gate can do this without depending on import order.
-process.env.PAYEE_ENC_KEY = randomBytes(32).toString('base64');
+/**
+ * ── THIS GATE USES THE REAL KEY FROM .env, NOT AN EPHEMERAL ONE (changed 2026-10-31) ────────────
+ * It used to mint its own 32 bytes here, so the payee rules could be proved without depending on a
+ * shared secret. That stopped being right the moment the key gained a FINGERPRINT registered per
+ * environment: an ephemeral key fingerprints as nothing the register knows, so every payee
+ * operation would refuse and the gate would be proving the refusal instead of the feature.
+ *
+ * More to the point, a gate holding a different key from the application is a gate testing a
+ * different configuration. .env is loaded by lib/db (the only loader in this codebase, measured),
+ * which gatePrisma imports — so by the time anything here runs, the app's own key is in hand.
+ * Without one, the premise clause in section 4c goes red and says so.
+ */
 
 const AM = await import('../lib/anchored-match.ts');
 const CRYPTO = await import('../lib/payee-crypto.ts');
@@ -412,11 +421,13 @@ try {
    * red that sends somebody hunting through the route costs an hour for nothing.
    */
   if (good.status === 503) {
-    check('the dev server has a usable PAYEE_ENC_KEY', false,
-      'the route answered 503, which is it REFUSING to store a bank detail it cannot encrypt — correct '
-      + 'behaviour, and it means this environment cannot prove the submit path. Not a defect in the '
-      + 'route: put PAYEE_ENC_KEY (base64 of 32 bytes) in .env and RESTART the dev server, which reads '
-      + '.env at startup.');
+    check('the dev server holds the payee key this database expects', false,
+      'the route answered 503, which is it REFUSING to store a bank detail it cannot encrypt. Correct '
+      + 'behaviour, and it means this environment cannot prove the submit path. TWO CAUSES look the '
+      + 'same from here and the likelier one is named first: the server holds a key whose fingerprint '
+      + 'is not the one registered for this database (lib/payee-key-check), or it holds no key at all. '
+      + 'Either way it is the environment and not the route: fix PAYEE_ENC_KEY in .env and RESTART the '
+      + 'dev server, which reads .env only at startup. The server log carries the exact refusal code.');
   } else {
     check('  …and a good one is stored, encrypted, as a pending request', good.status === 200
       && (await prisma.repPayeeRequest.count({ where: { rep_id: affiliate.id, status: 'pending', account_last4: '4321' } })) === 1,
@@ -861,6 +872,194 @@ try {
   check('  …and the payee route writes only the request table',
     /repPayeeRequest\.create/.test(src('pages/api/affiliate-portal/payee.ts')),
     'a proposal that could be paid would be the hole it exists to close');
+
+  // ── 14. THE KEY MUST BELONG TO THE DATABASE IT IS POINTED AT ─────────────────────────────────
+  console.log('\n— a key that is not this database’s is refused, on every side —');
+  const KC = await import('../lib/payee-key-check.ts');
+  const myKey = process.env.PAYEE_ENC_KEY;
+  const myFp = CRYPTO.payeeKeyFingerprint();
+  const otherKey = randomBytes(32).toString('base64');
+  const otherFp = CRYPTO.fingerprintOf(otherKey);
+
+  check('a fingerprint is 16 hex', /^[0-9a-f]{16}$/.test(myFp), myFp);
+  check('  …stable for the same key', CRYPTO.fingerprintOf(myKey) === myFp);
+  check('  …and different for a different key', otherFp !== myFp, `${myFp} vs ${otherFp}`);
+  // NOT A PROOF OF ONE-WAYNESS — that rests on HMAC-SHA256 — but it would catch the obvious
+  // disaster of a "fingerprint" that embedded the key, which is the mistake worth a clause.
+  check('  …and carries no part of the key', !myFp.includes(myKey.slice(0, 8)) && !myKey.includes(myFp),
+    'a prefix of a base64 key is a prefix of a key');
+  let shortKey = null;
+  try { CRYPTO.fingerprintOf(Buffer.from('short').toString('base64')); } catch (e) { shortKey = e; }
+  check('  …and a key of the wrong length cannot be fingerprinted at all', !!shortKey,
+    'a fingerprint of the wrong thing would be registered as if it were right');
+
+  check('the key in use is the one registered for this environment',
+    KC.refusePayeeKey('test', myFp) === null, `${myFp} is registered for test`);
+  /**
+   * ── BOTH ENVIRONMENTS ARE REGISTERED NOW, AND THE INTERESTING CLAUSE IS THAT THEY DIFFER ──────
+   * Registering the same key for both would match everywhere and check nothing — the one mistake a
+   * fingerprint cannot catch on its own, and the likeliest one, because the gate fingerprint is the
+   * one already in front of you when you edit that file.
+   */
+  const reg = KC.PAYEE_KEY_FINGERPRINTS;
+  check('both environments have a registered fingerprint',
+    /^[0-9a-f]{16}$/.test(reg.test ?? '') && /^[0-9a-f]{16}$/.test(reg.production ?? ''),
+    `test ${reg.test} · production ${reg.production}`);
+  check('  …and they are DIFFERENT keys', reg.test !== reg.production,
+    'the same key registered for both would satisfy every check and verify nothing');
+  check('  …so the gate key does not satisfy production', KC.refusePayeeKey('production', reg.test)?.code === 'fingerprint_mismatch',
+    'this is the exact hazard: a tool holding the gate key, pointed at production');
+  check('  …nor the production key this database', KC.refusePayeeKey('test', reg.production ?? '')?.code === 'fingerprint_mismatch',
+    'and the reverse, which is how a production key would reach a gate run');
+  // THE UNREGISTERED BRANCH, through an INJECTED register rather than by relying on a null in the
+  // real one — it is registered now, and a clause that needed it to stay null would have gone red
+  // the moment the owner did the thing the message asked for.
+  const unregistered = KC.refusePayeeKey('production', myFp, { test: reg.test, production: null });
+  check('an UNREGISTERED environment still refuses', unregistered?.code === 'fingerprint_unregistered');
+  check('  …naming where to record it', /PAYEE_KEY_FINGERPRINTS/.test(unregistered?.message ?? ''));
+  check('  …an unknown marker refuses rather than guessing',
+    KC.refusePayeeKey(null, myFp)?.code === 'environment_unknown');
+  check('  …no key at all is its OWN refusal, not a mismatch',
+    KC.refusePayeeKey('test', null)?.code === 'no_key',
+    '"you have the wrong key" and "you have no key" need different things done about them');
+  const mismatch = KC.refusePayeeKey('test', otherFp);
+  check('  …and the wrong key is a MISMATCH', mismatch?.code === 'fingerprint_mismatch');
+  check('    …printing both fingerprints, because neither is a secret',
+    (mismatch?.message ?? '').includes(otherFp) && (mismatch?.message ?? '').includes(myFp), mismatch?.message?.slice(0, 90));
+  check('    …and saying nothing was touched', /NOTHING has been read or written/i.test(mismatch?.message ?? ''));
+
+  // ── THE REVEAL SIDE, WITH THE WRONG KEY IN HAND ──────────────────────────────────────────────
+  // Driven in-process: lib/payee-crypto reads process.env on every call, so the key can be swapped
+  // without a restart. Restored immediately — every clause after this one needs the real one.
+  const auditBefore = await prisma.superAdminAudit.count({ where: { target_rep_id: affiliate.id, action: 'rep.bank_viewed' } });
+  process.env.PAYEE_ENC_KEY = otherKey;
+  const revealWrong = await PADMIN.revealPayee(prisma, { repId: affiliate.id, operatorUserId: operator.id });
+  process.env.PAYEE_ENC_KEY = myKey;
+  check('a reveal with the wrong key is REFUSED', revealWrong.ok === false && revealWrong.code === 'fingerprint_mismatch',
+    JSON.stringify(revealWrong).slice(0, 110));
+  check('  …before the audit row is written, so no "somebody looked" is recorded for a look that could not happen',
+    (await prisma.superAdminAudit.count({ where: { target_rep_id: affiliate.id, action: 'rep.bank_viewed' } })) === auditBefore,
+    'the guard sits above the audit write on purpose');
+  check('  …and it does NOT report the row as damaged',
+    !/damaged|will not decrypt/i.test(revealWrong.message ?? ''),
+    'the decrypt would have thrown PayeeCipherError and blamed the data; this names the environment');
+  check('  …while the right key still reveals',
+    (await PADMIN.revealPayee(prisma, { repId: affiliate.id, operatorUserId: operator.id })).ok === true);
+  /**
+   * AND IF THE GUARD IS EVER BYPASSED, IT STILL REFUSES RATHER THAN THROWING. Found by a red-proof
+   * that removed the guard: the decrypt threw out of revealPayee and killed the caller, which in the
+   * Engine Room is a 500 on a button press. Asserted here as a SHAPE, because the only way to reach
+   * it is to break the guard first.
+   */
+  const adminSrc = src('lib/payee-admin.ts');
+  check('  …and a decrypt that somehow still fails is a refusal, not a throw',
+    /catch \(e\)/.test(adminSrc) && /PayeeCipherError/.test(adminSrc) && /'undecryptable'/.test(adminSrc),
+    'an operator pressing a button should never be shown a stack trace about a sort code');
+
+  // ── THE ROUTE SIDE ───────────────────────────────────────────────────────────────────────────
+  // The SERVER holds its own environment, so a wrong key there needs a restart — proved separately
+  // as a red-proof. What is asserted here is that the route consults the guard BEFORE it encrypts,
+  // which is the ordering a later edit could quietly lose.
+  const routeSrc = src('pages/api/affiliate-portal/payee.ts');
+  check('the payee route consults the key guard', /payeeKeyRefusal/.test(routeSrc));
+  /**
+   * THE CALL, NOT THE IMPORT. The first version compared indexOf('payeeKeyRefusal'), which finds the
+   * IMPORT LINE at the top of the file — so it measured the import's position and could never go
+   * red. A red-proof that genuinely moved the guard below the encrypt left it green. One name, two
+   * subjects: the term has to be unique to the thing being asserted.
+   */
+  const guardAt = routeSrc.indexOf('await payeeKeyRefusal(prisma)');
+  const encryptAt = routeSrc.indexOf('encryptPayee(clean.sortCode)');
+  check('  …before it encrypts anything', guardAt > 0 && encryptAt > 0 && guardAt < encryptAt,
+    `guard at ${guardAt}, first encrypt at ${encryptAt} — checking after the encrypt is checking after the damage`);
+  check('  …and the reveal path consults it too', /payeeKeyRefusal/.test(src('lib/payee-admin.ts')));
+  check('  …and so does the one-off script', /payeeKeyRefusal/.test(src('scripts/encrypt-rep-bank.mjs')));
+
+  // ── AND THE SCRIPT SIDE, DRIVEN FOR REAL AGAINST A PLANTED PLAINTEXT ROW ─────────────────────
+  // The only way to reach the script's key check is to give it work: a Rep holding bank details in
+  // clear. Rep_bank_chk is all-three-or-none, so all three are planted.
+  const plain = await prisma.rep.create({
+    data: {
+      party_type: 'affiliate', email: `plain-${randomUUID().slice(0, 8)}${MARK}`, name: `${PREFIX} Plaintext`,
+      ref_code: `${PREFIX}P`, status: 'active',
+      bank_account_name: 'Plain Text', bank_sort_code: '309999', bank_account_number: '55555555',
+    },
+    select: { id: true },
+  });
+  made.repIds.push(plain.id);
+
+  /**
+   * THE CHILD'S STDOUT GOES TO A FILE, NOT A PIPE. _gate-preflight refuses a piped stdout, and the
+   * honest way past that is a file — not GATE_ALLOW_PIPE, which is the flag that let the nightly
+   * backup report nothing for nineteen nights.
+   */
+  const { openSync, readFileSync: readF, closeSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const runScript = (keyValue, args = ['--write']) => {
+    const logPath = `/tmp/zzap-enc-${randomUUID().slice(0, 8)}.log`;
+    const fd = openSync(logPath, 'w');
+    let status = 0;
+    try {
+      execFileSync('node', ['scripts/encrypt-rep-bank.mjs', ...args], {
+        cwd: `${process.cwd()}`, stdio: ['ignore', fd, fd],
+        env: { ...process.env, PAYEE_ENC_KEY: keyValue },
+      });
+    } catch (e) { status = e.status ?? -1; }
+    closeSync(fd);
+    return { status, out: readF(logPath, 'utf8') };
+  };
+
+  const wrongRun = runScript(otherKey);
+  check('the script REFUSES to write with a key that is not this database’s', wrongRun.status === 2,
+    `exit ${wrongRun.status}`);
+  check('  …naming the mismatch', /fingerprint_mismatch/.test(wrongRun.out), (wrongRun.out.match(/REFUSED.*/) ?? [''])[0].slice(0, 100));
+  check('  …and saying nothing was written', /NOTHING HAS BEEN WRITTEN/.test(wrongRun.out));
+  const afterWrong = await prisma.rep.findUnique({ where: { id: plain.id }, select: { bank_sort_code: true } });
+  check('  …and the row really is untouched', afterWrong.bank_sort_code === '309999',
+    'the clause that matters: a refusal that had already rewritten a row would be a refusal too late');
+  check('  …and it printed no digits', !wrongRun.out.includes('309999') && !wrongRun.out.includes('55555555'),
+    'a log file on a laptop is exactly where a sort code should not end up');
+
+  const dryRun = runScript('', []);
+  check('the DRY RUN needs no key at all', dryRun.status === 0 && /DRY RUN/.test(dryRun.out),
+    `exit ${dryRun.status} — counting is the question you ask first, and it decides whether a key is needed`);
+  check('  …and reports the row as needing work without touching it', /1 row\(s\) would change/.test(dryRun.out)
+    && (await prisma.rep.findUnique({ where: { id: plain.id }, select: { bank_sort_code: true } })).bank_sort_code === '309999',
+    (dryRun.out.match(/\d+ row\(s\) would change/) ?? [''])[0]);
+  check('  …and names the target and the marker it is pointed at',
+    /target\s+\w+/.test(dryRun.out) && /marker\s+test/.test(dryRun.out),
+    'migrate-apply prints the endpoint; this used to print nothing and could not say which database it had');
+
+  const rightRun = runScript(myKey);
+  check('the script encrypts with the RIGHT key', rightRun.status === 0 && /1 written/.test(rightRun.out),
+    (rightRun.out.match(/\d+ written.*/) ?? [''])[0]);
+  const afterRight = await prisma.rep.findUnique({
+    where: { id: plain.id }, select: { bank_sort_code: true, bank_account_number: true, bank_account_last4: true },
+  });
+  check('  …to v1: ciphertext, with the plaintext gone', CRYPTO.isPayeeEncrypted(afterRight.bank_sort_code)
+    && afterRight.bank_sort_code !== '309999' && CRYPTO.isPayeeEncrypted(afterRight.bank_account_number));
+  check('  …filling the last four in the same write', afterRight.bank_account_last4 === '5555', String(afterRight.bank_account_last4));
+  check('  …and it reads back with that key', CRYPTO.decryptPayee(afterRight.bank_sort_code) === '309999',
+    'round-tripped through the real script, not through this process');
+  /**
+   * IDEMPOTENCE, AS THE CLAIM ACTUALLY IS: nothing written, and the ciphertext BYTE-IDENTICAL.
+   * The first version of this pinned "0 written · 1 already done" and went red for a true reason —
+   * by this point the affiliate's own row is encrypted too, so the already-done count is 2. Pinning
+   * a count that legitimately moves is the defect property-gate discipline exists to stop; the
+   * durable claim is that a second run does not re-encrypt, which a fresh IV would reveal.
+   */
+  const cipherBefore = afterRight.bank_sort_code;
+  const secondRun = runScript(myKey);
+  check('  …and running it again writes nothing', secondRun.status === 0 && /0 written/.test(secondRun.out),
+    (secondRun.out.match(/\d+ written.*/) ?? [''])[0]);
+  check('    …leaving the ciphertext byte-identical, so it was skipped and not re-encrypted',
+    (await prisma.rep.findUnique({ where: { id: plain.id }, select: { bank_sort_code: true } })).bank_sort_code === cipherBefore,
+    'a re-encrypt would produce a different IV and the same plaintext — silently churning rows');
+
+  check('and production refuses without --yes-production — asserted on the source, since this is not production',
+    /--yes-production was not passed/.test(src('scripts/encrypt-rep-bank.mjs'))
+    && /process\.stdin\.isTTY/.test(src('scripts/encrypt-rep-bank.mjs')),
+    'the TTY requirement is what stops this running from CI or from an agent');
 
   console.log(`\n${out.filter((x) => x === 'F').length} failures of ${out.length}`);
 } catch (e) {
