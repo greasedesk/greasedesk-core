@@ -284,6 +284,31 @@ async function planShape(db: Db, groupId: string): Promise<string> {
 }
 
 /**
+ * THE OWNER'S MOBILE, WITH ITS STATE — three readings, not two.
+ *
+ * A number can be absent, GIVEN BUT NOT CONFIRMED (typed at signup, the step still outstanding),
+ * or confirmed by a code. All three are worth ringing; only the third is evidence the handset
+ * answered. Collapsing the middle one into "has a phone" would put an unproven number in front of
+ * somebody as though it had been checked, and collapsing it into "none" would hide the only number
+ * we have at exactly the moment the no-checkout alert wants it.
+ *
+ * Read from TwoFactorSecret, which is where the onboarding step both looks and writes — not from a
+ * copy, so the alert cannot disagree with the screen.
+ */
+async function ownerMobile(db: Db, userId: string | null): Promise<{ label: string; state: string }> {
+  if (!userId) return { label: 'not given', state: 'no admin user' };
+  const row = await (db as any).twoFactorSecret.findUnique({
+    where: { subject_type_subject_id: { subject_type: 'tenant', subject_id: userId } },
+    select: { phone_e164: true, phone_recorded_at: true, phone_verified_at: true },
+  });
+  if (!row?.phone_e164) return { label: 'not given', state: 'none on file' };
+  const pretty = formatPhone(row.phone_e164) ?? row.phone_e164;
+  if (row.phone_verified_at) return { label: pretty, state: 'confirmed by SMS' };
+  if (row.phone_recorded_at) return { label: pretty, state: 'confirmed' };
+  return { label: pretty, state: 'given at signup, not yet confirmed' };
+}
+
+/**
  * A GARAGE, AND WHERE IT CAME FROM. The three Came via axes are carried as three separate strings,
  * for the reason the screen keeps them apart: "nobody referred them" and "we don't know how they
  * heard of us" are different sentences, and only one of them is about money.
@@ -298,13 +323,14 @@ export async function garagePayload(db: Db, groupId: string): Promise<TemplateDa
       // trading name is set during onboarding, AFTER registration — so the one field that could
       // have told you who to ask for was the one field missing. Oldest first: the account that
       // registered is the one that will answer the phone.
-      users: { where: { role: 'ADMIN' }, orderBy: { created_at: 'asc' }, take: 1, select: { name: true, email: true } },
+      users: { where: { role: 'ADMIN' }, orderBy: { created_at: 'asc' }, take: 1, select: { id: true, name: true, email: true } },
       sites: { select: { site_name: true } },
       billing: { select: { subscription_status: true, stripe_customer_id: true, first_paid_at: true } },
     },
   });
   if (!g) return null;
   const via = await cameVia(db, groupId);
+  const mobile = await ownerMobile(db, g.users[0]?.id ?? null);
   const heard = via.heardAbout
     ? `${via.heardAbout.label}${via.heardAbout.other ? ` — “${via.heardAbout.other}”` : ''}`
     : 'not recorded';
@@ -319,10 +345,12 @@ export async function garagePayload(db: Db, groupId: string): Promise<TemplateDa
     // THE PERSON TO ASK FOR. Absent is stated, never blank — a missing row in an alert table reads
     // as a rendering fault rather than a fact about the garage.
     ownerName: g.users[0]?.name || g.users[0]?.email || 'not given',
-    // GROUPED SO IT CAN BE DIALLED. `07397387332` has to be transcribed by eye, and the
-    // no-checkout alert exists so somebody rings them. formatPhone hands back anything it does not
-    // recognise unchanged rather than inventing a country code.
-    contactPhone: formatPhone(g.phone) ?? 'not given',
+    // THE PERSON'S OWN MOBILE, from where the onboarding step verifies it — NOT Group.phone, which
+    // is the company's customer-facing number and is often unset at this point anyway. Read with
+    // its state, because an unconfirmed number is still worth ringing and the alert should not
+    // imply it was proven: see ownerMobile below.
+    contactPhone: mobile.label,
+    contactPhoneState: mobile.state,
     country: g.country_code ?? 'not chosen yet',
     // SITES ARE OFTEN ZERO HERE, and that is the truth rather than a gap: the site is named in the
     // onboarding step, which happens after registration. Named, so the alert does not read as a

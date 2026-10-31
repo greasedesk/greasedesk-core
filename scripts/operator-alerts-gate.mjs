@@ -436,10 +436,18 @@ try {
 
   // ── 10. WHAT THE EMAIL ACTUALLY SAYS ──────────────────────────────────────────────────────────
   console.log('\n— the email itself —');
-  // A PHONE, PLANTED. Without one `contactPhone` is "not given" and the grouping clause below
-  // passes over an absent value — a clause that cannot fail. The no-checkout alert exists so
-  // somebody rings them, so the number is part of the subject, not scenery.
-  await prisma.group.update({ where: { id: gid }, data: { phone: '07397387332' } });
+  // A MOBILE, PLANTED WHERE IT NOW LIVES — on the PERSON, unconfirmed, which is the state a
+  // signup leaves it in. Without one `contactPhone` is "not given" and the clauses below pass over
+  // an absent value. It is NOT planted on Group.phone: that is the company's customer-facing
+  // number, and reading it here was the defect.
+  const alertAdmin = await prisma.user.findFirst({
+    where: { group_id: gid, role: 'ADMIN' }, orderBy: { created_at: 'asc' }, select: { id: true },
+  });
+  await prisma.twoFactorSecret.deleteMany({ where: { subject_type: 'tenant', subject_id: alertAdmin.id } });
+  await prisma.twoFactorSecret.create({ data: {
+    subject_type: 'tenant', subject_id: alertAdmin.id, method: 'sms', secret: null,
+    phone_e164: '447397387332', phone_recorded_at: null, phone_verified_at: null, enabled: false,
+  } });
   const regPayload = await OA.garagePayload(prisma, gid);
   const rendered = TPL.NOTIFICATION_TEMPLATES.alert_garage_registered.email(regPayload);
   check('the subject names the garage and its ref',
@@ -474,8 +482,20 @@ try {
     && ownerName !== '' && ownerName !== 'not given'
     && rendered.html.includes(ownerName),
     `Contact: ${ownerName || '(blank)'}`);
-  check('  …and the phone is grouped so it can be dialled, not transcribed',
-    regPayload.contactPhone === '+44 7397 387332', `Phone: ${regPayload.contactPhone} (planted 07397387332)`);
+  check('  …and the mobile is grouped so it can be dialled, not transcribed',
+    regPayload.contactPhone === '+44 7397 387332', `Mobile: ${regPayload.contactPhone} (planted 447397387332)`);
+  /**
+   * THREE READINGS, NOT TWO. A number can be absent, given-but-unconfirmed, or confirmed by a
+   * code — and all three are worth ringing while only the last is evidence the handset answered.
+   * The alert must not imply an unproven number was checked, so it carries the state beside it.
+   */
+  check('  …and the alert says the number is NOT yet confirmed, rather than implying it was',
+    regPayload.contactPhoneState === 'given at signup, not yet confirmed'
+    && rendered.html.includes('not yet confirmed'),
+    `state: ${regPayload.contactPhoneState}`);
+  check('  …and it is read from where the onboarding step verifies it, not from Group.phone',
+    (await prisma.group.findUnique({ where: { id: gid }, select: { phone: true } }))?.phone === null,
+    'Group.phone is untouched, so the number in the alert can only have come from the 2FA row');
   // THE FORMATTER ITSELF, including what it must REFUSE to do. A formatter that puts +44 in front
   // of a foreign number produces something that looks dialable and is not.
   const PF = await import('../lib/phone-format.ts');

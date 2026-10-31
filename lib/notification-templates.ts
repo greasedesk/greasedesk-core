@@ -164,7 +164,9 @@ const garageTable = (d: TemplateData): string => `
   <table style="font-size:14px;border-collapse:collapse">
     ${row('Garage', d.garage)}${row('Legal name', d.legalName)}${row('Tenant ref', d.ref)}
     ${row('Contact', d.ownerName)}
-    ${row('Contact email', d.contactEmail)}${row('Phone', d.contactPhone)}${row('Country', d.country)}
+    ${row('Contact email', d.contactEmail)}
+    ${row('Mobile', d.contactPhone === 'not given' ? 'not given' : `${d.contactPhone} (${d.contactPhoneState})`)}
+    ${row('Country', d.country)}
     ${row('Sites', d.sites)}${row('Plan', d.plan)}
     ${row('Tenant status', d.tenantStatus)}${row('Subscription', d.subscriptionStatus)}
     ${row('Registered', d.registered)}${row('Trial ends', d.trialEnds)}

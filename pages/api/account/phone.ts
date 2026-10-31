@@ -70,7 +70,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const b = (req.body || {}) as { action?: string; phone?: string; code?: string; channel?: string };
 
     if (b.action === 'send') {
-      const raw = String(b.phone ?? '').trim();
+      /**
+       * NO NUMBER MEANS "THE ONE YOU ALREADY HAVE" — and only while it is UNCONFIRMED.
+       *
+       * A mobile given at signup is written to phone_e164 with phone_recorded_at NULL, so the step
+       * still stands. Asking the person to retype a number they gave us ten minutes ago is the
+       * friction the field was added to remove, but the GET deliberately MASKS the number, so the
+       * panel cannot put it back in the box without undoing that. This is the way through: the
+       * panel asks us to send to what we hold, and the number is never re-disclosed to the client.
+       *
+       * ONLY WHEN UNRECORDED. Once a number is confirmed, a blank send would be a way to make the
+       * product text a number the caller cannot see, repeatedly, on a session they may have stolen
+       * — so a confirmed account still has to type it to change or re-prove it, exactly as now.
+       * The rate limit and cooldown inside sendPhoneVerification apply either way.
+       */
+      let raw = String(b.phone ?? '').trim();
+      if (!raw && row?.phone_e164 && !row.phone_recorded_at) raw = row.phone_e164;
       if (!raw) return res.status(400).json({ code: 'bad_number', message: 'Enter your mobile number.' });
       // NOTE: the route does NOT clear codes. It used to, unconditionally, which silently defeated
       // the resend cooldown — clearing the row removed the timestamp the cooldown is measured from.

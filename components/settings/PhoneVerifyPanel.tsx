@@ -185,6 +185,28 @@ export default function PhoneVerifyPanel({ onDone, heading }: {
               about your account. We won’t use it for marketing, and we’ll never pass it on.
             </p>
           )}
+          {/* ── THE NUMBER THEY ALREADY GAVE US, OFFERED RATHER THAN RETYPED ──────────────────
+              An optional mobile at signup lands in phone_e164 with phone_recorded_at NULL, so this
+              step still stands and the code is still required. It is shown MASKED, because that is
+              what the GET returns and re-displaying a stored number in full would undo a
+              deliberate protection — the point here is to save the retyping, not to read the
+              number back. Sending with an empty box asks the server to use what it holds. ── */}
+          {state.phone && !state.recorded && !changing ? (
+            <div className="mb-3" data-testid="phone-on-file">
+              <p className="text-sm text-fg">
+                You gave us <strong data-testid="phone-on-file-masked">{state.phone}</strong> when you signed up.
+              </p>
+              <div className="flex flex-wrap gap-2 items-center mt-2">
+                <button type="button" disabled={busy || (!state.smsAvailable && !state.emailAvailable)}
+                  onClick={() => send()} className={primary} data-testid="phone-send-on-file">
+                  {busy ? 'Sending…' : 'Send the code to that number'}
+                </button>
+                <button type="button" className={secondary} onClick={() => setChanging(true)} data-testid="phone-use-another">
+                  Use a different number
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2 items-center">
             <input type="tel" inputMode="tel" autoComplete="tel" placeholder="07700 900123" value={phone}
               onChange={(e) => setPhone(e.target.value)} className={`${input} max-w-[14rem]`} data-testid="phone-input" />

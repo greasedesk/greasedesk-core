@@ -16,6 +16,7 @@ import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
 import { attributeAtSignup } from '@/lib/affiliate';
 import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/lib/signup-source';
 import { normaliseSignupMobile } from '@/lib/phone-format';
+import { toE164Digits } from '@/lib/contact-routes';
 import { alertGarageRegistered } from '@/lib/operator-alerts';
 
 type Payload = {
@@ -107,11 +108,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // personal-name default surviving because setup used to be skippable; it no longer is.
         data: {
           group_name: 'New garage', billing_email: emailNorm, trial_ends_at: await trialEndsAt(), signup_ref: signupRef,
-          // OPTIONAL MOBILE (owner, 2026-10-31), so somebody can be rung about getting set up —
-          // the "registered, no checkout after an hour" alert exists for exactly that call and had
-          // no number to show. Normalised here, not trusted from the browser: the client trims as a
-          // convenience and this is the side that decides. Blank stays NULL.
-          phone: normaliseSignupMobile(mobile),
           heard_about: heard, heard_about_other: heardOther,
           utm_source: utmParts.source, utm_medium: utmParts.medium, utm_campaign: utmParts.campaign,
         },
@@ -130,6 +126,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         select: { id: true, email: true, name: true },
       });
+
+      /**
+       * THE OPTIONAL MOBILE (owner, 2026-10-31) — the PERSON'S number, where the onboarding
+       * "Confirm your mobile number" step looks for it.
+       *
+       * ── WHY NOT Group.phone, WHICH IS WHERE IT WENT FIRST ──────────────────────────────────
+       * Group.phone is the COMPANY contact number — the customer-facing fallback when a site has
+       * none. A personal mobile given to "help you get set up" would have become the number this
+       * garage's own customers are given. And pages/api/setup-wizard counts the contact step
+       * complete on `!!(group.phone || group.whatsapp)`, so it would also have marked that step
+       * done and skipped it, which means the number was never confirmed by anybody.
+       *
+       * ── WHY phone_recorded_at STAYS NULL, AND WHY THAT IS THE WHOLE POINT ──────────────────
+       * lib/onboarding keys the phone step on `phone_recorded_at`, NOT on `phone_e164`. So a row
+       * with the number and no recorded-at is exactly the state wanted: the step still stands, the
+       * SMS code is still required, and the number is there to be offered rather than retyped.
+       * `enabled` false and `phone_verified_at` null for the same reason — nothing here is proof
+       * of anything, it is a number somebody typed into a signup form.
+       *
+       * toE164Digits is the comms spine's normaliser (lib/contact-routes); a second parser here
+       * would be a second answer to "what is this number".
+       */
+      const mobileE164 = toE164Digits(normaliseSignupMobile(mobile));
+      if (mobileE164) {
+        await tx.twoFactorSecret.create({
+          data: {
+            subject_type: 'tenant', subject_id: user.id,
+            method: 'sms', secret: null,
+            phone_e164: mobileE164,
+            // NOT recorded, NOT verified, NOT enabled. See above.
+            phone_recorded_at: null, phone_verified_at: null, enabled: false,
+          },
+        });
+      }
 
       // THE GARAGE'S FIRST TERMS ROW, in the SAME transaction as the garage. Outside it, a failure
       // between the two would leave a garage with no record of what it was offered — and the whole

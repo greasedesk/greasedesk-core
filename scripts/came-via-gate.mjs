@@ -41,6 +41,7 @@ const { underPath } = AM;
 const { readFileSync } = await import('node:fs');
 const R = '/Users/hugh/Developer/greasedesk-core';
 const PF = await import('../lib/phone-format.ts');
+const CR = await import('../lib/contact-routes.ts');
 const SS = await import('../lib/signup-source.ts');
 const CV = await import('../lib/came-via.ts');
 const AF = await import('../lib/affiliate.ts');
@@ -179,12 +180,16 @@ try {
     // clause about an absence can say the absence followed a decision rather than a dead page.
     const decided = cookiesAfter.find((c) => c.name === 'gd_consent');
     const functional = decided ? /%22functional%22%3Atrue|"functional":true/.test(decided.value) : null;
-    const user = await prisma.user.findUnique({ where: { email: addr }, select: { group_id: true } });
+    const user = await prisma.user.findUnique({ where: { email: addr }, select: { id: true, group_id: true } });
     const group = user && await prisma.group.findUnique({
       where: { id: user.group_id },
       select: { id: true, signup_ref: true, heard_about: true, heard_about_other: true, utm_source: true, utm_medium: true, utm_campaign: true, phone: true },
     });
-    return { group, cookiesAfter, consentRecorded: !!decided, functional };
+    const twoFa = user && await prisma.twoFactorSecret.findUnique({
+      where: { subject_type_subject_id: { subject_type: 'tenant', subject_id: user.id } },
+      select: { phone_e164: true, phone_recorded_at: true, phone_verified_at: true, enabled: true, method: true },
+    });
+    return { group, user, twoFa, cookiesAfter, consentRecorded: !!decided, functional };
   };
 
   const page0 = await (await browser.newContext()).newPage();
@@ -221,46 +226,55 @@ try {
     skipped.group?.heard_about === null && skipped.group?.heard_about_other === null
     && skipped.group?.utm_source === null && skipped.group?.utm_medium === null && skipped.group?.utm_campaign === null,
     'not "direct", not an empty string — an optional question that was not answered');
-  // THE MOBILE RIDES THE SAME ROUTE and must behave like the question above it: given, it lands;
-  // skipped, it is NULL. The alert that exists so somebody can ring a garage that never reached
-  // checkout had no number to show, which is why the field is there at all.
-  check('  …including the optional mobile', skipped.group?.phone === null,
-    `phone ${JSON.stringify(skipped.group?.phone)} — an empty string here is "they answered, with nothing"`);
+  // ── THE OPTIONAL MOBILE GOES WHERE THE STEP VERIFIES IT, AND NOWHERE ELSE ───────────────────
+  // It went to Group.phone first, which was wrong twice over: that column is the COMPANY's
+  // customer-facing number, and pages/api/setup-wizard counts the contact step done on
+  // `!!(group.phone || group.whatsapp)` — so a personal mobile would have become the number this
+  // garage's customers are given, and skipped the step that would have confirmed it.
+  check('a skipped mobile writes nothing at all', skipped.twoFa === null && skipped.group?.phone === null,
+    `2FA row ${JSON.stringify(skipped.twoFa)}, Group.phone ${JSON.stringify(skipped.group?.phone)}`);
   const rang = await signUp('mobile', { mobile: ' 07397 387332 ' });
-  check('a mobile typed at signup reaches Group.phone, trimmed and unreshaped',
-    rang.group?.phone === '07397 387332',
-    `stored ${JSON.stringify(rang.group?.phone)} from " 07397 387332 "`);
+  // DIGITS, NO '+'. That is what lib/contact-routes::toE164Digits returns and what
+  // confirmPhoneVerification already stores, so it is the column's convention — asserted against
+  // the HELPER rather than against a literal of my own, which is how I nearly "fixed" working code
+  // to match an assumption.
+  check('a mobile typed at signup lands on the PERSON, normalised by the comms spine',
+    rang.twoFa?.phone_e164 === CR.toE164Digits('07397 387332') && rang.twoFa?.phone_e164 === '447397387332',
+    `phone_e164 ${JSON.stringify(rang.twoFa?.phone_e164)} from " 07397 387332 "`);
+  check('  …and NOT on Group.phone, the company\'s customer-facing number',
+    rang.group?.phone === null, `Group.phone ${JSON.stringify(rang.group?.phone)}`);
+  check('  …unverified, unrecorded and not enabled — a number somebody typed, not proof of anything',
+    rang.twoFa?.phone_verified_at === null && rang.twoFa?.phone_recorded_at === null
+    && rang.twoFa?.enabled === false && rang.twoFa?.method === 'sms',
+    `verified ${rang.twoFa?.phone_verified_at} / recorded ${rang.twoFa?.phone_recorded_at} / enabled ${rang.twoFa?.enabled}`);
+
   /**
-   * AND IT PRE-FILLS THE STEP THAT ASKS FOR IT — SOURCE CHECKS, labelled as such.
-   *
-   * These are not driven through the screen, and the reason is worth writing down rather than
-   * hiding: a garage is NOT signed in immediately after signup — it goes to /check-email first —
-   * so there is no session here to ask /api/setup-wizard with, and inventing one would be testing
-   * a path no new garage takes. Driving it would mean signing in as a DIFFERENT tenant, whose
-   * phone is a different value, which would prove nothing about this one.
-   *
-   * What is asserted is that the wizard reads the SAME COLUMN this signup wrote — one value, not a
-   * copy. The column's value is asserted above, through the real form.
+   * AND THE STEP STILL STANDS. Driven through lib/onboarding itself rather than asserted from the
+   * source: the gate keys the phone step on `phone_recorded_at`, so this is the clause that proves
+   * writing the number did not quietly satisfy it. Asked for the garage that GAVE a mobile — the
+   * one where a mistake would show.
    */
-  const wizSrc = readFileSync(`${R}/pages/api/setup-wizard.ts`, 'utf8');
-  // hasKey, NOT a hand-rolled regex: `contact_details:` is a TS object key, and lib/anchored-match
-  // is the one place that anchoring rule lives — a key matcher written here would also match a
-  // longer name ending in the same word, which is the mistake the helper exists to prevent.
-  check('  …and the onboarding contact step is pre-filled from that same column',
-    AM.hasKey(wizSrc, 'contact_details', /\{\s*phone:\s*group\?\.phone\s*\?\?\s*''/),
-    'the wizard builds contact_details.phone from Group.phone — the column this signup wrote');
-  /**
-   * STATED, NOT SMUGGLED. With a phone on file that step also counts as SATISFIED, and the
-   * onboarding gate routes to the first INCOMPLETE step — so a garage that gives a mobile never
-   * sees the contact step and never confirms the number, which then serves as the customer-facing
-   * fallback (Group.phone's documented job). The owner decided that is acceptable (2026-10-31).
-   * This clause exists so the decision is VISIBLE the day somebody disagrees with it: when it has
-   * to change, the step needs a way to tell "given at signup" from "confirmed during setup", and
-   * that is a column, not a rewording.
-   */
-  check('  …and that step therefore reads as already done — the owner\'s decision, recorded here',
-    AM.hasKey(wizSrc, 'contact_details', /!!\(group\?\.phone\s*\|\|\s*group\?\.whatsapp\)/),
-    'a phone alone satisfies the step; if that must change it needs a confirmed-at column');
+  const OB = await import('../lib/onboarding.ts');
+  // COUNTRY FIRST, because the phone step is GB-only and sits BEHIND it: a fresh signup's first
+  // incomplete step is 'country', so asking about 'phone' before setting one would have been
+  // asserting about a step the gate had not reached. Planted on both garages so the two readings
+  // below differ in one thing only — whether a mobile was given.
+  for (const gid of [rang.group?.id, skipped.group?.id]) {
+    await prisma.group.update({ where: { id: gid }, data: { country_code: 'GB' } });
+  }
+  const stateWith = await OB.getOnboardingState(rang.group?.id, { userId: rang.user?.id, isAdmin: true });
+  check('the onboarding phone step still stands, with the number already on file',
+    stateWith.firstIncompleteStep === 'phone' && stateWith.onboarded === false,
+    `first incomplete: ${stateWith.firstIncompleteStep}`);
+  const stateWithout = await OB.getOnboardingState(skipped.group?.id, { userId: skipped.user?.id, isAdmin: true });
+  check('  …exactly as it does for a garage that gave no mobile — the number changes nothing here',
+    stateWithout.firstIncompleteStep === stateWith.firstIncompleteStep,
+    `with ${stateWith.firstIncompleteStep} / without ${stateWithout.firstIncompleteStep}`);
+  // NOT VACUOUS: if 'phone' were never the first incomplete step for either, both clauses above
+  // would agree about something else entirely and prove nothing about this field.
+  check('  …and that step is genuinely the one being asked about',
+    stateWith.firstIncompleteStep === 'phone', 'if this moves, the two clauses above stop being about the mobile');
+
   // THE STORAGE NORMALISER, including what it REFUSES. A column holding "ask me later" is worse
   // than an empty one: the alert built on it prints it to somebody about to dial.
   check('normaliseSignupMobile refuses what is not a number, rather than storing it',
