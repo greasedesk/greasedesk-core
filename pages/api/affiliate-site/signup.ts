@@ -97,6 +97,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       select: { id: true },
     });
     repId = created.id;
+
+    /**
+     * AND WHICH TERMS THEY ACCEPTED, as a row. terms_accepted_at above records THAT they accepted;
+     * this records WHAT, by the published document's version — so a later re-issue cannot make the
+     * stamp above look like agreement to words nobody showed them.
+     *
+     * NOTHING IS WRITTEN BEFORE THE DOCUMENT IS PUBLISHED, and that is the honest state rather than
+     * a gap: until then /terms renders the settled summary, which has no version, and inventing one
+     * would reference a document that does not exist. recordTermsAcceptance returns false and says
+     * so. It also must NOT fail the signup — somebody is mid-form — so it is caught and logged.
+     */
+    try {
+      const { resolvePublished } = await import('@/lib/content');
+      const { AFFILIATE_TERMS_SLUG, recordTermsAcceptance } = await import('@/lib/affiliate-terms');
+      const doc = await resolvePublished(prisma, AFFILIATE_TERMS_SLUG, 'GB');
+      await recordTermsAcceptance(prisma, { repId: created.id, version: doc?.version ?? null, documentId: doc?.id ?? null });
+    } catch (e) {
+      console.error('[affiliate-site/signup] terms acceptance NOT recorded for', created.id, e);
+    }
   }
 
   // ── THE TEXT. PLATFORM_SEND: a message from GreaseDesk to somebody who is not a customer, so it

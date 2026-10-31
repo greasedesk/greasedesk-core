@@ -197,6 +197,12 @@ const TIERS = {
     // The Engine Room side: the affiliates list, suspend/unsuspend, and the rule that a suspended
     // code earns nothing from that moment — which was selected and ignored until 2026-10-30.
     'affiliate-admin-gate',
+    // Slice E: the affiliate's OWN page. Needs the server AND the db — it signs in through a real
+    // emailed link in a real browser, reads the dashboard and the printable poster, and lifts the
+    // session cookie out of the browser to force it onto the rep host, which is the only way to put
+    // the party guard under the condition it exists for. It sets its own ephemeral PAYEE_ENC_KEY, so
+    // the payee rules are proved without depending on a shared secret.
+    'affiliate-portal-gate',
     // Slice G: the owner's four alert emails. Needs the server AND the db — it drives the real
     // signup and the real Engine Room, and every send is refused by the environment marker.
     'operator-alerts-gate',

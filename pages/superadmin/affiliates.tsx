@@ -33,9 +33,19 @@ type Row = {
   mobile: string | null; mobileVerifiedAt: string | null; emailVerifiedAt: string | null;
   termsAcceptedAt: string | null; suspendedAt: string | null; socialHandle: string | null;
   garages: Garage[]; earnedPennies: number; payablePennies: number; heldPennies: number;
+  bankMasked: string | null;
 };
 type Entry = { id: string; email: string; audience: string | null; created_at: string };
-type Props = { role: OperatorRoleName; affiliates: Row[]; entries: Entry[]; joiningOpen: boolean; holdDays: number };
+type ReferredPerson = { name: string | null; email: string; garage: string };
+type PayeeReq = {
+  id: string; affiliateId: string; affiliateName: string; refCode: string; payeeKind: string;
+  accountName: string; masked: string; nomineeEmail: string | null; requestedAt: string;
+  referredPeople: ReferredPerson[]; currentMasked: string | null;
+};
+type Props = {
+  role: OperatorRoleName; affiliates: Row[]; entries: Entry[]; joiningOpen: boolean; holdDays: number;
+  payeeRequests: PayeeReq[];
+};
 
 const AUDIENCE_LABEL: Record<string, string> = { trade: 'Motor trade', creator: 'Content' };
 const money = (p: number) => `£${(p / 100).toFixed(2)}`;
@@ -52,10 +62,39 @@ const Verified = ({ at, what }: { at: string | null; what: string }) => (
   </span>
 );
 
-export default function AffiliatesScreen({ role, affiliates, entries, joiningOpen, holdDays }: Props) {
+export default function AffiliatesScreen({ role, affiliates, entries, joiningOpen, holdDays, payeeRequests }: Props) {
   const [rows, setRows] = useState<Row[]>(affiliates);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [reqs, setReqs] = useState<PayeeReq[]>(payeeRequests);
+  /**
+   * THE REVEALED DIGITS LIVE IN COMPONENT STATE AND NOWHERE ELSE — not in the page's props, not in
+   * localStorage, not in a URL. They arrive only in the response to a deliberate POST that has
+   * already written an audit row, and they are gone on the next navigation.
+   */
+  const [revealed, setRevealed] = useState<Record<string, { accountName: string | null; sortCode: string; accountNumber: string }>>({});
+
+  async function payeeAction(body: Record<string, unknown>, key: string): Promise<any> {
+    setBusy(key); setMsg(null);
+    try {
+      const r = await fetch('/api/superadmin/payee-request', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setMsg(d?.message || 'That did not work.'); return null; }
+      if (Array.isArray(d?.requests)) setReqs(d.requests);
+      return d;
+    } catch { setMsg('We could not reach the server.'); return null; }
+    finally { setBusy(null); }
+  }
+
+  async function reveal(affiliateId: string) {
+    // SAID BEFORE IT HAPPENS, because the look itself is the recorded act and cannot be undone.
+    if (typeof window !== 'undefined'
+      && !window.confirm('Show these bank details? The look is recorded against your operator account.')) return;
+    const d = await payeeAction({ action: 'reveal', affiliateId }, `reveal:${affiliateId}`);
+    if (d?.value) setRevealed((prev) => ({ ...prev, [affiliateId]: d.value }));
+  }
 
   async function toggle(row: Row) {
     const suspend = !row.suspendedAt;
@@ -89,6 +128,88 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
           {' '}Change it under <span className="text-ink">Billing</span>.
         </p>
         {msg && <p className="mt-3 text-sm text-ink" data-testid="affiliate-msg">{msg}</p>}
+
+        {/* ── PAYEE REQUESTS, FIRST, BECAUSE THEY ARE THE ONLY THING HERE THAT IS WAITING ON ME ──
+            An affiliate cannot be paid until these are applied, so a pending one is a blocked
+            payment rather than a notification. The list is absent when empty — not an empty table,
+            which reads as a feature that is not working. */}
+        {reqs.length > 0 && (
+          <>
+            <h2 className="mt-8 text-base font-semibold text-ink">
+              Bank details waiting for you{' '}
+              <span className="text-muted font-normal" data-testid="payee-request-count">({reqs.length})</span>
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              An affiliate proposes these; nothing is paid until you apply one. Applying copies the
+              encrypted values across without showing them — revealing is a separate, recorded act.
+            </p>
+            <div className="mt-4 space-y-4" data-testid="payee-request-list">
+              {reqs.map((q) => (
+                <div key={q.id} className="border border-line rounded-lg p-4 bg-surface" data-testid="payee-request-row">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-ink font-medium">
+                        {q.affiliateName} <span className="text-xs text-muted font-mono">{q.refCode}</span>
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        {q.payeeKind === 'nominee' ? 'Pay a nominated person' : 'Pay the affiliate'} · asked {when(q.requestedAt)}
+                      </p>
+                      <p className="mt-2 text-sm text-ink" data-testid="payee-request-account">
+                        {q.accountName} — <span className="font-mono">{q.masked}</span>
+                      </p>
+                      <p className="text-xs text-muted">
+                        {q.currentMasked
+                          ? <>Replaces the account ending <span className="font-mono">{q.currentMasked}</span></>
+                          : 'We hold no details for them yet.'}
+                      </p>
+                      {q.nomineeEmail && (
+                        <p className="mt-2 text-xs text-ink" data-testid="payee-request-nominee">
+                          Nominee: <span className="font-mono">{q.nomineeEmail}</span>
+                        </p>
+                      )}
+                      {/* THE TWO LISTS, SIDE BY SIDE. lib/payee refuses an exact email match and says
+                          in its header why it will not compare names — so the control is a person
+                          looking at the nominee next to the people at the garages they introduced.
+                          Printing them is what makes that control exist. */}
+                      {q.payeeKind === 'nominee' && (
+                        <div className="mt-2 text-xs text-muted" data-testid="payee-request-referred">
+                          {q.referredPeople.length === 0 ? (
+                            'They have referred no garages, so there is nobody for this to be.'
+                          ) : (
+                            <>
+                              <span className="text-ink">People at the garages they introduced:</span>
+                              <ul className="mt-1 space-y-0.5">
+                                {q.referredPeople.map((pp) => (
+                                  <li key={pp.email}>{pp.name ?? '(no name)'} · {pp.email} · {pp.garage}</li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right space-y-2">
+                      <button onClick={() => payeeAction({ action: 'apply', requestId: q.id }, `apply:${q.id}`)}
+                        disabled={busy === `apply:${q.id}`} data-testid="payee-apply"
+                        className="block w-full text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
+                        Apply
+                      </button>
+                      <button onClick={() => {
+                        const reason = typeof window === 'undefined' ? '' : (window.prompt('Why are you rejecting it?') ?? '');
+                        if (!reason.trim()) return;
+                        payeeAction({ action: 'reject', requestId: q.id, reason }, `reject:${q.id}`);
+                      }}
+                        disabled={busy === `reject:${q.id}`} data-testid="payee-reject"
+                        className="block w-full text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <h2 className="mt-8 text-base font-semibold text-ink">
           The affiliates <span className="text-muted font-normal" data-testid="affiliate-count">({rows.length})</span>
@@ -130,6 +251,29 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
                     <p className="text-xs text-muted">
                       Payable {money(a.payablePennies)} · held {money(a.heldPennies)}
                     </p>
+                    {/* THREE STATES: details held, details revealed on this screen now, or none on
+                        file. "None" is said in words rather than left as an empty line, because a
+                        blank here reads as a screen that failed to load something. */}
+                    {a.bankMasked ? (
+                      revealed[a.id] ? (
+                        <p className="mt-2 text-xs text-ink font-mono" data-testid="payee-revealed">
+                          {revealed[a.id].sortCode} · {revealed[a.id].accountNumber}
+                        </p>
+                      ) : (
+                        <>
+                          <p className="mt-2 text-xs text-muted" data-testid="payee-held">
+                            Bank <span className="font-mono">{a.bankMasked}</span>
+                          </p>
+                          <button onClick={() => reveal(a.id)} disabled={busy === `reveal:${a.id}`}
+                            data-testid="payee-reveal"
+                            className="mt-1 text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
+                            Show bank details
+                          </button>
+                        </>
+                      )
+                    ) : (
+                      <p className="mt-2 text-xs text-muted" data-testid="payee-none">No bank details</p>
+                    )}
                     <button onClick={() => toggle(a)} disabled={busy === a.id}
                       data-testid={a.suspendedAt ? 'affiliate-unsuspend' : 'affiliate-suspend'}
                       className="mt-2 text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
@@ -220,6 +364,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   const { prisma } = await import('@/lib/db');
   const { currentTerms } = await import('@/lib/affiliate');
   const { listAffiliates, HOLD_DAYS } = await import('@/lib/affiliate-admin');
+  const { listPayeeRequests } = await import('@/lib/payee-admin');
 
   // OLDEST FIRST on the waiting list: it is a queue, and the order people asked in is the order
   // they are told in. The affiliates are newest first — that is a list, not a queue.
@@ -229,6 +374,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   });
   const terms = await currentTerms(prisma);
   const affiliates = await listAffiliates(prisma);
+  const payeeRequests = await listPayeeRequests(prisma as any);
 
   return {
     props: {
@@ -248,6 +394,7 @@ export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
         garages: a.garages.map((g) => ({ ...g, referredAt: g.referredAt.toISOString() })),
       })),
       entries: rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() })),
+      payeeRequests: payeeRequests.map((q) => ({ ...q, requestedAt: q.requestedAt.toISOString() })),
     },
   };
 };

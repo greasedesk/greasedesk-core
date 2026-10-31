@@ -747,3 +747,48 @@ each flagged line to its MODEL first (parse the current `schema.prisma`, find th
 holds that exact field line), then check that model's table in the SQL. Red-prove that a NOT NULL
 column with no database default on an EXISTING table still blocks — that is the case the whole rule
 is for, and it is the one a narrowing can quietly lose.
+
+## SLICE E LEFT SIX THINGS ON THE BOARD (2026-10-31)
+
+**1. `AffiliatePayout` — M1, deferred by the owner to November with the payout-run screen.**
+Until it exists there is NO record of money sent to an affiliate, and the portal says so in those
+words: `paidRecorded: false` and "No payouts yet" rather than "£0.00 paid". That distinction is
+asserted in affiliate-portal-gate and red-proved — flipping the flag reddens two clauses. When the
+table lands, the shape is two tables (the payout, and which accruals it settled) so that paid,
+payable and held cannot drift apart; the design is in this session's transcript.
+
+**2. Bake the terms figures AT PUBLISH TIME.**
+`/terms` substitutes `{{reward}}`, `{{holdDays}}` and the rest from ProgrammeSettings at RENDER
+time, which is what the owner asked for — a reward change cannot leave the terms contradicting the
+programme. The cost: change a setting and the text of an already-published version changes under it,
+so the version stamp alone no longer reproduces what an affiliate accepted. `RepTermsAcceptance`
+records the version, and the per-garage money is frozen separately in `TenantAffiliateTerms`, so
+nothing is wrong today. The fix is to substitute when the document is PUBLISHED, leaving the stored
+body literal; that is a change to the content publish path, shared with the legal documents.
+
+**3. The affiliate dashboard formats money as GBP, literally.**
+`CommissionEntry` carries its own `currency`, and the portal passes `{ currency: 'GBP' }`. True
+today because admission is GB-only through one allow-list — and exactly the kind of label that reads
+right until it does not. The honest version reads the currency off the ledger and REFUSES to total a
+mixed set rather than picking one. Not now; it is a sum nobody can currently make wrong.
+
+**4. Delete the legacy plaintext branch in lib/payee-crypto, once the one-off has run.**
+`decryptPayee` returns an unprefixed value unchanged, so plaintext written before the module existed
+stays readable and the order of apply / deploy / re-encrypt does not matter. That is a hole whose
+premise expires the moment `scripts/encrypt-rep-bank.mjs --write` has been run against a database:
+after that, nothing should be plaintext again, and the branch could only be reached by a row written
+around the chokepoint. Add the gate clause that asserts every stored value is `v1:`-prefixed, then
+remove the branch. A guard whose premise has expired is a blindfold.
+
+**5. The favicon gap is open on er. and reps. too.**
+`ICON_ASSETS` in middleware.ts is allowed on the affiliate host only. The Engine Room and the
+reseller site carry the identical fault — `/favicon-32x32.png` and `/apple-touch-icon.png` 404, so
+their tabs are blank while `/favicon.ico` answers 200 and hides it. One word each; deliberately not
+taken, because neither host was in this slice.
+
+**6. The browser payee-submit path is UNPROVEN until PAYEE_ENC_KEY is in .env.**
+Every payee RULE is proved in-process on an ephemeral key, and the route's REFUSALS (400s) are proved
+through the real server. What is not proved is a successful submit through the browser: the dev
+server has no key, so it correctly answers 503, and the gate PRINTS that rather than passing on it —
+a clause green on 200-or-503 would be vacuous. Set the key, restart, and the gate turns that line
+into a clause.

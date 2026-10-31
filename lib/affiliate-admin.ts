@@ -14,7 +14,12 @@
  * screen is a read of the row that decided it.
  */
 import { prisma as defaultDb } from '@/lib/db';
-import { AFFILIATE_HOLD_DAYS, rewardIsPayable } from '@/lib/affiliate';
+import { AFFILIATE_HOLD_DAYS } from '@/lib/affiliate';
+// THE SUM LIVES IN ONE PLACE. It used to be written out below; the affiliate's own
+// dashboard needs the same four figures, and a second copy of the arithmetic is how the
+// Engine Room and the portal come to disagree about what we owe somebody.
+import { earningsFrom } from '@/lib/affiliate-earnings';
+import { maskedForOwner } from '@/lib/payee';
 
 type Db = any; // a PrismaClient or an interactive-transaction client
 
@@ -53,6 +58,12 @@ export type AffiliateRow = {
    */
   payablePennies: number;
   heldPennies: number;
+  /**
+   * ••••1234, or null when we hold nothing. THE MASK AND NOT THE DIGITS: this is a LIST, and a list
+   * is not a reveal. It comes from Rep.bank_account_last4, which is stored in clear precisely so
+   * that showing "we hold an account ending 1234" costs no key and writes no audit row.
+   */
+  bankMasked: string | null;
 };
 
 /**
@@ -67,6 +78,9 @@ export async function listAffiliates(db: Db = defaultDb, now: Date = new Date())
     select: {
       id: true, name: true, email: true, ref_code: true, created_at: true,
       email_verified_at: true, terms_accepted_at: true, suspended_at: true, social_handle: true,
+      // NOT bank_sort_code and NOT bank_account_number. Four digits answer "do we hold an account
+      // and is it the one I expect"; the rest is a reveal, and a reveal has its own endpoint.
+      bank_account_last4: true,
     },
   });
   if (reps.length === 0) return [];
@@ -115,13 +129,8 @@ export async function listAffiliates(db: Db = defaultDb, now: Date = new Date())
       };
     });
     const ledger = entries.filter((e: any) => e.party_id === r.id);
-    const earnedPennies = ledger.reduce((n: number, e: any) => n + e.amount_pennies, 0);
-    // PAYABLE IS ABOUT THE ACCRUALS' OWN DATES. A clawback is netted off the total but does not
-    // have a hold of its own to mature past — it is money going back, not money becoming sendable.
-    const payablePennies = ledger
-      .filter((e: any) => e.kind === 'accrual' && rewardIsPayable({ paidAt: e.created_at, now }))
-      .reduce((n: number, e: any) => n + e.amount_pennies, 0)
-      + ledger.filter((e: any) => e.kind === 'clawback').reduce((n: number, e: any) => n + e.amount_pennies, 0);
+    // Both floors at zero, and the reason for each, are in lib/affiliate-earnings. They were here.
+    const sums = earningsFrom(ledger, now);
     const phone = phoneBy.get(r.id) as any;
     return {
       id: r.id,
@@ -136,11 +145,10 @@ export async function listAffiliates(db: Db = defaultDb, now: Date = new Date())
       suspendedAt: r.suspended_at,
       socialHandle: r.social_handle,
       garages,
-      earnedPennies,
-      // NEVER BELOW ZERO ON THE SCREEN: a net-negative payable is a clawback waiting for the next
-      // accrual, which is what the ledger means, and "-£30 payable" reads as a demand for money.
-      payablePennies: Math.max(0, payablePennies),
-      heldPennies: Math.max(0, earnedPennies - Math.max(0, payablePennies)),
+      bankMasked: r.bank_account_last4 ? maskedForOwner(r.bank_account_last4) : null,
+      earnedPennies: sums.earnedPennies,
+      payablePennies: sums.payablePennies,
+      heldPennies: sums.heldPennies,
     };
   });
 }

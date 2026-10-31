@@ -33,6 +33,7 @@
  * and no link pointed at it — which is why the move is a middleware change rather than a migration.
  */
 import { NextResponse } from 'next/server';
+import { portalSignInPath, portalHomePath } from '@/lib/party-portal';
 import type { NextRequest } from 'next/server';
 import { underPath } from '@/lib/anchored-match';
 
@@ -78,6 +79,19 @@ const isRepSite = (p: string) => underPath(p, '/rep-site') || underPath(p, '/api
  * somewhere that does not share a path prefix with a public apex endpoint.
  */
 const isAffiliateSite = (p: string) => underPath(p, '/affiliate-site') || underPath(p, '/api/affiliate-site');
+/**
+ * THE AFFILIATE PORTAL'S PUBLIC ADDRESSES. Spelled from lib/party-portal's table rather than typed
+ * again — middleware cannot import a module that reaches the database, and party-portal is a leaf
+ * with no imports at all precisely so that this file and the email templates can share it.
+ */
+const AFFILIATE_PORTAL = {
+  signIn: portalSignInPath('affiliate'),
+  home: portalHomePath('affiliate'),
+  poster: '/poster',
+  enterPrefix: '/enter',
+};
+/** The portal's own endpoints. A separate prefix from /api/affiliate-site, which is public. */
+const isAffiliatePortalApi = (p: string) => underPath(p, '/api/affiliate-portal');
 const isAuth = (p: string) => underPath(p, '/api/auth'); // shared: operator login on er., tenant login on apex
 const isNextInternal = (p: string) => underPath(p, '/_next'); // matcher already drops /_next/static + image
 /**
@@ -94,6 +108,29 @@ const isNextInternal = (p: string) => underPath(p, '/_next'); // matcher already
  * production while working on a case-insensitive laptop.
  */
 const BRAND_ASSET = '/greasedesk-Logo.png';
+
+/**
+ * THE FAVICON SET — and the affiliate site had no icon for exactly this reason (measured, 2026-10-31).
+ *
+ * pages/_document.tsx links four icons globally, so every host asks for them. On the affiliate host
+ * /favicon.ico answered 200 (Next serves that one itself) while /favicon-32x32.png and
+ * /apple-touch-icon.png were 404 — and a browser prefers the sized PNG link over the .ico, so the
+ * tab came up blank. The asset was never missing; the door was shut.
+ *
+ * An EXACT-MATCH SET, by the same rule as BRAND_ASSET above: these are the same public icons the
+ * marketing site already serves to anyone, they carry no tenant data and no behaviour, and a prefix
+ * or wildcard here would re-open /public. Case is part of the match.
+ *
+ * NOT YET OPENED ON er. OR reps. Both carry the identical gap and neither was asked for; adding
+ * those hosts is one word each, deliberately left for the owner rather than taken.
+ */
+const ICON_ASSETS = new Set([
+  '/favicon.ico',
+  '/favicon-16x16.png',
+  '/favicon-32x32.png',
+  '/apple-touch-icon.png',
+]);
+const isIconAsset = (p: string) => ICON_ASSETS.has(p);
 
 const notFound = () => new NextResponse('Not Found', { status: 404 });
 
@@ -194,7 +231,28 @@ export function middleware(req: NextRequest) {
     // at URLs that 404 here. The apex files are untouched.
     if (pathname === '/robots.txt') return NextResponse.rewrite(new URL('/affiliate-site/robots.txt', req.url));
     if (pathname === '/sitemap.xml') return NextResponse.rewrite(new URL('/affiliate-site/sitemap.xml', req.url));
-    if (isAffiliateSite(pathname) || isAuth(pathname) || isNextInternal(pathname) || pathname === BRAND_ASSET) return NextResponse.next();
+    /**
+     * ── THE PORTAL. BARE ADDRESSES, FILES UNDER /affiliate-portal ───────────────────────────────
+     * The same arrangement as /join and /terms above, and for the same two reasons: /signin and
+     * /dashboard are what a person types, and the page FILES keep 404ing on the apex for free
+     * because nothing rewrites them there.
+     *
+     * THE PATHS COME FROM lib/party-portal, which is also what mintRepLink builds the emailed link
+     * from. Writing them again here would be a second home for an address, and the one that gets
+     * updated is never the one in the email.
+     *
+     * /affiliate-portal/* IS NOT IN THE ALLOW-LIST BELOW, deliberately. A rewrite does not re-enter
+     * middleware, so these four reach their files; a CLIENT asking for the internal path gets the
+     * 404 at the end. The folder name is ours, not an address.
+     */
+    if (pathname === AFFILIATE_PORTAL.signIn) return NextResponse.rewrite(new URL('/affiliate-portal/signin', req.url));
+    if (pathname === AFFILIATE_PORTAL.home) return NextResponse.rewrite(new URL('/affiliate-portal/dashboard', req.url));
+    if (pathname === AFFILIATE_PORTAL.poster) return NextResponse.rewrite(new URL('/affiliate-portal/poster', req.url));
+    if (underPath(pathname, AFFILIATE_PORTAL.enterPrefix)) {
+      return NextResponse.rewrite(new URL(`/affiliate-portal${pathname}`, req.url));
+    }
+    if (isAffiliatePortalApi(pathname) || isAffiliateSite(pathname) || isAuth(pathname) || isNextInternal(pathname)
+      || pathname === BRAND_ASSET || isIconAsset(pathname)) return NextResponse.next();
     return notFound(); // the tenant app, the Engine Room and the reseller site all 404 here
   }
 
@@ -221,7 +279,18 @@ export function middleware(req: NextRequest) {
   // Its former apex page, /reseller, is a 308 to this host — see the apex branch below.
   // NOTE WHAT IS *NOT* HERE: /api/affiliate. check-code is a public apex endpoint — see
   // isAffiliateSite above — and closing it would break the referral prefill on /register.
-  if (isEngineRoom(pathname) || isRepPortal(pathname) || isRepSite(pathname) || isAffiliateSite(pathname)) return notFound();
+  //
+  // THE AFFILIATE PORTAL'S API IS CLOSED HERE TOO, and it was not until it was measured (2026-10-31):
+  // the apex answered /api/affiliate-portal/request-link with 405 — "wrong method" — which is the
+  // route saying it EXISTS. The two other hosts 404'd it, so the gap was only on the one host that
+  // falls through by design. Not exploitable, because the session cookie is host-only and the guard
+  // fails closed without one; closed anyway, because "one door per surface" is the rule and an
+  // endpoint that answers at all on the wrong host is a door.
+  //
+  // The portal's PAGES need no entry here: nothing on the apex rewrites the bare addresses, so
+  // /signin and /dashboard 404 on the apex for free. It is only the api prefix, which is real.
+  if (isEngineRoom(pathname) || isRepPortal(pathname) || isRepSite(pathname) || isAffiliateSite(pathname)
+    || isAffiliatePortalApi(pathname)) return notFound();
   return NextResponse.next(); // tenant app unchanged
 }
 

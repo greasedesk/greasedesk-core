@@ -521,8 +521,11 @@ try {
   // deciding, and the next platform template will not be called that.
   const TENANT_LINE = 'on behalf of your garage';
   const PLATFORM_AUDIENCE = new Set([
-    // Affiliate and operator mail — the six the owner named.
-    'rep_sign_in', 'affiliate_welcome',
+    // Affiliate and operator mail — the six the owner named, plus the portal's own sign-in link
+    // (slice E). affiliate_sign_in is GreaseDesk writing to a partner about THEIR page; "on behalf
+    // of your garage" would be a claim about a relationship they do not have. This clause is what
+    // made the choice explicit rather than inherited — it went red the moment the template existed.
+    'rep_sign_in', 'affiliate_welcome', 'affiliate_sign_in',
     'alert_affiliate_joined', 'alert_garage_registered', 'alert_garage_no_checkout', 'alert_first_payment',
     // And cold outreach, which cannot say "on behalf of your garage" either: a prospect is not a
     // customer and has no garage on our books. Found because a bad key regex in the footer change

@@ -1088,6 +1088,17 @@ model Rep {
   bank_account_name   String?
   bank_sort_code      String? // NULL with the other two — see Rep_bank_chk above
   bank_account_number String? // NULL with the other two — see Rep_bank_chk above
+  /// THE LAST FOUR DIGITS, IN CLEAR, so "ending ••34" costs no key and writes no audit row.
+  /// The two columns above hold AES-256-GCM ciphertext (lib/payee-crypto, v1:<iv>:<tag>:<ct>) once
+  /// the one-off has run, and decrypting is a REVEAL — owner-only and audited. An affiliate looking
+  /// at their own dashboard is not a reveal and must not be recorded as one; this column is what
+  /// keeps that read off the key.
+  ///
+  /// NOT inside Rep_bank_chk. A CHECK on this table reaches a deployed writer, which is what would
+  /// make the migration constraining; the pairing is held by having ONE writer set all four together
+  /// (the Engine Room apply path) and a gate clause that reads back what it left.
+  /// NULL = we hold no bank details, or the row predates the column and the one-off has not run.
+  bank_account_last4  String?
 
   status     String   @default("active") // 'active' | 'suspended'
   created_at DateTime @default(now())
@@ -1100,6 +1111,94 @@ model Rep {
   prospects_created_by_rep Prospect[]             @relation("Prospect_created_by_rep_id")
   prospect_visits          ProspectVisit[]
   tenantAffiliateTerms     TenantAffiliateTerms[]
+  payee_requests           RepPayeeRequest[]
+  terms_acceptances        RepTermsAcceptance[]
+}
+
+/**
+ * WHAT THE AFFILIATE PROPOSES WE PAY, AND WHO DECIDES IT.
+ *
+ * ── WHY A REQUEST AND NOT A FORM THAT WRITES Rep.bank_* ─────────────────────────────────
+ * Rep's bank columns are operator-write-only on purpose, and the reason is in lib/rep-magic-link's
+ * header: there is no password, the link IS the credential, and the mailbox IS the account. A
+ * self-serve bank form would therefore let whoever holds the inbox redirect the money.
+ *
+ * The dashboard still has to collect the details, so the two correct rules are reconciled by a third
+ * state rather than by overriding one of them: the affiliate proposes HERE, the owner applies it in
+ * the Engine Room, and only that write touches Rep.bank_*. NOTHING IS EVER PAID FROM THIS TABLE —
+ * it is a proposal, and a proposal that could be paid would be the hole it exists to close.
+ *
+ * ── WHAT IS ENCRYPTED, AND WHAT THAT BUYS ────────────────────────────────────────────
+ * sort code and account number: AES-256-GCM (lib/payee-crypto). The account NAME is plaintext — it
+ * is a person's name and it has to print on a remittance, so encrypting it would cost "paying
+ * J Smith" on the approval screen and buy nothing.
+ *
+ * It protects a DATABASE DUMP — a Neon branch, a stolen connection string, the nightly R2 dump — and
+ * NOT an attacker holding the running app, which reads the key from the environment. Said plainly
+ * because an encrypted column invites the belief that it covers more than it does.
+ */
+model RepPayeeRequest {
+  id     String @id @default(uuid())
+  rep_id String
+  /// 'self' | 'nominee'. RepPayeeRequest_payee_kind_chk holds the set; lib/payee holds the same list
+  /// for the type system, and a gate asserts the two agree rather than trusting that they do.
+  payee_kind         String
+  account_name       String
+  sort_code_enc      String
+  account_number_enc String
+  /// Derived at write time. See Rep.bank_account_last4 for why a clear copy exists at all.
+  account_last4      String
+  /// NOMINEE ONLY. NULL = they are paying themselves, or gave no address for the nominee.
+  ///
+  /// It exists to be checked against the Users of the garages this affiliate referred — the one half
+  /// of "never the referred garage or its staff" that can be mechanised. The NAME half cannot be:
+  /// two people legitimately share a name and one person spells theirs three ways, so a name
+  /// comparison would refuse honest requests and pass dishonest ones. The control is the owner's
+  /// approval screen, which prints the nominee beside the referred garages' own owners.
+  nominee_email      String?
+  /// 'pending' | 'applied' | 'rejected' | 'superseded'. RepPayeeRequest_status_chk holds the set.
+  status             String    @default("pending")
+  requested_at       DateTime  @default(now())
+  /// RepPayeeRequest_decided_chk: pending IFF this is NULL. A row saying 'applied' with no date is
+  /// one a screen renders confidently and wrongly.
+  decided_at         DateTime?
+  /// The operator who decided. NULL on a SUPERSEDED row — the platform acted, not a person, which is
+  /// the same sentinel SuperAdminAudit uses for a platform action.
+  decided_by         String?
+  /// WHY IT WAS REJECTED, and it is required at the moment of rejecting — rejectPayeeRequest
+  /// refuses a reason under three characters. NULL therefore means this request was NOT rejected:
+  /// it is pending, applied or superseded. Not "rejected for no stated reason", which is a state
+  /// the writer will not produce.
+  reject_reason      String?
+
+  rep Rep @relation(fields: [rep_id], references: [id], onDelete: Restrict)
+
+  @@index([rep_id, status])
+}
+
+/**
+ * WHICH TERMS THEY ACCEPTED, AND WHEN. APPEND-ONLY, LIKE AuditLog.
+ *
+ * Rep.terms_accepted_at already records THAT they accepted and keeps that meaning: the first
+ * acceptance. It cannot answer WHICH VERSION, and a single terms_version column would answer that
+ * only until the terms are re-issued — at which point the update erases the evidence of what the
+ * first acceptance was to. An acceptance is a legal fact, so it gets a row, and the row is never
+ * updated.
+ */
+model RepTermsAcceptance {
+  id     String @id @default(uuid())
+  rep_id String
+  /// The Document version stamp in force AT ACCEPTANCE (e.g. '2026-11-01') — frozen, never a lookup
+  /// of the latest. That is the whole reason Document versions a legal page: what they agreed to is
+  /// a different question from what the page says today.
+  version     String
+  /// The exact Document row, when we have it. NULL = recorded from the version stamp alone.
+  document_id String?
+  accepted_at DateTime @default(now())
+
+  rep Rep @relation(fields: [rep_id], references: [id], onDelete: Restrict)
+
+  @@index([rep_id, accepted_at])
 }
 
 /**

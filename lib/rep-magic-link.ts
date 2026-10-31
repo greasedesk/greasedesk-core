@@ -42,6 +42,7 @@ import { prisma } from '@/lib/db';
 import { hashToken } from '@/lib/tokens';
 import { newMagicToken } from '@/lib/magic-link';
 import { takeToken } from '@/lib/auth-rate-limit';
+import { portalEnterPath } from '@/lib/party-portal';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -115,11 +116,24 @@ export async function mintRepLink(args: {
     },
     select: { id: true },
   });
-  return { id: row.id, rawToken: raw, url: repLinkUrl(raw, args.baseUrl), expiresAt };
+  /**
+   * THE PATH COMES FROM THE PARTY, NOT FROM THE CALLER. A rep's portal is /rep/enter/<token> and an
+   * affiliate's is /enter/<token>, on a different host. Reading party_type here means no caller can
+   * mint a link to the wrong front door — which is what was happening: affiliate-join-gate built an
+   * affiliate link with the affiliate origin and the REP path, and a URL that 404s is still a
+   * string, so nothing complained.
+   *
+   * FAILS CLOSED. An unknown party_type throws out of portalFor rather than defaulting to the rep
+   * path — a credential sent to another actor class's door is the failure this is here to prevent.
+   */
+  const rep = await db.rep.findUnique({ where: { id: args.repId }, select: { party_type: true } });
+  if (!rep) throw new Error(`mintRepLink: no Rep ${args.repId} — refusing to build a link to nobody`);
+  return { id: row.id, rawToken: raw, url: repLinkUrl(raw, args.baseUrl, rep.party_type), expiresAt };
 }
 
-export function repLinkUrl(rawToken: string, baseUrl: string): string {
-  return `${baseUrl.replace(/\/$/, '')}/rep/enter/${rawToken}`;
+/** The origin is the caller's (dev runs every host on one port); the PATH is the party's. */
+export function repLinkUrl(rawToken: string, baseUrl: string, partyType: string): string {
+  return `${baseUrl.replace(/\/$/, '')}${portalEnterPath(partyType, rawToken)}`;
 }
 
 export type RepSpend =

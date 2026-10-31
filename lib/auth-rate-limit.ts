@@ -25,6 +25,14 @@ export const LIMITS = {
  * another's budget. Low, because each request EMAILS somebody.
  */
 export const REP_REQUEST_LIMITS = { perIp: { max: 10, windowMinutes: 60 } };
+/**
+ * THE AFFILIATE PORTAL'S OWN BUCKET. Same numbers as the rep's, a DIFFERENT key (affreq:ip:), for
+ * the reason lib/rep-magic-link's header records about sharing magic:ip:: a busy affiliate asking
+ * for links must not be able to lock a rep out of their commission, and the gate suite hammering one
+ * must not exhaust the other. Its own constant rather than reusing the rep's, so the name does not
+ * claim to be about reps while governing affiliates.
+ */
+export const AFFILIATE_REQUEST_LIMITS = { perIp: { max: 10, windowMinutes: 60 } };
 
 /**
  * ── CHECKING A REFERRAL CODE (2026-10-29) ───────────────────────────────────────────────────────
@@ -182,6 +190,7 @@ export const RATE_LIMIT_RETENTION_MINUTES =
     ...Object.values(LIMITS).map((l) => l.windowMinutes),
     ...Object.values(SMS_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(REP_REQUEST_LIMITS).map((l) => l.windowMinutes),
+    ...Object.values(AFFILIATE_REQUEST_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(REF_CODE_LIMITS).map((l) => l.windowMinutes),
     ...Object.values(WAITLIST_LIMITS_BY_IP).map((l) => l.windowMinutes),
     ...Object.values(JOIN_LIMITS_BY_IP).map((l) => l.windowMinutes),

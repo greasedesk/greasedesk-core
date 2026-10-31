@@ -24,6 +24,7 @@
 import type { GetServerSideProps } from 'next';
 import Seo from '@/components/marketing/Seo';
 import AffiliateSiteChrome from '@/components/affiliate-site/AffiliateSiteChrome';
+import PublicDocument from '@/components/content/PublicDocument';
 import { COMPANY, AFFILIATE_SITE_URL, absoluteAffiliateSiteUrl } from '@/lib/company-info';
 
 /**
@@ -41,9 +42,15 @@ type Props = {
   totalLabel: string;
   holdDays: number;
   garage: { offerLabel: string; renewalLabel: string; monthsPaid: number; monthsGiven: number };
+  /**
+   * THE PUBLISHED DOCUMENT, WHEN THERE IS ONE. Null = nothing published yet, and the settled summary
+   * below is what is shown instead. Two states, told apart by a value rather than by a flag: there
+   * is no "isDraft" boolean to fall out of step with whether a document actually resolved.
+   */
+  doc: { title: string; body: string; version: string; effectiveFrom: string | null } | null;
 };
 
-export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, garage }: Props) {
+export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, garage, doc }: Props) {
   // SETTLED and UNSETTLED kept visibly apart, so nobody reads a placeholder as a promise.
   const settled: { heading: string; body: string }[] = [
     { heading: 'What you earn', body: rewardSentence },
@@ -60,6 +67,34 @@ export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, g
     'The full agreement — the definitions, what each side undertakes, liability, data protection and how either side ends it.',
     'What happens to referrals already made if you stop being an affiliate.',
   ];
+
+  /**
+   * THE PUBLISHED DOCUMENT WINS OUTRIGHT. Not merged with the summary, and not shown above it: two
+   * statements of the same terms on one page is two documents to keep in step, and the one somebody
+   * quotes back will be whichever suits them. Once the owner publishes, the summary is gone.
+   */
+  if (doc) {
+    return (
+      <>
+        <Seo
+          title={`${doc.title} — GreaseDesk`}
+          description="What the GreaseDesk affiliate programme pays, when it pays it, and the rules that apply."
+          path="/terms"
+          origin={AFFILIATE_SITE_URL}
+          ogImage={absoluteAffiliateSiteUrl(BRAND_ASSET)}
+        />
+        <AffiliateSiteChrome>
+          <div data-testid="terms-document">
+            <PublicDocument title={doc.title} body={doc.body} version={doc.version} effectiveFrom={doc.effectiveFrom} />
+          </div>
+          <p className="max-w-3xl mx-auto px-4 sm:px-6 pb-12 text-xs text-muted">
+            {COMPANY.legalName}, company number {COMPANY.companyNumber}. Questions about the programme:
+            call <a href={`tel:${COMPANY.phoneE164}`} className="text-accent hover:underline">{COMPANY.phone}</a>.
+          </p>
+        </AffiliateSiteChrome>
+      </>
+    );
+  }
 
   return (
     <>
@@ -111,12 +146,43 @@ export const getServerSideProps: GetServerSideProps<Props> = async () => {
   const { publicPlanChoice } = await import('@/lib/plan-choice');
   const { rewardFigures, rewardSentence } = await import('@/lib/affiliate-public');
 
+  const { resolvePublished } = await import('@/lib/content');
+  const { AFFILIATE_TERMS_SLUG, fillTerms } = await import('@/lib/affiliate-terms');
+
   const terms = await currentTerms(prisma);
   const figures = rewardFigures({ totalRewardPennies: terms.totalRewardPennies, instalmentPennies: terms.instalmentPennies });
   const choice = await publicPlanChoice(prisma, { referred: true });
 
+  /**
+   * THE FIGURES THE DOCUMENT MAY REFER TO. Every one is RESOLVED, never typed — the same resolvers
+   * the summary below uses, so the published terms and the summary cannot quote different money.
+   * An unknown placeholder survives as literal braces; see lib/affiliate-terms for why that is
+   * louder than a blank.
+   */
+  const published = await resolvePublished(prisma, AFFILIATE_TERMS_SLUG, 'GB');
+  const docFigures = {
+    reward: rewardSentence(figures),
+    totalReward: figures.totalLabel,
+    instalment: figures.instalmentLabel ?? undefined,
+    holdDays: AFFILIATE_HOLD_DAYS,
+    monthsGiven: choice.annual.monthsGiven,
+    monthsPaid: choice.annual.monthsPaid,
+    offerPrice: choice.annual.totalLabel,
+    renewalPrice: choice.annual.renewalTotalLabel,
+    legalName: COMPANY.legalName,
+    companyNumber: COMPANY.companyNumber,
+  };
+
   return {
     props: {
+      doc: published
+        ? {
+          title: published.title,
+          body: fillTerms(published.body, docFigures),
+          version: published.version,
+          effectiveFrom: published.effective_from ? published.effective_from.toISOString().slice(0, 10) : null,
+        }
+        : null,
       rewardSentence: rewardSentence(figures),
       totalLabel: figures.totalLabel,
       holdDays: AFFILIATE_HOLD_DAYS,

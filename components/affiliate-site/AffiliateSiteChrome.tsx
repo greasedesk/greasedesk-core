@@ -22,6 +22,10 @@
  */
 import Link from 'next/link';
 import { COMPANY } from '@/lib/company-info';
+import { portalSignInPath } from '@/lib/party-portal';
+
+/** The portal's own address, from the one table that holds it. A leaf, so this ships to the browser. */
+const AFFILIATE_SIGN_IN = portalSignInPath('affiliate');
 
 const YEAR = 2026; // © year — a deliberate constant, as on the marketing and reseller sites.
 
@@ -34,10 +38,20 @@ export default function AffiliateSiteChrome({ children }: { children: React.Reac
             {/* The ONE asset outside /affiliate-site this host serves: middleware's exact-match brand file. */}
             <img src="/greasedesk-Logo.png" alt="GreaseDesk" className="h-7 w-auto" />
           </Link>
-          {/* 44px minimum: a phone number on a phone is the one control that must never be fiddly. */}
-          <a href={`tel:${COMPANY.phoneE164}`} className="text-sm font-medium text-accent hover:underline whitespace-nowrap inline-flex items-center min-h-[44px] px-1">
-            {COMPANY.phone}
-          </a>
+          <div className="flex items-center gap-3">
+            {/* SIGN IN, for the affiliate who already has a code. It is an <a> and not a <Link>
+                because /signin is a MIDDLEWARE REWRITE on this host: Next's client router would
+                try to fetch the route's own data for a path that has no page file of its own, and
+                a full navigation is what makes the rewrite happen. */}
+            <a href={AFFILIATE_SIGN_IN} data-testid="site-signin"
+              className="text-sm font-medium text-ink hover:text-accent whitespace-nowrap inline-flex items-center min-h-[44px] px-1">
+              Sign in
+            </a>
+            {/* 44px minimum: a phone number on a phone is the one control that must never be fiddly. */}
+            <a href={`tel:${COMPANY.phoneE164}`} className="text-sm font-medium text-accent hover:underline whitespace-nowrap inline-flex items-center min-h-[44px] px-1">
+              {COMPANY.phone}
+            </a>
+          </div>
         </div>
       </header>
 
@@ -49,14 +63,15 @@ export default function AffiliateSiteChrome({ children }: { children: React.Reac
             <Link href="/" className="hover:text-ink">Become an affiliate</Link>
             {/*
               THE TERMS LINK IS HERE, unlike the reseller site's — which deliberately has none until
-              its solicitor-reviewed agreement lands. The difference is the owner's instruction for
-              this slice (a placeholder link is acceptable for now) and the page it points at says
-              plainly that the full terms are not final yet. The MONEY terms are not placeholder:
-              they are stated in full on the home page, from the settings.
-              When the reviewed document lands (slice H) this link does not move; the page's body
-              is replaced by the Content system's version.
+              its solicitor-reviewed agreement lands. The MONEY terms are not placeholder: they are
+              stated in full on the home page, from the settings.
+              AND THE MECHANISM THIS COMMENT USED TO PREDICT IS NOW BUILT (2026-10-31): the link did
+              not move, and /terms renders the Content system's published `affiliate-terms` document
+              when there is one, falling back to the settled summary until the owner publishes. The
+              prediction is deleted rather than left reading as future work.
             */}
             <Link href="/terms" className="hover:text-ink">Affiliate terms</Link>
+            <a href={AFFILIATE_SIGN_IN} className="hover:text-ink">Sign in</a>
             <a href="https://greasedesk.com/privacy" className="hover:text-ink">Privacy</a>
           </nav>
           <p>

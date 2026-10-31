@@ -8,7 +8,11 @@
  * sendNotification records that as `skipped` rather than inventing a body.
  */
 import { smsText, isOneSegment } from '@/lib/sms-text';
+import { portalSignInUrl } from '@/lib/party-portal';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
+
+/** Named once; see the affiliate_welcome note on why this is not typed into the prose. */
+const AFFILIATE_SIGN_IN_URL = portalSignInUrl('affiliate');
 
 export type TemplateData = Record<string, string | number | null | undefined>;
 
@@ -653,6 +657,25 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
     }),
   },
+  affiliate_sign_in: {
+    label: 'Affiliate sign-in link',
+    // A SECURITY MESSAGE, for the reason rep_sign_in gives: this link IS the only way in, so
+    // honouring a commercial opt-out here would lock an affiliate out of their own rewards.
+    //
+    // ITS OWN TEMPLATE RATHER THAN rep_sign_in. The two messages differ in one word that matters —
+    // an affiliate is not a rep, has no territory and no invoice, and telling them to "sign in to
+    // the rep portal" would read as somebody else's email. The link itself is built by mintRepLink,
+    // which derives the path from party_type, so the button cannot point at the rep portal.
+    security: true,
+    email: (d) => ({
+      subject: 'Your GreaseDesk sign-in link',
+      html: pshell(`
+        <h2 style="margin:0 0 8px">Sign in to your affiliate page</h2>
+        <p>Press the button below to sign in. There is no password — this link is how you get in.</p>
+        ${button(String(d.link ?? ''), 'Sign in')}
+        <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
+    }),
+  },
   // ── THE OWNER'S OWN ALERTS (slice G, 2026-10-30) ──────────────────────────────────────────────
   // Four messages from GreaseDesk to GreaseDesk. They are `security: true` for a narrow reason:
   // that flag is what stops a send counting against a garage's SMS allowance and what exempts it
@@ -749,9 +772,16 @@ export const NOTIFICATION_TEMPLATES = {
         <p>A garage that signs up through either one gets ${esc(d.monthsGiven ?? '')} months for the price of
            ${esc(d.monthsPaid ?? '')} on their first year, and you earn on the months they pay for.</p>
         ${button(String(d.link ?? ''), 'Confirm your email address')}
-        <p style="font-size:13px;color:#475569">That button confirms this address is yours — it does not sign you in,
-           and there is nothing to log into yet. It lasts ${esc(d.expiryDays ?? '')} days and works once; ask for
-           another from the site if it expires.</p>
+        <p style="font-size:13px;color:#475569">That button confirms this address is yours — it does not sign you in.
+           It lasts ${esc(d.expiryDays ?? '')} days and works once; ask for another from the site if it expires.</p>
+        <!-- ADDED WHEN THE PORTAL SHIPPED (2026-10-31). The sentence this replaces said "there is
+             nothing to log into yet", which was true when it was written and became false the day
+             the portal landed — the correction belongs in the same change as the thing that made it
+             wrong, not in a later sweep. The address comes from lib/party-portal rather than being
+             typed, so the email and the middleware rewrite cannot drift apart. -->
+        <p>Your affiliate page — your link, a printable poster, posts to share and what you have earned —
+           is at <a href="${AFFILIATE_SIGN_IN_URL}">${AFFILIATE_SIGN_IN_URL}</a>. We email you a sign-in link
+           each time; there is no password to remember.</p>
         <p style="font-size:13px;color:#475569">UK advertising rules require affiliate content to be labelled as an
            ad — “#ad” at the start of a post or description — and we ask everyone to do it.</p>`),
     }),

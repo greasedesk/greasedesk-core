@@ -265,6 +265,10 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   RepInvoice: OURS('our invoice to a reseller'),
   RepInvoiceLine: OURS('a line on our invoice to a reseller'),
   RepPayRun: OURS('our payment run to resellers'),
+  // BOTH BELONG TO A PARTNER, NOT TO A GARAGE, and neither carries a group_id — an affiliate is not
+  // a tenant and the garages they introduced have no claim on either row.
+  RepPayeeRequest: OURS('bank details an affiliate asked us to pay, awaiting the owner — encrypted, and ours to hold rather than any tenant’s to export'),
+  RepTermsAcceptance: OURS('which version of OUR affiliate terms a partner accepted, and when'),
   ResellerEnquiry: OURS('someone asking to become a reseller'),
   // Beside its reseller twin on purpose: a waiting-list entry is an email address belonging to a
   // PERSON who is not a tenant and may never be one. It has no group_id, so a tenant export cannot
