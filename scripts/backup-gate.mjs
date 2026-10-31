@@ -170,6 +170,20 @@ try {
     // @anchored-ok: two YAML mapping keys in a workflow step's `env:`, as above
     reportSteps.length === 2 && reportSteps.every((b) => /BACKUP_RUN_URL:/.test(b) && /BACKUP_RUN_TOKEN:/.test(b)),
     'an unconfigured report is a deliberate no-op, so a missing name is silent');
+  // ── THE SENDER READS ITS CREDENTIAL THE SAME WAY THE ROUTE DOES ───────────────────────────────
+  // Trimming one side only is the quieter bug: the values still differ and the side that trimmed
+  // looks innocent. lib/backup-runs::normaliseToken is the one reading, so this asserts the script
+  // goes through it rather than touching process.env directly.
+  const rep = readFileSync(`${R}/scripts/backup-report.mjs`, 'utf8');
+  check('backup-report reads the token and the URL through the shared normaliseToken',
+    /normaliseToken\(process\.env\.BACKUP_RUN_TOKEN\)/.test(rep) && /normaliseToken\(process\.env\.BACKUP_RUN_URL\)/.test(rep),
+    'one side trimming alone leaves the mismatch and hides which side caused it');
+  // 2026-10-31 cost a round trip to this: the route returns the SAME 401 whether its token is wrong
+  // or absent, so the status cannot name the cause and the message has to.
+  check('  …and its 401 says the variable may be ABSENT on Vercel, not merely wrong',
+    /status === 401/.test(rep) && /not set on Vercel/i.test(rep),
+    'a 401 reading only as "wrong token" sends the reader to re-paste a value that was never there');
+
   // The flag must stay on the two steps that need it. Set job-wide or workflow-wide it would also
   // cover any future step — a gate among them — and switch off a protection this file cannot see.
   // Comments stripped here too — the header above `steps:` DESCRIBES this flag, and a clause that

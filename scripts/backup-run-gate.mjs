@@ -153,6 +153,41 @@ try {
   const getIt = await fetch(`${origin}/api/backup-run`, { headers: { authorization: `Bearer ${TOKEN}` } });
   check('  …and only POST is answered', getIt.status === 405, `HTTP ${getIt.status}`);
 
+  // ── WHITESPACE IS NOT A WRONG TOKEN ───────────────────────────────────────────────────────────
+  // 2026-10-31: both report steps returned HTTP 401. The cause was a Vercel variable that did not
+  // exist, but the run also showed BACKUP_RUN_URL stored with a leading space — the same paste that
+  // set the token. Both sides now read the credential through lib/backup-runs::normaliseToken.
+  //
+  // A 400 IS THE PASS HERE, NOT A 200. These post a shape the validator refuses, so reaching 400
+  // proves the door opened while writing no row — the clause is about the credential, and a gate
+  // that planted evidence to prove authentication would be testing two things at once.
+  const wsBody = { ...good, stamp: `${PREFIX}-ws`, outcome: 'maybe' };
+  const padded = await post(wsBody, `  ${TOKEN}  `);
+  check('a token padded with spaces still authenticates — a space is not a different credential',
+    padded.status === 400, `HTTP ${padded.status} (400 = past the door, nothing written)`);
+  const tabbed = await post(wsBody, `\t${TOKEN}\n`);
+  check('  …and one padded with a tab and a newline, which no web form shows you',
+    tabbed.status === 400, `HTTP ${tabbed.status}`);
+  // THE HAZARD THE TRIM INTRODUCES. Normalising could in principle make two blanks equal. What this
+  // drives is HALF of that: a caller sending only spaces, against a server whose token is set. The
+  // other half — a server whose own token is blank — cannot be driven from here, because the gate
+  // cannot blank the environment the dev server already read; it is held by the route's `!expected`
+  // fail-closed branch and by the normaliseToken clauses below, not by this line. Said plainly so
+  // the next reader does not credit this clause with more than it does.
+  const blank = await post(wsBody, '   ');
+  check('  …but a whitespace-ONLY token from a caller is refused (server-side blank is `!expected`)',
+    blank.status === 401, `HTTP ${blank.status}`);
+  const wsRow = await prisma.backupRun.count({ where: { stamp: `${PREFIX}-ws` } });
+  check('  …and none of those three wrote a row', wsRow === 0, `${wsRow} rows`);
+  // The pure function both sides share, so the ROUTE's side of the comparison is covered too — the
+  // gate can pad what it sends but cannot pad what the server read from its own environment.
+  check('normaliseToken agrees from either direction',
+    B.normaliseToken(`  ${TOKEN}\n`) === B.normaliseToken(TOKEN) && B.normaliseToken(TOKEN) === TOKEN);
+  check('  …and turns whitespace-only, null and undefined into the empty string a fail-closed read refuses',
+    B.normaliseToken('   ') === '' && B.normaliseToken('\n\t ') === '' && B.normaliseToken(null) === '' && B.normaliseToken(undefined) === '');
+  check('  …and never alters a token with no surrounding whitespace',
+    B.normaliseToken('re_AbC-123_x') === 're_AbC-123_x' && B.normaliseToken('a b') === 'a b');
+
   const malformed = await post({ ...good, stamp: `${PREFIX}-malformed`, outcome: 'maybe' }, TOKEN);
   const malBody = await malformed.json().catch(() => ({}));
   check('a bad shape is refused with the reason, not a 500',

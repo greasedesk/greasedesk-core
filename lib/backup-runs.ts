@@ -99,6 +99,26 @@ export function healthSentence(h: Health): string {
 /** Whether the verdict should be shown as a problem rather than a reassurance. */
 export const isBad = (h: Health): boolean => h.state !== 'ok';
 
+/**
+ * THE SHARED READING OF THE BEARER TOKEN. Both sides of this credential are typed into a web form —
+ * a GitHub Actions secret and a Vercel environment variable — and neither form shows you a trailing
+ * newline or a leading space. A bearer token carries no meaningful whitespace, so one space turns a
+ * correct value into an `HTTP 401`, which reads as "wrong token" and is not.
+ *
+ * Measured, 2026-10-31: of seven secrets in one backup run, BACKUP_RUN_URL alone printed with an
+ * extra space before its mask, because its stored value began with one. That one was harmless —
+ * the URL parser strips it — but the same paste set the token beside it.
+ *
+ * SENDER AND RECEIVER MUST SHARE THIS. Trimming one side only would be the quieter bug: the values
+ * would still differ, and the side that trimmed would look innocent.
+ *
+ * AND IT MUST NOT MAKE TWO BLANKS EQUAL. A whitespace-only token normalises to '', which the route
+ * reads as NOT CONFIGURED and refuses — the fail-closed branch, not a match. That is asserted.
+ */
+export function normaliseToken(raw: string | null | undefined): string {
+  return (raw ?? '').trim();
+}
+
 export type Submission = {
   stamp: string; startedAt: string; finishedAt?: string | null; outcome: string;
   failedStep?: string | null; objectKey?: string | null; bytes?: number | string | null;

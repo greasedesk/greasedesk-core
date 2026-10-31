@@ -23,7 +23,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { prisma } from '@/lib/db';
-import { submissionRefusal, type Submission } from '@/lib/backup-runs';
+import { submissionRefusal, normaliseToken, type Submission } from '@/lib/backup-runs';
 
 /** Equal-length timing-safe compare. A plain === leaks the token a byte at a time. */
 function sameSecret(given: string, expected: string): boolean {
@@ -39,10 +39,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ message: 'POST only.' });
 
-  const expected = process.env.BACKUP_RUN_TOKEN;
+  // BOTH SIDES NORMALISED, by the same function the sender uses — see lib/backup-runs::normaliseToken.
+  // A trailing newline in the Vercel variable or a leading space in the GitHub secret is invisible in
+  // both web forms and WOULD read here as a wrong token. Defence, not a post-mortem: the 401 on
+  // 2026-10-31 was this variable missing from Vercel entirely, and one of the two secrets beside it
+  // did carry a leading space, which is why the whitespace is defended at all.
+  const expected = normaliseToken(process.env.BACKUP_RUN_TOKEN);
   const header = req.headers.authorization ?? '';
-  const given = header.startsWith('Bearer ') ? header.slice(7) : '';
-  // FAIL CLOSED. No token configured means nobody may report, not that everybody may.
+  const given = header.startsWith('Bearer ') ? normaliseToken(header.slice(7)) : '';
+  // FAIL CLOSED. No token configured means nobody may report, not that everybody may — and after
+  // normalising, a whitespace-only token IS not configured, so it lands here rather than matching
+  // another blank.
   if (!expected || !given || !sameSecret(given, expected)) return res.status(401).json({ message: 'Unauthorized.' });
 
   const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body ?? {}) as Partial<Submission>;

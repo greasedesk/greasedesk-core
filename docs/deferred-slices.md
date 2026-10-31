@@ -386,6 +386,41 @@ which is how this entry got written wrongly in the first place. And the clause's
 counted a `#` comment *mentioning* the flag, printing "1 of 2" when the truth was 0 of 2: the
 assertion was right and the number beside it was not.
 
+### Cause 3, found by fixing causes 1 and 2
+
+With the guard cleared and the secrets set, run #35 reached a real HTTP exchange and returned
+**`HTTP 401 {"message":"Unauthorized."}`** from both report steps. The backup verified completely in
+the same run — source and restored agreed on 131 tables, 104,390 rows and a June invoice fingerprint.
+
+**The cause was that `BACKUP_RUN_TOKEN` did not exist on Vercel at all.** The route's `!expected`
+fail-closed branch returns the *same* 401 as a mismatch, so the status could not say which, and the
+reading went to "the two values differ" — a re-paste of a value that was never there.
+
+Two things came out of it, both now in the code:
+
+- **Both sides read the credential through `lib/backup-runs::normaliseToken`.** The run showed
+  `BACKUP_RUN_URL` stored with a **leading space** — the only one of seven secrets whose mask
+  printed with an extra space — from the same paste that set the token. Whitespace typed into a web
+  form is invisible in both GitHub's and Vercel's forms and turns a correct token into a 401.
+  Trimming one side only would have been the quieter bug: the values would still differ, and the
+  side that trimmed would look innocent.
+- **The 401 now names absence first**, because that is what it was, and a status cannot distinguish
+  "wrong" from "never set".
+
+Held by nine clauses, each red-proved: in `backup-run-gate`, a token padded with spaces and one
+padded with a tab and newline both authenticate (**400, not 200** — past the door having written
+nothing, so the clause is about the credential alone), a whitespace-only one is refused, no row is
+written by any of the three, and `normaliseToken` is asserted from both directions and against
+over-reach; in `backup-gate`, two source clauses that the sender goes through the shared function and
+that its 401 message names absence.
+
+**One of those proofs nearly passed for the wrong reason.** `fetch` normalises header values, so a
+padded `Authorization` could have been trimmed by the client before reaching our code. Removing the
+route's trim and re-running settled it: both clauses went to 401, so they exercise our code. And one
+of my comments claimed the clause covered a blank on the *server's* side, which it cannot — the gate
+cannot blank the environment the server already read. The comment now says which guard holds that
+half.
+
 ### THE LESSONS, which is why this section stays
 
 - **A board item naming a cause must carry its measurement or say it is a guess.** The original
