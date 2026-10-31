@@ -316,38 +316,107 @@ the nightly backup. Cheap, and it converts "I cannot tell you" into an answer.
 
 ---
 
-## `BackupRun` has never had a row — DIAGNOSED AND FIXED 2026-10-30, kept for the lesson
+## `BackupRun` has never had a row — TWO causes, both fixed 2026-10-31, kept for the lesson
 
-**The diagnosis on this board was wrong, and it was never measured.** It read: *"the workflow pipes
-the report into a reader that refuses a pipe."* Neither half was true. The workflow pipes nothing —
-the step is a bare `node scripts/backup-report.mjs verified` — and that script imports `_ts.mjs`
-only, never `_gate-preflight.mjs`, which is the only place the pipe guard lives. Acting on it would
-have changed an unrelated safety rule and left the cause untouched.
+**Read this entry's history before trusting any part of it.** It has been written three times.
 
-**The real cause.** `backup-report.mjs` has exactly one branch that exits **0** without writing:
-`BACKUP_RUN_URL` or `BACKUP_RUN_TOKEN` unset. That is deliberate — a backup that worked must not be
-reported as broken because its reporting is unconfigured — and every other path either exits 1 (a
-refusal, or any non-2xx, which fails the job) or posts successfully. **So a green job with an empty
-table is consistent with that branch and no other.** The two secrets had never been set.
+1. The original item said: *"the workflow pipes the report into a reader that refuses a pipe."*
+2. On 2026-10-30 I replaced that with a confident correction saying it was wrong on both halves.
+3. **Run #33's log, on 2026-10-31, proved the original right and my correction wrong.** The log
+   reads: `REFUSING TO RUN — backup-report.mjs's stdout is a pipe.` Exit 2, both report steps.
 
-**And why nobody noticed:** the workflow's preflight step — written specifically so that *all* the
-missing secrets are named in one run, after nine nights of discovering them one at a time — checked
-six names and not these two. The omission was the whole defect.
+**How I got it wrong.** I grepped `scripts/_ts.mjs` for the guard's *code*, found none, and
+concluded the guard was not in that script's path. I never read `_ts.mjs`'s **imports**, where line
+6 is `import './_gate-preflight.mjs';`. A grep for a symbol does not trace an import chain — and the
+guard's own header says the answer in plain English: *"`_ts.mjs` and `_gate-retry.mjs` both chain to
+it."* I had that file open. I searched it instead of reading it.
 
-**Fixed** by adding them to the preflight as a `::warning::` rather than an error (failing the job
-would mean a backup not taken because its paperwork was unconfigured, which inverts the priority),
-and by making the unconfigured branch emit a GitHub annotation instead of a `console.error` in a
-log nobody opens.
+**And "the workflow pipes nothing" was wrong in the same way.** The step is a bare
+`node scripts/backup-report.mjs verified` — no `|` anywhere — but **in GitHub Actions a step's
+stdout is always a pipe**, because the runner captures it. The pipe is the harness, not the command.
 
-**THE LESSON, which is why this section stays.** The original entry was an inference I wrote while
-working on something else, in the same confident register as the measured items around it. It sat
-here for hours looking like a finding. A board item that names a cause should either carry the
-measurement or say plainly that it is a guess — otherwise the next person to pick it up changes the
-wrong file, and the real cause keeps its cover.
+### Both causes were real
 
-**Still unverified from this machine:** that `BACKUP_RUN_TOKEN` on Vercel matches the GitHub secret.
-An unset variable and a wrong token both answer 401 — the route failing closed, by design. The
-symptom if they disagree is specific and loud: the report step fails the job with `HTTP 401`.
+**Cause 1 — the pipe guard, which killed the step.** `backup-report.mjs` wants TypeScript, so it
+imports `_ts.mjs`, which chains to `_gate-preflight.mjs`, which refuses a piped stdout with exit 2.
+Every run. **Fixed** with `GATE_ALLOW_PIPE=1` on the two report steps — the guard's own documented
+CI escape — with a comment on the step saying why it is safe *there* and not to copy it onto a gate.
+
+**Cause 2 — the two secrets, which would have made it a silent no-op anyway.** `backup-report.mjs`
+has exactly one branch that exits **0** without writing: `BACKUP_RUN_URL` or `BACKUP_RUN_TOKEN`
+unset. That is deliberate — a backup that worked must not be reported as broken because its
+reporting is unconfigured. `gh secret list` on 2026-10-31 showed **six** repository secrets, and
+neither of these two; no repository variables, no Dependabot secrets, and nothing on any of the four
+environments. **Fixed** by Hugh adding both as repository Actions secrets, and in the workflow by
+naming them in the preflight as a `::warning::` rather than an error (failing the job would mean a
+backup not taken because its paperwork was unconfigured, which inverts the priority).
+
+The preflight omission is what hid cause 2: that step exists so *all* missing secrets are named in
+one run, after nine nights of discovering them one at a time. It checked six names and not these two.
+
+### What the nineteen nights actually cost
+
+`gh run list`: **the last green run was 11 October — the day before the report steps were added —
+and the nineteen nights from 12 to 31 October all failed.** In every one I sampled, **the backup
+itself passed**: dump, encrypt, upload, download back from R2, decrypt, restore into Postgres 18 and
+verify against the manifest, all green, with only the two report steps red. So: no backup was ever
+lost, and no backup was ever *recorded*. The evidence spine built to make a bad night visible was
+itself the only thing failing, for nineteen nights, and the red was read as "the report step again".
+
+**The second-order cost is the worse one.** The failure reporter was refused by the same guard. A
+night where the dump genuinely broke would have reported nothing either — a red run and an empty
+table, which is exactly what a healthy night looked like too.
+
+### What now holds it in place
+
+`backup-gate` carries four clauses over the workflow, each red-proved by mutating the file:
+
+- both report steps exist and are found by name (red when one is renamed),
+- **while `backup-report.mjs` still reaches `_gate-preflight.mjs` through its imports**, both set
+  `GATE_ALLOW_PIPE: '1'` (red when either loses it; the premise is traced, not assumed, so the
+  clause relabels itself and stops asking once the loader is separated),
+- both still carry `BACKUP_RUN_URL` and `BACKUP_RUN_TOKEN`, because without them the script is a
+  deliberate exit-0 no-op,
+- the flag is per-step and never job-wide, so it cannot blanket a step added later.
+
+Writing them caught two more of the same error in one sitting. The import tracer counted a
+**commented-out** `import` as an import, so the premise read "still inherits the guard" with the edge
+removed and its red-proof passed without ever taking the other branch — a proof that proved nothing,
+which is how this entry got written wrongly in the first place. And the clause's own detail line
+counted a `#` comment *mentioning* the flag, printing "1 of 2" when the truth was 0 of 2: the
+assertion was right and the number beside it was not.
+
+### THE LESSONS, which is why this section stays
+
+- **A board item naming a cause must carry its measurement or say it is a guess.** The original
+  entry was an inference written while working on something else, in the same confident register as
+  the measured items around it, and it sat here looking like a finding.
+- **So must a correction.** Mine was written in that same register, was wrong, and *destroyed a
+  true finding* — strictly worse than the guess it replaced, because it told the next reader the
+  real cause had been ruled out. One commit message (`26d9a4e`, "The backup reported nothing
+  because nobody was asked for the address") carries the false claim permanently in the history.
+- **Read what the artefact says before reading its source.** The guard's header and the log's first
+  line each stated the answer in English. I went to grep instead, twice.
+- **"Only one branch is consistent with the symptom" is a claim about branches I enumerated.** I
+  reasoned from a green job with an empty table to a unique cause. The job was not green.
+
+### Still open: the real fix
+
+**Separate the TypeScript loader from the gate preflight.** The guard protects a *gate* writing
+fixtures to a real tenant from dying mid-teardown when a reader closes the pipe early. It is
+attached to `_ts.mjs`, which is merely "the script wants TypeScript" — so every non-gate script
+that wants TS inherits a gate's safety rule, and the only way out is a flag that reads, to the next
+person, like switching the protection off. Wanted: `_ts.mjs` loads TypeScript and nothing else; the
+pipe guard moves to where the hazard is (`gatePrisma`, or an explicit import that gates already all
+carry). Touches every gate's entry path, so it is its own slice, not a line beside a backup.
+
+A smaller companion: `GATE_ALLOW_PIPE=1` leaves a non-gate script with the gate's *error text*, which
+talks about fixtures on live invoices. A script with no fixtures should refuse, if it refuses at all,
+in its own words.
+
+**Now verified:** `BACKUP_RUN_TOKEN` on Vercel matches the GitHub secret — Hugh set both from one
+value on 2026-10-31, and the redeploy picked the Vercel side up. If they ever disagree the symptom
+is specific and loud: the report step fails the job with `HTTP 401`, the route failing closed.
 
 ---
 

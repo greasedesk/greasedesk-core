@@ -32,6 +32,12 @@ name: nightly-backup
 #   BACKUP_RUN_URL        https://greasedesk.com/api/backup-run  (the APEX; er. and affiliates. differ)
 #   BACKUP_RUN_TOKEN      must be the SAME VALUE as the BACKUP_RUN_TOKEN env var on Vercel, or the
 #                         endpoint answers 401 and the report step fails the job
+#   BOTH GO IN TWO PLACES, AND ONE OF THEM IS NOT GITHUB. The token belongs on Vercel (Production)
+#   so the route can check it, AND both names belong here as GitHub *repository* Actions secrets so
+#   the job can send it. Setting only the Vercel side is what hid this for nineteen nights: the job
+#   stayed green-looking and wrote nothing. It is an easy place to go wrong because Vercel creates
+#   GitHub *environments* named after the project, which makes it look as though the two share
+#   configuration. They do not. `gh secret list` is the check — eight names, these two among them.
 #
 # RETENTION is R2 lifecycle, by prefix, not this workflow's business: nightly/ 14 days, weekly/ 8
 # weeks, monthly/ 12 months. Versioning on, so a leaked key cannot erase history by overwriting.
@@ -280,21 +286,38 @@ jobs:
 
       # ── TELL THE APP. Until this existed, a backup left only a GitHub Actions run, and eleven
       # consecutive failures in September were invisible to everyone who was not looking at a tab.
+      #
+      # GATE_ALLOW_PIPE: backup-report.mjs imports scripts/_ts.mjs to run TypeScript, and _ts.mjs
+      # imports _gate-preflight.mjs, which REFUSES to run when stdout is a pipe (exit 2). In Actions
+      # a step's stdout is ALWAYS a pipe — the runner captures it — so both report steps died on
+      # every run from 12 Oct to 31 Oct 2026 while the backup itself passed. Nineteen red nights.
+      # The guard is right, and it is attached to the wrong thing: it exists so a GATE writing
+      # fixtures to a real tenant is not killed mid-teardown by a reader that closes the pipe early.
+      # This script plants nothing, registers no onTeardown, makes one POST and exits, so there is
+      # no teardown to interrupt; it inherits the guard only because it wanted TypeScript. Setting
+      # the flag here is the guard's own documented CI escape, not a way round it.
+      # DO NOT copy this line onto a step that runs a gate. The real fix — separating the TS loader
+      # from the gate preflight, so a non-gate script can have one without the other — is on the
+      # board; it touches every gate's entry path and is not a change to make beside a backup.
       - name: Report the verified run
         env:
           BACKUP_RUN_URL: ${{ secrets.BACKUP_RUN_URL }}
           BACKUP_RUN_TOKEN: ${{ secrets.BACKUP_RUN_TOKEN }}
+          GATE_ALLOW_PIPE: '1'
           PGMAJOR: '18'
         run: node scripts/backup-report.mjs verified
 
       # `if: failure()` AND `always()` on the report would double-post; this one runs only when an
       # earlier step gave up, and names which one. `${{ job.status }}` is not specific enough to act
       # on, so the step that failed is read from the step outcomes GitHub already tracks.
+      # GATE_ALLOW_PIPE for the same reason as the step above — and it mattered more here: the step
+      # that reports a BAD night was refused by the guard too, so a failure reported nothing either.
       - name: Report the failure
         if: failure()
         env:
           BACKUP_RUN_URL: ${{ secrets.BACKUP_RUN_URL }}
           BACKUP_RUN_TOKEN: ${{ secrets.BACKUP_RUN_TOKEN }}
+          GATE_ALLOW_PIPE: '1'
           PGMAJOR: '18'
         run: |
           # FIRST failure wins. A chain of `|| STEP=...` lets the LAST check overwrite the others,

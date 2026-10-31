@@ -14,7 +14,7 @@
  * source checks, because that is what they are.
  */
 import './_gate-preflight.mjs';
-const { readFileSync } = await import('node:fs');
+const { readFileSync, existsSync } = await import('node:fs');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -108,6 +108,75 @@ try {
   check('the job is scheduled AND runnable by hand — a backup you cannot rehearse is one nobody rehearses',
     has('  schedule:') && has('  workflow_dispatch:'));
   check('a failure keeps the manifests to read afterwards', has('if: failure()') && has('upload-artifact'));
+
+  // ── THE REPORT STEPS CAN ACTUALLY RUN ───────────────────────────────────────────────────────────
+  // Nineteen consecutive nights (12–31 Oct 2026) backed up, verified, and recorded nothing: both
+  // report steps exited 2 on `REFUSING TO RUN — stdout is a pipe`, because backup-report.mjs imports
+  // _ts.mjs for TypeScript and _ts.mjs imports _gate-preflight.mjs, whose guard refuses a pipe — and
+  // in Actions a step's stdout is ALWAYS a pipe. The failure reporter was refused too, so a genuinely
+  // bad night would have looked identical. Nothing in this gate noticed, which is why these clauses
+  // exist.
+  //
+  // PINNED TO THE PREMISE, NOT THE FLAG. The demand for GATE_ALLOW_PIPE holds only while the script
+  // still inherits that guard. Separating the TS loader from the gate preflight is on the board; when
+  // it lands this clause's premise goes false and it stops asking for a flag that no longer does
+  // anything, rather than outliving its hazard as a line nobody dares remove.
+  const chainToGuard = (entry) => {
+    const seen = new Set();
+    const walk = (f) => {
+      if (seen.has(f) || !existsSync(`${R}/scripts/${f}`)) return false;
+      seen.add(f);
+      if (f === '_gate-preflight.mjs') return true;
+      // COMMENTS STRIPPED FIRST. Without this the tracer counted `// import './_gate-preflight.mjs'`
+      // as an import, so the premise read "still inherits the guard" with the edge commented out —
+      // the premise branch could never be reached and its red-proof passed for the wrong reason.
+      const src = readFileSync(`${R}/scripts/${f}`, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^[ \t]*\/\/.*$/gm, '');
+      return [...src.matchAll(/from\s+'\.\/([^']+)'|import\s+'\.\/([^']+)'/g)]
+        .map((m) => m[1] ?? m[2])
+        .some(walk);
+    };
+    return walk(entry);
+  };
+  const inheritsGuard = chainToGuard('backup-report.mjs');
+  // Steps are split on the list marker so a flag set on a DIFFERENT step cannot satisfy this.
+  // Comments stripped from each block for the same reason as in the tracer above: a `#` line
+  // MENTIONING the flag is not a step setting it, and a block carries the comments written above the
+  // step that follows it. The first version of this clause counted one of those comments and printed
+  // "1 of 2" when the true answer was 0 of 2 — the assertion was right and its own number was not.
+  const steps = wf.split(/\n      - (?=name:|uses:)/).slice(1).map((b) => b.replace(/^[ \t]*#.*$/gm, ''));
+  // These three matchers read YAML mapping keys in a workflow file, not JS object keys — the same
+  // reason the exact-text matchers further up do not use lib/anchored-match, and each waiver has to
+  // be the LAST comment line before its matcher.
+  // @anchored-ok: `name:` is a YAML mapping key in a workflow file, not a JS object key
+  const reportSteps = steps.filter((b) => /^name: Report the /.test(b));
+  // Matched WITH its value: a bare name would also match the `#` lines that explain the flag, which
+  // is the 0-of-2 mistake recorded above.
+  // @anchored-ok: `GATE_ALLOW_PIPE:` is a YAML mapping key in a workflow step's `env:`
+  const setsFlag = (b) => /GATE_ALLOW_PIPE: '1'/.test(b);
+  check('both report steps are found in the workflow — the ones that write the BackupRun row',
+    reportSteps.length === 2, `found ${reportSteps.length}: ${steps.filter((b) => b.startsWith('name:')).length} named steps in all`);
+  check(inheritsGuard
+    ? '  …and each sets GATE_ALLOW_PIPE, because the TS loader still drags in the pipe guard'
+    : '  …and the TS loader no longer chains to the pipe guard, so no flag is required (premise expired)',
+    inheritsGuard
+      ? reportSteps.length === 2 && reportSteps.every(setsFlag)
+      : true,
+    inheritsGuard
+      ? `${reportSteps.filter(setsFlag).length} of ${reportSteps.length} carry it — without it the step exits 2 and the row is never written`
+      : 'backup-report.mjs no longer reaches _gate-preflight.mjs');
+  check('  …and both still carry the address and the token, or the script exits 0 writing nothing',
+    // @anchored-ok: two YAML mapping keys in a workflow step's `env:`, as above
+    reportSteps.length === 2 && reportSteps.every((b) => /BACKUP_RUN_URL:/.test(b) && /BACKUP_RUN_TOKEN:/.test(b)),
+    'an unconfigured report is a deliberate no-op, so a missing name is silent');
+  // The flag must stay on the two steps that need it. Set job-wide or workflow-wide it would also
+  // cover any future step — a gate among them — and switch off a protection this file cannot see.
+  // Comments stripped here too — the header above `steps:` DESCRIBES this flag, and a clause that
+  // reddens because the file explains itself teaches people not to explain things.
+  const beforeFirstStep = wf.slice(0, wf.indexOf('    steps:')).replace(/^[ \t]*#.*$/gm, '');
+  check('GATE_ALLOW_PIPE is per-step, never job-wide — it must not blanket a step added later',
+    !beforeFirstStep.includes('GATE_ALLOW_PIPE'));
 } catch (e) {
   check('run completed', false, String(e?.stack ?? e).slice(0, 300));
 }
