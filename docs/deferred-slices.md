@@ -455,6 +455,196 @@ is specific and loud: the report step fails the job with `HTTP 401`, the route f
 
 ---
 
+## "System events" in the Engine Room — DESIGN, after Sunday. Build nothing yet.
+
+One screen, newest first, filterable, with a red/amber/green summary. The design question is not the
+screen; it is **which of these things already has a record, and which has none.**
+
+### Create a record only where none exists
+
+| category | record today | plan |
+|---|---|---|
+| Backups | **`BackupRun`** | read it where it is |
+| Operator alerts, failed sends | **`NotificationLog`** | read it where it is |
+| Migrations | **`_prisma_migrations`** (Prisma's own) | read, read-only |
+| **Cron runs** | **nothing** — six crons log only to Vercel's runtime log | NEW rows |
+| **Deploys** | nothing in our database | NEW rows, self-reported |
+| Problems: provider refusal, quota | nothing | NEW rows |
+| Problems: login-failure spikes | `AuthRateLimit` holds the raw attempts | a cron computes; writes ONE row when a threshold trips |
+| Problems: database unreachable | **cannot exist** — see below | INFERRED from silence, labelled as inferred |
+
+**Nothing already recorded gets copied in.** A `BackupRun` duplicated into an events table is two
+places to look and two answers when they drift. The screen unions three reads; it does not own a
+second copy of anything.
+
+### The migration — one, additive
+
+```prisma
+model SystemEvent {
+  id          String   @id @default(uuid())
+  at          DateTime @default(now())
+  kind        String   // 'cron' | 'deploy' | 'problem'
+  name        String   // 'confirm-paid' | 'deploy' | 'login-spike'
+  severity    String   // 'ok' | 'warn' | 'fail'
+  started_at  DateTime?
+  finished_at DateTime?
+  duration_ms Int?
+  detail      String?  @db.Text
+  commit      String?
+  group_id    String?  // only when a problem belongs to one tenant
+  meta_json   Json?
+  @@index([at])
+  @@index([kind, at])
+  @@index([severity, at])
+}
+```
+
+**Classification: ADDITIVE.** A new table constrains no deployed writer, so it needs no
+`@precedes-deploy` and can be applied before or after the push.
+
+### The three decisions that make it worth building
+
+**1. SILENCE IS THE SIGNAL, so the screen must know what it is waiting for.** A log of successes
+tells you nothing; the valuable row is the one that is ABSENT. That needs the expected windows, and
+the only place that knows them is `vercel.json`:
+
+```
+confirm-paid 0 * * * *   inbound-bodies 15 * * * *   prospect-sequence 20 * * * *
+operator-alerts 40 * * * *   reap-rate-limits 30 3 * * *   demo-lifecycle 45 3 * * *
+```
+
+So: `lib/cron-registry.ts` — name, schedule, human label, grace period — **with a gate asserting the
+registry and `vercel.json` agree in both directions**. A cron missing from the registry is invisible
+to the screen, which is the one failure that would make the whole thing lie.
+
+**2. WRITE THE ATTEMPT BEFORE THE WORK, not after.** Record `fail / "did not finish"` on entry and
+update to `ok` on completion. The usual order cannot survive the case that matters: on Vercel work
+left running after the response can be frozen, so a row written at the end is lost exactly when the
+handler dies. A wrapper the handlers go through, so a new cron cannot forget to record itself.
+
+**3. THE SUMMARY IS COMPUTED FROM THE LAST STATE PER SUBJECT, never from a count of rows.** Twenty
+rows where the last nineteen failed look exactly like twenty successes — that is why `backupHealth`
+exists and why it says ELEVEN. Same rule here:
+
+- **Red** — any watched subject failing now, or silent past its window (backup > 36h; an hourly cron
+  past two windows).
+- **Amber** — a failure in the last 24h that has since recovered, or an open `warn`.
+- **Green** — every watched subject reported OK inside its window.
+
+And the summary **names the number and the subject**, not just a colour.
+
+### What cannot be done, said out loud rather than designed around
+
+**A "database unreachable" event cannot be written to the database.** That category is inferable
+only, from a missing expected row, and the screen must label inferred rows as inferred so nobody
+reads an inference as a measurement. An outside watcher is the only thing that could record it
+directly, and that is a different slice.
+
+**A deploy row is written by whichever lambda cold-starts first**, comparing
+`VERCEL_GIT_COMMIT_SHA` to the newest deploy row — so it must be an upsert on the commit, because
+many lambdas start.
+
+### Privacy constraints, because two of these sources are sensitive
+
+- **`AuthRateLimit` keys are `email:<sha256>` and `ip:<addr>`.** Its own comment says it must never
+  become a list of who asked for a reset. A spike event carries **counts and distinct-key counts
+  only** — never a key, never an IP.
+- **`NotificationLog.recipient` is in the clear by design.** Fine on the detail row for an operator;
+  it must not reach the summary.
+- **The three send silences stay three** — no address, blocked by policy, provider rejected are
+  different actions and must not collapse into "failed".
+
+### Placement, and one question for you
+
+`/superadmin/system`, registered in `ER_NAV` **in the same commit as the page** — `erMinRole` falls
+back to `'support'` for an unregistered href.
+
+**Open: should Support see it?** Support lands on the tenants list and is the role most likely to
+need "SMS is failing right now". Suggested: the list visible to `support`, with commit hashes and
+tenant-identifying detail `owner`-only. Not decided here.
+
+### Volume and retention, decided before building rather than after
+
+Six crons ≈ 98 rows/day, plus one backup, plus deploys and problems — call it **~4k rows a month**.
+Small. But `AuditLog` is the warning: 91,502 sequential scans and 2.57bn rows read, because a
+growing table got a landing-page reader and no index for it. So the indexes above ship with the
+table, and the retention rule gets decided at the same time rather than discovered.
+
+---
+
+## The Engine Room cannot reach the backup screen — boarded 2026-10-31
+
+**It is not missing from `ER_NAV`; it is not an Engine Room screen.** The backup evidence screen is
+`pages/admin/settings/backups.tsx`, served at **`/admin/settings/backups`**, behind
+`requireAdminPage` — the TENANT admin guard. Any garage admin can open it.
+
+**That is deliberate for what surrounds it** (a "your own copy of your data" section and a restore
+request, written for a garage owner), but the table above it is `BackupRun`, which has no `group_id`
+by construction. So every tenant admin currently reads **platform-wide** figures: 131 tables,
+104,390 total rows across all tenants, the dump size, and the health verdict. "11 backups in a row
+have failed" would have been shown to every customer.
+
+**Two audiences, one page** — the same shape as the 404 copy that told the public site "you're
+still signed in". The split to make:
+
+- **Tenant page keeps**: that backups happen, that the latest one verified, when, and the
+  portability/restore copy. Not the platform's row counts, not object keys, not the dump size.
+- **A new `/superadmin/backups`**, `minRole: 'owner'`, keeps the operator view: object keys, failed
+  step, byte counts, the verdict, the consecutive-failure number.
+
+**AND THE `ER_NAV` LINE IS LOAD-BEARING FOR AUTHORISATION, not just navigation.** `erMinRole` falls
+back to `'support'` for an unregistered href (`lib/operator-roles.ts`), so a new `/superadmin/backups`
+page WITHOUT its `ER_NAV` entry would be open to the lowest operator role. The file says so twice,
+against Prospects and Affiliates. Add the line in the same commit as the page, never after.
+
+---
+
+## "Tenants in scope: 0" and "Arrives when billing goes live" — MEASURED 2026-10-31
+
+Both on `pages/superadmin/dashboard.tsx`, and the first one has a cause, not a hypothesis.
+
+### The zero is a NULL exclusion, and this is the third time
+
+`dashboard.tsx:76` filters `is_internal: { not: true }`. `is_internal` is `Boolean?`. Prisma
+compiles `{ not: true }` to **`"is_internal" <> $1`**, and `NULL <> true` is NULL, not true — so
+every tenant whose flag was never set is excluded. Measured on the gate database, with the
+generated SQL captured:
+
+| filter | SQL | count |
+|---|---|---|
+| `is_internal: { not: true }` | `"is_internal" <> $1` | **0** |
+| `OR: [{ is_internal: null }, { is_internal: false }]` | `"is_internal" IS NULL OR = $1` | **4** |
+
+Census: 4 NULL, 2 true, 0 false. **The intent of the line is right and its spelling drops every
+real tenant.** The fix is the `NOT_OURS` predicate that already exists in `lib/operator-alerts.ts`,
+written for this exact reason — so the fix is to USE it, not to write a third version.
+
+**Swept, and it is one occurrence, not a class.** The only other candidate is `is_demo: false` in
+`lib/operator-alerts.ts`, and that is CORRECT: `is_demo` is `Boolean @default(false)`, non-null, so
+no NULL can exist. Two sibling flags on the same model where the safe spelling differs, which is
+precisely why this keeps happening.
+
+### A gate this would have caught, which does not exist
+
+`nullable-annotation-gate` is not it — that asks whether a NEW nullable column says what its null
+MEANS, at the point of creation. Nothing checks FILTERS on nullable booleans.
+
+**The rule, and it is mechanical:** for each nullable `Boolean` in the schema, a Prisma filter
+spelling it `: false`, `: true`, `{ not: true }` or `{ not: false }` must be flagged unless the same
+`where` handles NULL explicitly. **Measured candidate set: 16 nullable Boolean columns**, and
+several carry real meaning in the NULL — `email_opt_out`, `sms_opt_out`, `opted_out` (null =
+unknown, which `sendNotification` already refuses on) and `vat_registered`. A filter that silently
+drops "unknown" from an opt-out query is the same defect with a worse blast radius than a dashboard
+tile.
+
+### The second string is just stale
+
+`ComingTile title="Total revenue (this month)" note="Arrives when billing goes live."` — billing is
+live, on live keys, with paying tenants. Either compute it or remove the tile; a placeholder that
+outlived its premise reads as a broken feature rather than an unbuilt one.
+
+---
+
 ## An index on `AuditLog.created_at` for the Engine Room tenants list — boarded 2026-10-30
 
 **The query.** `pages/superadmin/tenants.tsx` runs

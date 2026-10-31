@@ -16,7 +16,7 @@
  * nothing here touches a row it did not create.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, describeError, gateOrigin, serverReady, declineToRun } = await import('./_gate-preflight.mjs');
+const { gatePrisma, describeError, gateOrigin, erOrigin, ER_RESOLVER_ARGS, serverReady, declineToRun } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 /**
  * .env, DELIBERATELY. Gates take DATABASE_URL from the shell profile, but BACKUP_RUN_TOKEN is a
@@ -25,12 +25,20 @@ import './_ts.mjs';
  * never printed — only whether it is set.
  */
 await import('dotenv/config');
+const { readFileSync } = await import('node:fs');
+const { underPath } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 const R = '/Users/hugh/Developer/greasedesk-core';
 const PREFIX = 'ZZGATE';
+// THROWAWAY OPERATORS, one per role, because the clause is about the ROLE boundary and a single
+// account cannot demonstrate it. Swept before and after on the email prefix; no 2FA secret is set,
+// so the login is password-only — the TOTP enforcement has its own gate.
+const OP_PASS = 'GateBackups!2026';
+const OP_OWNER_EMAIL = 'zzgate-backups-owner@greasedesk.test';
+const OP_SUPPORT_EMAIL = 'zzgate-backups-support@greasedesk.test';
 const H = (n) => new Date(Date.now() - n * 3_600_000);
 
 let prisma; let browser = null;
@@ -241,6 +249,26 @@ try {
     const s2 = `${PREFIX}-fail-${i}`;
     await post(B.assembleSubmission({ stamp: s2, startedAt: H(1 + i * 24), outcome: 'failed', failedStep: 'upload to R2', manifest: man }), TOKEN);
   }
+  const bcrypt = await import('bcryptjs');
+  await prisma.operator.deleteMany({ where: { email: { in: [OP_OWNER_EMAIL, OP_SUPPORT_EMAIL] } } });
+  const opHash = await bcrypt.default.hash(OP_PASS, 10);
+  await prisma.operator.createMany({ data: [
+    { email: OP_OWNER_EMAIL, name: 'Backups gate (owner)', role: 'owner', status: 'active', regions: ['GB'], passwordHash: opHash },
+    { email: OP_SUPPORT_EMAIL, name: 'Backups gate (support)', role: 'support', status: 'active', regions: ['GB'], passwordHash: opHash },
+  ] });
+
+  // ════════════════════════════════════════════════════════════════════════════════════════════
+  // TWO AUDIENCES, TWO SCREENS. The split, asserted on both sides.
+  //
+  // Until 2026-10-31 there was ONE backup screen, at /admin/settings/backups, behind the TENANT
+  // admin guard — and `BackupRun` has no group_id, so every garage admin was reading GreaseDesk's
+  // dump size, table and row counts across all tenants, failed steps, and the health verdict. For
+  // nineteen nights that verdict would have told customers their supplier's backups were failing.
+  //
+  // Asserting the removal alone would not be enough: "the figures are gone" is also what a broken
+  // page looks like, and a figure that merely MOVED out of one page has to be found in the other.
+  // So each half is paired — absent HERE, present THERE.
+  // ════════════════════════════════════════════════════════════════════════════════════════════
   browser = await chromium.launch({ channel: 'chrome' });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   const page = await ctx.newPage();
@@ -249,40 +277,59 @@ try {
   await page.fill('input[type="password"]', 'GateGarage!2026');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }), page.click('button[type="submit"]')]);
   await page.goto(`${origin}/admin/settings/backups`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('[data-testid="backup-health"]', { timeout: 25000 });
+  await page.waitForSelector('[data-testid="last-verified"]', { timeout: 25000 }).catch(() => {});
 
-  const state = await page.getAttribute('[data-testid="backup-health"]', 'data-state');
-  const verdict = (await page.textContent('[data-testid="backup-health"]')) ?? '';
-  check('the page leads with the verdict, not the list', state === 'failing', `data-state=${state}`);
-  check('  …and the verdict names the number of failed nights AND when it last worked',
-    /5 backups in a row have failed/.test(verdict)
-    && new RegExp(`last one that was verified ran ${GOOD_DAYS} days ago`).test(verdict),
-    verdict.trim().slice(0, 110));
+  console.log('\n— THE GARAGE SEES ONE STATEMENT AND ONE DATE —');
+  const lastVerified = (await page.textContent('[data-testid="last-verified"]').catch(() => null)) ?? '';
+  check('the garage is told backups run nightly and when the last one verified',
+    /Backups run nightly/.test(lastVerified) && /last one verified on/.test(lastVerified),
+    lastVerified.trim().slice(0, 90));
   /** PAINTED, not merely present: a 0x0 element passes every geometry test. */
-  const box = await page.locator('[data-testid="backup-health"]').boundingBox();
-  check('  …and it is actually on the screen', !!box && box.width > 200 && box.height > 20, box ? `${Math.round(box.width)}x${Math.round(box.height)}` : 'NO BOX');
-  check('  …saying whose problem it is', /on us to fix, not you/.test(verdict));
-
-  const means = (await page.textContent('[data-testid="verified-means"]')) ?? '';
-  check('“verified” is explained as a restore, not an upload',
-    /restored into an empty database/.test(means) && /matched the source exactly/.test(means), means.trim().slice(0, 80));
-
-  const rows = await page.locator('[data-testid="run-row"]').count();
-  check(`every reported night is listed (${rows} rows)`, rows >= 5, `${rows} listed`);
-  const failedShown = await page.locator('[data-testid="run-row"][data-outcome="failed"]').count();
-  check('  …and a failed night names the step that failed', failedShown >= 5 && /upload to R2/.test((await page.textContent('[data-testid="runs-table"]')) ?? ''));
-
+  const lvBox = await page.locator('[data-testid="last-verified"]').boundingBox().catch(() => null);
+  check('  …and it is actually on the screen', !!lvBox && lvBox.width > 200 && lvBox.height > 20,
+    lvBox ? `${Math.round(lvBox.width)}x${Math.round(lvBox.height)}` : 'NO BOX');
   /**
-   * NO RESTORE BUTTON. The whole-database dump cannot restore one garage, and a button that half
-   * works is worse than an honest sentence. Asserted as the ABSENCE of a control plus the PRESENCE
-   * of the explanation, because absence alone is also what a broken page looks like.
+   * THE DATE IS THE LAST **VERIFIED** ONE, not the last run. The fixtures above end in four
+   * FAILURES, the newest an hour old, and the only verified night is GOOD_DAYS old. A page reading
+   * "the last one verified" off the newest row would print today's date beside a broken backup.
    */
+  // TWO-SIDED, because the year is not a discriminator — the fixture and today share it, so the
+  // first version of this clause could not fail for the reason it was written for. The planted
+  // fixtures end in four FAILURES, the newest an hour old, and the only verified night is
+  // GOOD_DAYS old: so the verified date must be PRESENT and today's must be ABSENT.
+  const dmy = (d) => new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  check('  …and the date is the last VERIFIED night, not the newest row',
+    lastVerified.includes(dmy(H(GOOD_HOURS))) && !lastVerified.includes(dmy(new Date())),
+    // The detail reports what the PAGE said, not what the fixture was — the first version printed
+    // the expected date even while failing, which is a label that cannot be wrong.
+    `page says "${(lastVerified.match(/on ([^.]+)/) ?? [, 'nothing'])[1]}"; expected ${dmy(H(GOOD_HOURS))}, not today ${dmy(new Date())}`);
+
+  const tenantBody = (await page.textContent('body')) ?? '';
+  // EACH OF THESE IS A FIGURE THAT WAS VISIBLE TO EVERY GARAGE ADMIN. Matched against the whole
+  // page body, not a container, so moving a figure into a different section cannot hide it from
+  // this clause.
+  check('the garage sees NO run table at all',
+    (await page.locator('[data-testid="runs-table"]').count()) === 0
+    && (await page.locator('[data-testid="run-row"]').count()) === 0);
+  check('  …no health verdict, so our bad nights are not reported to customers',
+    (await page.locator('[data-testid="backup-health"]').count()) === 0
+    && !/backups in a row have failed/.test(tenantBody));
+  check('  …no dump size', !/\d+(\.\d+)?\s*MB/.test(tenantBody), (tenantBody.match(/\d+(\.\d+)?\s*MB/) ?? ['none'])[0]);
+  check('  …no table or row counts across every garage',
+    !/\d+\s+tables/.test(tenantBody) && !/[\d,]+\s+rows/.test(tenantBody),
+    (tenantBody.match(/\d+\s+tables|[\d,]+\s+rows/) ?? ['none'])[0]);
+  check('  …and no failed step, which names our own infrastructure',
+    !/upload to R2/.test(tenantBody) && !/restore or verify/.test(tenantBody));
+
+  // WHAT STAYS, because the page still has a job to do for the garage.
+  const means = (await page.textContent('[data-testid="verified-means"]')) ?? '';
+  check('“verified” is still explained as a restore, not an upload',
+    /restored into an empty database/.test(means) && /matched the source exactly/.test(means), means.trim().slice(0, 80));
   const restoreText = (await page.textContent('[data-testid="restore"]')) ?? '';
   const buttons = await page.locator('[data-testid="restore"] button, [data-testid="platform-backups"] button').count();
   check('the platform section offers no restore control at all', buttons === 0, `${buttons} button(s)`);
   check('  …and says instead that a person does it, with you', /done by hand, by us, with you/.test(restoreText), restoreText.trim().slice(0, 80));
   check('  …and says what happens to numbers already issued', /invoice numbers that have already been issued/.test(restoreText));
-
   const exportsText = (await page.textContent('[data-testid="your-exports"]')) ?? '';
   check('the tenant’s own copy is named as not built yet, rather than silently missing',
     /not available yet/.test(exportsText) && /being built/.test(exportsText), exportsText.trim().slice(0, 80));
@@ -290,12 +337,71 @@ try {
   check('  …and the platform section does not claim the backup is theirs',
     /not a file you can download or restore yourself/.test((await page.textContent('[data-testid="platform-backups"]')) ?? ''));
 
+  // ── AND THE DETAIL LANDS IN THE ENGINE ROOM ──────────────────────────────────────────────────
+  console.log('\n— THE OPERATOR SEES EVERYTHING, AND ONLY THE OWNER —');
+  // SOURCE CHECK, labelled. `erMinRole` falls back to 'support' for an unregistered href, so the
+  // ER_NAV line IS the authorisation and a page shipped without it would be open to the lowest
+  // role. Asserted from the source because the running screen cannot show you a missing line.
+  const navSrc = readFileSync(`${R}/lib/operator-roles.ts`, 'utf8');
+  check('/superadmin/backups is REGISTERED in ER_NAV as owner-only',
+    /\{\s*href:\s*'\/superadmin\/backups',\s*label:\s*'[^']+',\s*minRole:\s*'owner'\s*\}/.test(navSrc),
+    'unregistered would fall back to minRole support');
+
+  const erBrowser = await chromium.launch({ channel: 'chrome', args: ER_RESOLVER_ARGS });
+  try {
+    const ER = erOrigin();
+    const onLogin = (pathname) => underPath(pathname, '/superadmin/login');
+    const signIn = async (email, pass) => {
+      const p2 = await (await erBrowser.newContext({ viewport: { width: 1400, height: 2000 } })).newPage();
+      await p2.goto(`${ER}/superadmin/login`, { waitUntil: 'domcontentloaded' });
+      await p2.fill('input[type="email"]', email);
+      await p2.fill('input[type="password"]', pass);
+      await p2.click('button[type="submit"]');
+      await p2.waitForURL((u) => !onLogin(u.pathname), { timeout: 60000 }).catch(() => {});
+      return p2;
+    };
+
+    const ownerPage = await signIn(OP_OWNER_EMAIL, OP_PASS);
+    check('an owner operator is signed in', !onLogin(new URL(ownerPage.url()).pathname), ownerPage.url());
+    await ownerPage.goto(`${ER}/superadmin/backups`, { waitUntil: 'domcontentloaded' });
+    await ownerPage.waitForSelector('[data-testid="er-backup-health"]', { timeout: 30000 }).catch(() => {});
+
+    const erState = await ownerPage.getAttribute('[data-testid="er-backup-health"]', 'data-state').catch(() => null);
+    const erVerdict = (await ownerPage.textContent('[data-testid="er-backup-health"]').catch(() => null)) ?? '';
+    check('the Engine Room leads with the verdict', erState === 'failing', `data-state=${erState}`);
+    check('  …and it names the number of failed nights AND when it last worked',
+      /5 backups in a row have failed/.test(erVerdict)
+      && new RegExp(`last one that was verified ran ${GOOD_DAYS} days ago`).test(erVerdict),
+      erVerdict.trim().slice(0, 110));
+    const erBox = await ownerPage.locator('[data-testid="er-backup-health"]').boundingBox().catch(() => null);
+    check('  …painted, not merely present', !!erBox && erBox.width > 200 && erBox.height > 20,
+      erBox ? `${Math.round(erBox.width)}x${Math.round(erBox.height)}` : 'NO BOX');
+
+    const erRows = await ownerPage.locator('[data-testid="er-run-row"]').count();
+    check(`every reported night is listed here instead (${erRows} rows)`, erRows >= 5, `${erRows} listed`);
+    const erTable = (await ownerPage.textContent('[data-testid="er-runs-table"]').catch(() => null)) ?? '';
+    check('  …a failed night names the step that failed', /upload to R2/.test(erTable));
+    check('  …the object key is shown in full, because a restore needs it verbatim',
+      /daily\/old\.dump\.gpg/.test(erTable), (erTable.match(/[a-z]+\/[^\s]+\.gpg/) ?? ['none'])[0]);
+    check('  …and the figures the garage no longer sees are here', /tables/.test(erTable) && /MB/.test(erTable));
+
+    // OWNER ONLY, enforced server-side and not merely hidden from the menu.
+    const supportPage = await signIn(OP_SUPPORT_EMAIL, OP_PASS);
+    check('a support operator is signed in', !onLogin(new URL(supportPage.url()).pathname), supportPage.url());
+    const supportResp = await supportPage.goto(`${ER}/superadmin/backups`, { waitUntil: 'domcontentloaded' });
+    check('  …and support gets 404, not a hidden link to a readable page',
+      supportResp?.status() === 404, `HTTP ${supportResp?.status()}`);
+  } finally {
+    await erBrowser.close().catch(() => {});
+  }
+
 } catch (e) {
   check('run completed', false, describeError(e).slice(0, 300));
 } finally {
   await browser?.close().catch(() => {});
   if (prisma) {
     try {
+      await prisma.operator.deleteMany({ where: { email: { in: [OP_OWNER_EMAIL, OP_SUPPORT_EMAIL] } } }).catch(() => {});
       const left = await prisma.backupRun.deleteMany({ where: { stamp: { startsWith: PREFIX } } });
       const remaining = await prisma.backupRun.count({ where: { stamp: { startsWith: PREFIX } } });
       check('teardown left no fixture runs behind', remaining === 0, `${left.count} removed, ${remaining} left`);

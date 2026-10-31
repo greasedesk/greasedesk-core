@@ -26,7 +26,7 @@ import { PLATFORM_SEND, sendNotification } from '@/lib/notify';
 import { currentTerms } from '@/lib/affiliate';
 import { referralLink } from '@/lib/affiliate-join';
 import { confirmPhoneVerification } from '@/lib/phone-verification';
-import { mintEmailVerifyLink } from '@/lib/affiliate-email-verify';
+import { mintEmailVerifyLink, EMAIL_VERIFY_DAYS } from '@/lib/affiliate-email-verify';
 import { publicPlanChoice } from '@/lib/plan-choice';
 import { readEnvironment, revealTestOnlySecrets } from '@/lib/environment';
 import { alertAffiliateJoined } from '@/lib/operator-alerts';
@@ -87,7 +87,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         link: verify.url,
         monthsGiven: choice.annual.monthsGiven,
         monthsPaid: choice.annual.monthsPaid,
-        expiryMinutes: null,
+        // THE REAL NUMBER, from the thing that minted the link. It used to pass null, and the
+        // template had `?? 30` behind it, so every affiliate was told "30 minutes" about a link
+        // that lasts a fortnight.
+        expiryDays: EMAIL_VERIFY_DAYS,
       },
     });
     emailed = sent.ok;

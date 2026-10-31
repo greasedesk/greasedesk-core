@@ -15,11 +15,12 @@ import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
 import { attributeAtSignup } from '@/lib/affiliate';
 import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/lib/signup-source';
+import { normaliseSignupMobile } from '@/lib/phone-format';
 import { alertGarageRegistered } from '@/lib/operator-alerts';
 
 type Payload = {
   name: string; email: string; password: string; ref?: string;
-  heardAbout?: unknown; heardAboutOther?: unknown; utm?: unknown;
+  heardAbout?: unknown; heardAboutOther?: unknown; utm?: unknown; mobile?: unknown;
 };
 
 export const config = {
@@ -45,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { name, email, password, ref, heardAbout, heardAboutOther, utm } = (req.body || {}) as Payload;
+    const { name, email, password, ref, heardAbout, heardAboutOther, utm, mobile } = (req.body || {}) as Payload;
     // Marketing attribution (dormant): sanitise + cap; never trust the client's raw value. null when absent.
     const signupRef = (typeof ref === 'string' ? ref.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64) : '') || null;
 
@@ -106,6 +107,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // personal-name default surviving because setup used to be skippable; it no longer is.
         data: {
           group_name: 'New garage', billing_email: emailNorm, trial_ends_at: await trialEndsAt(), signup_ref: signupRef,
+          // OPTIONAL MOBILE (owner, 2026-10-31), so somebody can be rung about getting set up —
+          // the "registered, no checkout after an hour" alert exists for exactly that call and had
+          // no number to show. Normalised here, not trusted from the browser: the client trims as a
+          // convenience and this is the side that decides. Blank stays NULL.
+          phone: normaliseSignupMobile(mobile),
           heard_about: heard, heard_about_other: heardOther,
           utm_source: utmParts.source, utm_medium: utmParts.medium, utm_campaign: utmParts.campaign,
         },

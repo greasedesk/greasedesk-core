@@ -436,6 +436,10 @@ try {
 
   // ── 10. WHAT THE EMAIL ACTUALLY SAYS ──────────────────────────────────────────────────────────
   console.log('\n— the email itself —');
+  // A PHONE, PLANTED. Without one `contactPhone` is "not given" and the grouping clause below
+  // passes over an absent value — a clause that cannot fail. The no-checkout alert exists so
+  // somebody rings them, so the number is part of the subject, not scenery.
+  await prisma.group.update({ where: { id: gid }, data: { phone: '07397387332' } });
   const regPayload = await OA.garagePayload(prisma, gid);
   const rendered = TPL.NOTIFICATION_TEMPLATES.alert_garage_registered.email(regPayload);
   check('the subject names the garage and its ref',
@@ -454,6 +458,95 @@ try {
   check('every one of the four alerts has a template that renders',
     OA.OPERATOR_ALERT_KINDS.every((k) => typeof TPL.NOTIFICATION_TEMPLATES[OA.OPERATOR_ALERTS[k].template]?.email === 'function'),
     `${OA.OPERATOR_ALERT_KINDS.length} alerts, enumerated from the registry rather than from a list written here`);
+
+  // ── 10b. THE THINGS THE FIRST REAL ALERT GOT WRONG (owner, 2026-10-31) ───────────────────────
+  console.log('\n— and what the first real one got wrong —');
+  // "Garage: New garage", because the trading name is set during onboarding, AFTER registration —
+  // so the one field that could have said who to ask for was the one field missing. The alert that
+  // exists so somebody can PHONE them had no name and an unformatted number.
+  // MATCHED ON WHAT DISTINGUISHES IT. The first version asked whether the html contained
+  // "Contact" — which the "Contact email" row supplies, so deleting the person's row left the
+  // clause green. The label is matched with its closing tag, and the VALUE is matched too: a row
+  // whose label renders and whose value is blank is the failure this is actually about.
+  const ownerName = String(regPayload.ownerName ?? '');
+  check('the alert names the PERSON, not only the business',
+    rendered.html.includes('>Contact</td>')
+    && ownerName !== '' && ownerName !== 'not given'
+    && rendered.html.includes(ownerName),
+    `Contact: ${ownerName || '(blank)'}`);
+  check('  …and the phone is grouped so it can be dialled, not transcribed',
+    regPayload.contactPhone === '+44 7397 387332', `Phone: ${regPayload.contactPhone} (planted 07397387332)`);
+  // THE FORMATTER ITSELF, including what it must REFUSE to do. A formatter that puts +44 in front
+  // of a foreign number produces something that looks dialable and is not.
+  const PF = await import('../lib/phone-format.ts');
+  check('  …formatPhone groups a national and an international GB number the same way',
+    PF.formatPhone('07397387332') === '+44 7397 387332'
+    && PF.formatPhone('+447397387332') === '+44 7397 387332'
+    && PF.formatPhone('447397387332') === '+44 7397 387332');
+  check('  …and hands back anything it does not recognise, rather than inventing a country code',
+    PF.formatPhone('+33 1 23 45 67 89') === '+33 1 23 45 67 89'
+    && PF.formatPhone('ring the workshop') === 'ring the workshop'
+    && PF.formatPhone(null) === null && PF.formatPhone('   ') === null);
+  // "Plan: monthly" before the garage had chosen anything: TenantPlanTerms is written at signup
+  // carrying the DEFAULT, and this alert is sent before checkout.
+  check('  …and the plan is not claimed as a choice before checkout',
+    /not chosen yet/.test(String(regPayload.plan)) || /at signup/.test(String(regPayload.plan)),
+    `Plan: ${regPayload.plan}`);
+
+  // ── 10c. TWO FOOTERS, BECAUSE THERE ARE TWO SENDERS ──────────────────────────────────────────
+  // Every email said "Sent by GreaseDesk on behalf of your garage". On an operator alert that is
+  // nonsense, and to an affiliate it implied a relationship with a garage they have nothing to do
+  // with. The clause below ENUMERATES THE WHOLE REGISTRY against a declared audience, so a new
+  // template cannot be added without choosing — a name pattern would have let `alert_` do the
+  // deciding, and the next platform template will not be called that.
+  const TENANT_LINE = 'on behalf of your garage';
+  const PLATFORM_AUDIENCE = new Set([
+    // Affiliate and operator mail — the six the owner named.
+    'rep_sign_in', 'affiliate_welcome',
+    'alert_affiliate_joined', 'alert_garage_registered', 'alert_garage_no_checkout', 'alert_first_payment',
+    // And cold outreach, which cannot say "on behalf of your garage" either: a prospect is not a
+    // customer and has no garage on our books. Found because a bad key regex in the footer change
+    // hit these by accident and THIS CLAUSE asked what audience they were — the same accident also
+    // rewrote freeTextEmail, which is a garage writing to its OWN customer and must keep the tenant
+    // line. That is the pair this map exists to keep apart.
+    'prospect_step_1', 'prospect_step_2', 'prospect_step_3',
+  ]);
+  const allKeys = Object.keys(TPL.NOTIFICATION_TEMPLATES);
+  const sample = { ...regPayload, refCode: 'ZZAL1234', referralLink: 'https://example.test/r/ZZAL1234',
+    link: 'https://example.test/verify/abc', monthsGiven: 13, monthsPaid: 12, expiryDays: 14,
+    name: 'Gate', amount: '£49.00', paidAt: 'today', invoiceRef: 'ZZ-1' };
+  const footerOf = (k) => {
+    const t = TPL.NOTIFICATION_TEMPLATES[k];
+    if (typeof t?.email !== 'function') return null;
+    try { return t.email(sample).html.includes(TENANT_LINE) ? 'tenant' : 'platform'; } catch { return 'threw'; }
+  };
+  const audited = allKeys.map((k) => ({ k, got: footerOf(k), want: PLATFORM_AUDIENCE.has(k) ? 'platform' : 'tenant' }));
+  const renderable = audited.filter((a) => a.got !== null);
+  check(`every template in the registry renders and was audited (${renderable.length} of ${allKeys.length})`,
+    renderable.length > 0 && !renderable.some((a) => a.got === 'threw'),
+    renderable.filter((a) => a.got === 'threw').map((a) => a.k).join(', ') || 'none threw');
+  const wrong = renderable.filter((a) => a.got !== a.want);
+  check('  …and each one carries the footer for its audience',
+    wrong.length === 0,
+    wrong.map((a) => `${a.k}: ${a.got}, wanted ${a.want}`).join('; ') || `${renderable.filter((a) => a.want === 'platform').length} platform, ${renderable.filter((a) => a.want === 'tenant').length} tenant`);
+  // NOT VACUOUS: if nothing were classified platform the clause above would pass over one category.
+  check('  …and both audiences are actually represented, so the clause is not one-sided',
+    renderable.some((a) => a.want === 'platform') && renderable.some((a) => a.want === 'tenant'));
+
+  // ── 10d. THE WELCOME EMAIL NO LONGER PROMISES A PORTAL THAT IS NOT BUILT ─────────────────────
+  const welcome = TPL.NOTIFICATION_TEMPLATES.affiliate_welcome.email({ ...sample });
+  check('the affiliate welcome asks them to CONFIRM an address, not to sign in',
+    /Confirm your email address/.test(welcome.html)
+    && !/signs you in/.test(welcome.html) && !/Open your affiliate page/.test(welcome.html));
+  // READ FROM THE CONSTANT, not written as 14. If EMAIL_VERIFY_DAYS moves, this clause must follow
+  // the link's real life rather than going red about a number that was never the rule.
+  const VER = await import('../lib/affiliate-email-verify.ts');
+  check('  …and states the link\'s real life, with no invented fallback',
+    welcome.html.includes(`${VER.EMAIL_VERIFY_DAYS} days`) && !/30 minutes/.test(welcome.html),
+    `EMAIL_VERIFY_DAYS = ${VER.EMAIL_VERIFY_DAYS}; the caller used to pass null and the template filled in 30`);
+  check('  …and its own label stops calling itself a sign-in',
+    !/sign-in/i.test(TPL.NOTIFICATION_TEMPLATES.affiliate_welcome.label),
+    TPL.NOTIFICATION_TEMPLATES.affiliate_welcome.label);
 
   // ── 11. AND THE OWNER CAN SET IT, AND SEE IT ─────────────────────────────────────────────────
   console.log('\n— through the real Engine Room —');

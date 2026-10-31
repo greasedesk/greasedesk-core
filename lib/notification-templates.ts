@@ -70,13 +70,33 @@ const trialOffer = (days: unknown): string => {
   return Number.isFinite(n) && n > 0 ? `your ${n}-day GreaseDesk trial` : 'your GreaseDesk trial';
 };
 
+/**
+ * TWO FOOTERS, BECAUSE THERE ARE TWO SENDERS.
+ *
+ * Most of these emails go to a GARAGE'S CUSTOMER and GreaseDesk is carrying them — "on behalf of
+ * your garage" is the disclosure that makes that honest. But an affiliate's welcome, a rep's
+ * sign-in link and the operator alerts are GreaseDesk writing on its own account, to somebody who
+ * has no garage. On those the line was simply false, and to an affiliate it implied a relationship
+ * with a garage they have nothing to do with.
+ *
+ * SCOPED TO AFFILIATE AND OPERATOR MAIL (owner, 2026-10-31) and no further. Several others are
+ * arguably platform too — signup_verify, trial_ending, password_reset go to a garage's own owner
+ * about their GreaseDesk account, not to their customers — but reclassifying eleven templates
+ * quietly, inside a copy fix, is how a footer ends up wrong in the other direction. Boarded.
+ */
+const TENANT_FOOTER = 'Sent by GreaseDesk on behalf of your garage.';
+const PLATFORM_FOOTER = 'Sent by GreaseDesk.';
+
 /** Shared shell so every GreaseDesk email looks like one product, not N hand-rolled tables. */
-const shell = (bodyHtml: string): string => `
+const shell = (bodyHtml: string, footer: string = TENANT_FOOTER): string => `
   <div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;line-height:1.6;color:#0f172a;max-width:560px;margin:0 auto;padding:8px">
     ${bodyHtml}
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0" />
-    <p style="font-size:12px;color:#64748b;margin:0">Sent by GreaseDesk on behalf of your garage.</p>
+    <p style="font-size:12px;color:#64748b;margin:0">${footer}</p>
   </div>`;
+
+/** The shell for mail GreaseDesk sends on its OWN behalf. Same frame, truthful footer. */
+const pshell = (bodyHtml: string): string => shell(bodyHtml, PLATFORM_FOOTER);
 
 /**
  * ── THE REPLY ROUTE, ON EVERY CUSTOMER-FACING SMS ───────────────────────────────────────────────
@@ -143,6 +163,7 @@ const row = (label: string, value: unknown): string =>
 const garageTable = (d: TemplateData): string => `
   <table style="font-size:14px;border-collapse:collapse">
     ${row('Garage', d.garage)}${row('Legal name', d.legalName)}${row('Tenant ref', d.ref)}
+    ${row('Contact', d.ownerName)}
     ${row('Contact email', d.contactEmail)}${row('Phone', d.contactPhone)}${row('Country', d.country)}
     ${row('Sites', d.sites)}${row('Plan', d.plan)}
     ${row('Tenant status', d.tenantStatus)}${row('Subscription', d.subscriptionStatus)}
@@ -623,7 +644,7 @@ export const NOTIFICATION_TEMPLATES = {
     security: true,
     email: (d) => ({
       subject: 'Your GreaseDesk sign-in link',
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">Sign in to the rep portal</h2>
         <p>Press the button below to sign in. There is no password — this link is how you get in.</p>
         ${button(String(d.link ?? ''), 'Sign in')}
@@ -644,7 +665,7 @@ export const NOTIFICATION_TEMPLATES = {
     security: true,
     email: (d) => ({
       subject: `New affiliate: ${String(d.name ?? '')} (${String(d.refCode ?? '')})`,
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">A new affiliate joined</h2>
         <table style="font-size:14px;border-collapse:collapse">
           <tr><td style="padding:2px 12px 2px 0;color:#475569">Name</td><td><strong>${esc(d.name)}</strong></td></tr>
@@ -664,7 +685,7 @@ export const NOTIFICATION_TEMPLATES = {
     security: true,
     email: (d) => ({
       subject: `New garage: ${String(d.garage ?? '')} (${String(d.ref ?? '')})`,
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">A garage registered</h2>
         ${garageTable(d)}
         ${cameViaTable(d)}`),
@@ -675,7 +696,7 @@ export const NOTIFICATION_TEMPLATES = {
     security: true,
     email: (d) => ({
       subject: `No checkout after an hour: ${String(d.garage ?? '')} (${String(d.ref ?? '')})`,
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">Registered, and never reached checkout</h2>
         <p style="font-size:14px">Registered ${esc(d.registered)} and has no payment method on file. Worth a call.</p>
         ${garageTable(d)}
@@ -687,7 +708,7 @@ export const NOTIFICATION_TEMPLATES = {
     security: true,
     email: (d) => ({
       subject: `First payment: ${String(d.garage ?? '')} — ${String(d.amount ?? '')}`,
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">A trial became a paying customer</h2>
         <table style="font-size:14px;border-collapse:collapse">
           <tr><td style="padding:2px 12px 2px 0;color:#475569">Amount</td><td><strong>${esc(d.amount)}</strong></td></tr>
@@ -699,25 +720,36 @@ export const NOTIFICATION_TEMPLATES = {
     }),
   },
   affiliate_welcome: {
-    label: 'Affiliate welcome — code, link and sign-in',
-    // A SECURITY MESSAGE, for the reason rep_sign_in is: it CARRIES THE SIGN-IN LINK, which is the
-    // only way into the affiliate portal. A contact preference is a commercial-messaging right and
-    // was never a request not to receive one's own credential. It is also the email whose arrival
-    // is how we know the address is real, so suppressing it would leave an affiliate with a code
-    // and no way back in and nothing to show the address was ever reachable.
+    label: 'Affiliate welcome — code, link and email confirmation',
+    // A SECURITY MESSAGE: it carries the EMAIL CONFIRMATION link, and its arrival is how we learn
+    // the address is real. A contact preference is a commercial-messaging right and was never a
+    // request not to receive one's own credential.
+    //
+    // ── WHAT THIS EMAIL USED TO CLAIM, AND DID NOT DO (fixed 2026-10-31) ──────────────────────
+    // Four false statements in six lines, all pointing the same way — at an affiliate portal that
+    // is not built:
+    //   • the button said "Open your affiliate page";
+    //   • the line under it said "That button signs you in — there is no password";
+    //   • it said the link "lasts 30 minutes", from `${d.expiryMinutes ?? 30}` where the caller
+    //     passes expiryMinutes: null — so the 30 was this file's invention, not a fact;
+    //   • and the template's own label said "sign-in".
+    // The link is `mintEmailVerifyLink`, purpose `email_verify`, EMAIL_VERIFY_DAYS = 14. It
+    // confirms an address and does not sign anybody into anything. The caller now passes the real
+    // number and there is no fallback to fall back to.
     security: true,
     email: (d) => ({
       subject: 'Your GreaseDesk affiliate code',
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">You’re in</h2>
         <p>Your referral code is <strong style="font-size:18px;letter-spacing:1px">${esc(d.refCode ?? '')}</strong>.</p>
         <p>Your link, which carries the code for them:<br>
            <a href="${esc(d.referralLink ?? '')}">${esc(d.referralLink ?? '')}</a></p>
         <p>A garage that signs up through either one gets ${esc(d.monthsGiven ?? '')} months for the price of
            ${esc(d.monthsPaid ?? '')} on their first year, and you earn on the months they pay for.</p>
-        ${button(String(d.link ?? ''), 'Open your affiliate page')}
-        <p style="font-size:13px;color:#475569">That button signs you in — there is no password. It lasts
-           ${esc(d.expiryMinutes ?? 30)} minutes and works once; ask for another from the site whenever you need one.</p>
+        ${button(String(d.link ?? ''), 'Confirm your email address')}
+        <p style="font-size:13px;color:#475569">That button confirms this address is yours — it does not sign you in,
+           and there is nothing to log into yet. It lasts ${esc(d.expiryDays ?? '')} days and works once; ask for
+           another from the site if it expires.</p>
         <p style="font-size:13px;color:#475569">UK advertising rules require affiliate content to be labelled as an
            ad — “#ad” at the start of a post or description — and we ask everyone to do it.</p>`),
     }),
@@ -731,7 +763,7 @@ export const NOTIFICATION_TEMPLATES = {
     prospecting: true,
     email: (d) => ({
       subject: 'Following up from our visit — GreaseDesk',
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">Thanks for your time</h2>
         <p>[PLACEHOLDER — step 1 copy: what GreaseDesk does for a garage like ${esc(d.garageName ?? 'yours')}.]</p>
         ${prospectFooter(d)}`),
@@ -742,7 +774,7 @@ export const NOTIFICATION_TEMPLATES = {
     prospecting: true,
     email: (d) => ({
       subject: 'See GreaseDesk in two minutes',
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">A short look</h2>
         <p>[PLACEHOLDER — step 2 copy and the video link.]</p>
         ${prospectFooter(d)}`),
@@ -753,7 +785,7 @@ export const NOTIFICATION_TEMPLATES = {
     prospecting: true,
     email: (d) => ({
       subject: 'Still thinking it over?',
-      html: shell(`
+      html: pshell(`
         <h2 style="margin:0 0 8px">One last note</h2>
         <p>[PLACEHOLDER — step 3 copy.]</p>
         ${prospectFooter(d)}`),

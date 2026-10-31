@@ -216,6 +216,9 @@ const TIERS = {
     'held-on-lift-gate',
     'tenant-manifest-gate',
     'backup-run-gate',
+    // The is_internal predicate and the two screens that read it. CORE, not money: the tile it
+    // guards is a count of customers, and the defect it was written for was a silent zero.
+    'tenant-population-gate',
     'tenant-export-gate',
     'quote-options-gate', 'quote-closure-gate',
     'quote-options-flow-gate',

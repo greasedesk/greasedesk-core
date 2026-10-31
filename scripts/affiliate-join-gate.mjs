@@ -213,7 +213,7 @@ try {
     extraHTTPHeaders: { 'x-forwarded-for': GATE_IP },
   })).newPage();
   const EMAIL = `sam${MARK}`;
-  await page.goto(`${AFF}/affiliate-site/join`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${AFF}/join`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="join-form"]', { timeout: 30000 });
   check('the form is served on the affiliate host, at phone width',
     (await page.locator('[data-testid="join-form"]').count()) === 1);
@@ -273,7 +273,8 @@ try {
   // other half: that the handler is actually wired to the predicate's true branch, rather than
   // returning null always and passing section 6 by never revealing anything at all.
   // urlUnder here too: '/api/affiliate-site/confirm' as a SUBSTRING also matches
-  // /api/affiliate-site/confirm-email, which is a different endpoint on this very site.
+  // /api/affiliate-site/confirm-email, which is a different endpoint on this very site (the API
+  // prefix did NOT move — only the page addresses did).
   const confirmResponse = page.waitForResponse((r) => urlUnder(r.url(), '/api/affiliate-site/confirm'), { timeout: 30000 });
   await page.click('[data-testid="join-confirm"]');
   const confirmBody = await (await confirmResponse).json().catch(() => ({}));
@@ -289,12 +290,12 @@ try {
   check('  …and the QR is a real image of it', !!qrSrc && qrSrc.startsWith('data:image/png;base64,') && qrSrc.length > 500,
     `${qrSrc?.slice(0, 30)}… ${qrSrc?.length} chars`);
 
-  // urlUnder, NOT .includes(): a substring test is true of /affiliate-site/confirm-emails-archive
+  // urlUnder, NOT .includes(): a substring test is true of /confirm-emails-archive
   // and of anything that merely contains the words. anchored-match-gate bans the hand-written form
   // across the whole suite, and caught this line in the core tier — after I had run that gate and
   // then added one more clause.
   check('the test database hands back the verification URL as well',
-    typeof confirmBody.verifyUrl === 'string' && urlUnder(confirmBody.verifyUrl, '/affiliate-site/confirm-email'),
+    typeof confirmBody.verifyUrl === 'string' && urlUnder(confirmBody.verifyUrl, '/confirm-email'),
     `${String(confirmBody.verifyUrl).slice(0, 60)} — the link that was never emailed, for the same reason the code is handed back`);
   check('  …and says the email did NOT go, rather than claiming it did',
     confirmBody.emailed === false, `emailed ${confirmBody.emailed}`);
@@ -342,13 +343,13 @@ try {
     (await prisma.rep.findUnique({ where: { id: made.id }, select: { email_verified_at: true } }))?.email_verified_at?.getTime() === firstStamp.getTime(),
     'when the address was proved is a fact about the first time it happened');
 
-  const nonsense = await ask(AFF_HOST, '/affiliate-site/confirm-email/' + 'f'.repeat(64));
+  const nonsense = await ask(AFF_HOST, '/confirm-email/' + 'f'.repeat(64));
   check('an unknown token confirms nothing', nonsense.status === 200 && /data-testid="confirm-failed"/.test(nonsense.body));
   // A SIGN-IN TOKEN MUST NOT WORK HERE. The two purposes share one table, and this is the clause
   // that stops a verification endpoint becoming a way to spend a credential.
   const { mintRepLink } = await import('../lib/rep-magic-link.ts');
   const signIn = await mintRepLink({ repId: made.id, sentTo: EMAIL, baseUrl: AFF });
-  const crossed = await ask(AFF_HOST, `/affiliate-site/confirm-email/${signIn.rawToken}`);
+  const crossed = await ask(AFF_HOST, `/confirm-email/${signIn.rawToken}`);
   check('  …and neither does a SIGN-IN token presented to it',
     crossed.status === 200 && /data-testid="confirm-failed"/.test(crossed.body),
     'one table, two purposes — a verification link that could be traded for a session is a credential');
@@ -359,7 +360,7 @@ try {
   // ── 5. THE SWITCH STILL GOVERNS THE DOOR ─────────────────────────────────────────────────────
   console.log('\n— and the switch governs the signup, not just the button —');
   await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { affiliate_joining_open: false } });
-  const shut = await ask(AFF_HOST, '/affiliate-site/join');
+  const shut = await ask(AFF_HOST, '/join');
   check('with joining shut the form is not on the page',
     shut.status === 200 && /data-testid="join-closed"/.test(shut.body) && !/data-testid="join-form"/.test(shut.body));
   const shutPost = await post('/api/affiliate-site/signup', { name: 'ZZ Nope', email: `nope${MARK}`, phone: MOBILE });

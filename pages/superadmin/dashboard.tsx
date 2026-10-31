@@ -11,6 +11,7 @@ import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOperatorPage, operatorTenantScope, type OperatorRoleName } from '@/lib/operator-auth';
+import { NOT_OURS } from '@/lib/tenant-population';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type PageProps = { role: OperatorRoleName; scopeLabel: string; tenantCount: number; unaccrued: number };
@@ -35,11 +36,20 @@ export default function EngineRoomDashboard({ role, scopeLabel, tenantCount, una
           <span className="text-xs text-muted">scope: {scopeLabel} · {role.replace('_', ' ')}</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <ComingTile title="Total revenue (this month)" note="Arrives when billing goes live." />
+          {/* ── NO REVENUE TILE, DELIBERATELY. ───────────────────────────────────────────────
+              It used to say "Arrives when billing goes live." Billing has BEEN live, on live keys,
+              with paying tenants — so the note had outlived its premise and read as a broken
+              feature rather than an unbuilt one.
+              It is removed rather than computed because NOTHING IN THIS DATABASE RECORDS A
+              COLLECTED PAYMENT. StripeEvent is a dedupe ledger (event_id, type, livemode,
+              processed_at — no amounts), and CommissionEntry.amount_pennies is the REP's share,
+              which exists only for attributed tenants. A tile built from either would under-report
+              and look authoritative. Boarded: record collected payments, then build the tile on
+              the record. A missing tile asks the question; a wrong one answers it. ── */}
           <ComingTile title="Retained revenue (forecast)" note="After commission — reads the commission engine once rates & payments are live." />
           <div className="rounded-xl border border-line bg-surface p-5">
             <div className="text-sm text-muted">Tenants in scope</div>
-            <div className="mt-2 text-2xl font-semibold text-ink tabular-nums">{tenantCount}</div>
+            <div className="mt-2 text-2xl font-semibold text-ink tabular-nums" data-testid="er-tenant-count">{tenantCount}</div>
             <div className="mt-1 text-xs text-muted">Region-scoped to your access.</div>
           </div>
 
@@ -73,7 +83,12 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
   if (!gate.ok) return { notFound: true };
   // Region-scoped AND customer-only: internal (GreaseDesk-owned gate/test) tenants never count toward
   // the headline tenant figure or the forecast built from it.
-  const tenantCount = await prisma.group.count({ where: { ...operatorTenantScope(gate.op), is_internal: { not: true } } });
+  // NOT_OURS, not `{ not: true }`. This tile read ZERO on 2026-10-31 with every garage on the
+  // platform a paying customer: Prisma compiles `{ not: true }` to `"is_internal" <> $1`, and NULL
+  // sits outside that just as it sits outside `= false`. Measured on the gate database — `{ not:
+  // true }` returned 0 where this predicate returned 4, against 4 NULL / 2 true / 0 false. The
+  // predicate is a leaf import so a page can take it without dragging the alert spine in.
+  const tenantCount = await prisma.group.count({ where: { AND: [operatorTenantScope(gate.op), NOT_OURS] } });
   // OPEN refusals only, and scoped through the GROUP so a country manager sees their own region's
   // problem and not somebody else's. `is_internal` is NOT excluded here — unlike the headline
   // tenant count, a gate tenant failing to accrue is still a real defect worth seeing.

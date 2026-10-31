@@ -119,7 +119,7 @@ try {
   // ── 2. THE BOUNDARY ──────────────────────────────────────────────────────────────────────────
   console.log('\n— nothing outside the prefix is reachable on this host —');
   for (const [path, want, what] of [
-    ['/affiliate-site', 200, 'the page at its own path'],
+    ['/affiliate-site', 308, 'the old internal prefix, permanently redirected (see section 4b)'],
     ['/terms', 200, 'the terms page at the address a person types'],
     ['/robots.txt', 200, 'this host’s own robots'],
     ['/sitemap.xml', 200, 'this host’s own sitemap'],
@@ -166,6 +166,64 @@ try {
     codeOnApex.status === 405, `HTTP ${codeOnApex.status} — the referral prefill on /register depends on this`);
   check('  …and it is NOT exposed on the affiliate host', (await ask(AFF_HOST, '/api/affiliate/check-code')).status === 404,
     'one door per surface: this host serves /api/affiliate-site, not /api/affiliate');
+
+  // ── 4b. THE PUBLIC ADDRESSES ARE BARE, AND THE OLD ONES STILL WORK ───────────────────────────
+  // /affiliate-site is an internal folder name that was leaking into addresses people type, print
+  // on a card and receive in a confirmation email. The bare forms are now the real ones.
+  //
+  // THE OLD FORMS MUST KEEP WORKING, and that half matters more: a confirmation link lives a
+  // fortnight and is single-use, so a 404 would strand an affiliate with a code and no way to prove
+  // their address. Both halves are asserted; neither on its own is the claim.
+  console.log('\n— the public addresses are bare —');
+  const TOK = 'zzgate0000000000000000000000tok';
+  const joinBare = await ask(AFF_HOST, '/join');
+  // NOT the join FORM: this runs before section 8 toggles joining, and with joining shut the page
+  // shows a waiting list instead. What is true either way is that the address is served and that
+  // the page names ITSELF by the bare address — a canonical pointing back at /affiliate-site/join
+  // would have told crawlers the internal name was the real one, surviving the redirect silently.
+  check('/join serves the join page on this host',
+    joinBare.status === 200 && canon(joinBare.body) === `${AFFILIATE_SITE_URL}/join`,
+    `HTTP ${joinBare.status}, canonical ${canon(joinBare.body)}`);
+  const confirmBare = await ask(AFF_HOST, `/confirm-email/${TOK}`);
+  check('/confirm-email/<token> is REACHED, not 404ed by middleware',
+    confirmBare.status !== 404, `HTTP ${confirmBare.status} — the page decides about a bad token, middleware must not`);
+  check('  …and names itself by the bare address, with the token NOT in the canonical',
+    canon(confirmBare.body) === `${AFFILIATE_SITE_URL}/confirm-email` && !canon(confirmBare.body).includes(TOK),
+    canon(confirmBare.body));
+
+  const oldJoin = await ask(AFF_HOST, '/affiliate-site/join');
+  check('the old /affiliate-site/join redirects PERMANENTLY to /join',
+    oldJoin.status === 308 && new URL(oldJoin.headers.location, 'http://x').pathname === '/join',
+    `HTTP ${oldJoin.status} → ${oldJoin.headers.location}`);
+  const oldConfirm = await ask(AFF_HOST, `/affiliate-site/confirm-email/${TOK}`);
+  check('  …and so does a confirmation link already sitting in somebody\'s inbox',
+    oldConfirm.status === 308 && new URL(oldConfirm.headers.location, 'http://x').pathname === `/confirm-email/${TOK}`,
+    `HTTP ${oldConfirm.status} → ${oldConfirm.headers.location}`);
+  check('  …carrying the token through unchanged, because it is the credential',
+    String(oldConfirm.headers.location ?? '').includes(TOK), oldConfirm.headers.location);
+  // 308 AND NOT 301: a 301 may turn a later POST into a GET, which is a bug nobody finds for months.
+  check('  …as a 308, which preserves the method', oldConfirm.status === 308, `HTTP ${oldConfirm.status}`);
+  const oldWithQuery = await ask(AFF_HOST, '/affiliate-site/join?ref=ZZAL9999');
+  check('  …and the query survives the redirect, or a ?ref= is silently dropped',
+    String(oldWithQuery.headers.location ?? '').includes('ref=ZZAL9999'), oldWithQuery.headers.location);
+  const oldRoot = await ask(AFF_HOST, '/affiliate-site');
+  check('  …and the bare prefix lands on the root, not on an empty path',
+    oldRoot.status === 308 && new URL(oldRoot.headers.location, 'http://x').pathname === '/',
+    `HTTP ${oldRoot.status} → ${oldRoot.headers.location}`);
+  // NOT THE API. underPath anchors on a segment boundary; redirecting /api/affiliate-site would
+  // break the pages' own fetches, and the symptom would be a form that silently does nothing.
+  // A REAL ROUTE, and asserted as REACHED rather than merely "not 308". The first version asked a
+  // path that does not exist: 404 is not a redirect either, so the clause passed without ever
+  // showing the API prefix survives. /signup answers 405 to a GET, which only its handler can do.
+  const apiStill = await ask(AFF_HOST, '/api/affiliate-site/signup');
+  check('the API prefix is NOT redirected — the pages fetch it',
+    apiStill.status === 405, `HTTP ${apiStill.status} — 405 is the handler answering, so it was reached`);
+  // AND A NEW LINK CARRIES THE NEW ADDRESS. A link that redirects works and still looks like a
+  // mistake in an email.
+  const VER = await import('../lib/affiliate-email-verify.ts');
+  const built = VER.verifyLinkUrl(TOK, 'https://affiliates.greasedesk.com');
+  check('a newly minted confirmation link uses the bare address',
+    built === `https://affiliates.greasedesk.com/confirm-email/${TOK}`, built);
 
   // ── 5. THE CANONICAL AND THE OG IMAGE ────────────────────────────────────────────────────────
   console.log('\n— the canonical names this host, not the apex —');
@@ -249,18 +307,26 @@ try {
   await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { affiliate_joining_open: true } });
   const open = await ask(AFF_HOST, '/');
   check('with joining OPEN the join button is there',
-    /data-testid="join-open"/.test(open.body) && /href="\/affiliate-site\/join"/.test(open.body));
+    /data-testid="join-open"/.test(open.body) && /href="\/join"/.test(open.body));
   check('  …and the waiting-list form is gone',
     !/data-testid="waitlist-form"/.test(open.body), 'two doors at once would be two answers to one question');
   // AND THE BUTTON GOES SOMEWHERE. A clause on the href alone would pass against a 404: the page
   // behind it is a stub until the signup slice, and a stub is the point — a live button pointing at
   // nothing is worse than no button.
-  const join = await ask(AFF_HOST, '/affiliate-site/join');
+  // THE BARE ADDRESS (2026-10-31). This used to ask /affiliate-site/join, which now 308s — so the
+  // clause would have been measuring the redirect rather than the page behind the button.
+  const join = await ask(AFF_HOST, '/join');
   // THE SIGNUP ITSELF LANDED (slice D), so what is behind the button is the real form rather than
   // the stub this clause was written against. It still asks the only question that matters here:
   // the live button does not point at a 404. affiliate-join-gate holds the form's behaviour.
   check('  …and the button it shows does NOT point at a 404',
     join.status === 200 && /data-testid="join-form"/.test(join.body), `HTTP ${join.status}`);
+  // NO INTERNAL PATH IN THE RENDERED HTML. The redirect makes an old link WORK; a page that still
+  // emits one is a page that shows people the folder name and costs them a hop every click.
+  check('  …and no link on these pages still carries the internal /affiliate-site prefix',
+    !/href="\/affiliate-site/.test(open.body) && !/href="\/affiliate-site/.test(join.body)
+    && !/href="\/affiliate-site/.test(terms.body),
+    (`${open.body}${join.body}${terms.body}`.match(/href="\/affiliate-site[^"]*"/) ?? ['none'])[0]);
   check('  …and the page still shows the terms, the steps and the questions',
     /data-testid="terms-card"/.test(open.body) && /data-testid="how-steps"/.test(open.body) && /data-testid="faq"/.test(open.body));
 
@@ -296,6 +362,21 @@ try {
   check('  …which the sentence says WITHOUT inventing a monthly figure',
     !/month/.test(PUB.rewardSentence(zero)) && PUB.rewardSentence(zero).includes('£120'),
     PUB.rewardSentence(zero));
+
+  // ── THE CAP IS PER GARAGE, NOT PER AFFILIATE (owner, 2026-10-31) ─────────────────────────────
+  // It read: "£30 for each of a garage's first 4 paid months — £120 a garage, and £120 is the most
+  // one garage can earn." Read aloud that is a LIFETIME CAP on the affiliate, which is the opposite
+  // of the offer: £120 is the ceiling per introduced garage and the number of garages is unlimited.
+  // "One garage" was doing duty for both the thing counted and the thing earning.
+  const live = PUB.rewardSentence(f);
+  check('the reward sentence cannot be read as a lifetime cap on the affiliate',
+    !/is the most one garage can earn/.test(live) && !/\bmost\b/.test(live), live);
+  check('  …it says the per-garage ceiling is a ceiling PER GARAGE',
+    /up to £120 for every garage you introduce/.test(live), live);
+  check('  …and that the number of garages is not limited',
+    /no limit on how many garages/.test(live), live);
+  check('  …while still naming the instalment and the number of months',
+    /£30/.test(live) && /first 4 paid months/.test(live), live);
   const odd = PUB.rewardFigures({ totalRewardPennies: 12000, instalmentPennies: 5000 });
   check('  …and the count FLOORS: £120 at £50 is two, not two-and-a-bit',
     odd.paidMonths === 2, 'the cap is the cap — nobody is promised a third £50');

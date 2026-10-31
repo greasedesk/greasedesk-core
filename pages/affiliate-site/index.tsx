@@ -296,7 +296,7 @@ export default function AffiliateSite(props: Props) {
           <div className="bg-surface border border-line rounded-2xl p-5 sm:p-6 shadow-card">
             {joiningOpen ? (
               <div className="text-center">
-                <a href="/affiliate-site/join" data-testid="join-open"
+                <a href="/join" data-testid="join-open"
                   className="inline-block w-full sm:w-auto text-center bg-accent hover:bg-accent-hover text-white font-semibold rounded-lg px-6 py-3.5 text-base transition-colors">
                   {COPY.joinCta}
                 </a>

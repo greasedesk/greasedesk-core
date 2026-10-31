@@ -60,6 +60,7 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mobile, setMobile] = useState('');
   const [refCode, setRefCode] = useState('');
   const [refNote, setRefNote] = useState<string | null>(null);
   // OPTIONAL, AND IT STARTS EMPTY — no pre-selected option. A default would make "the first one on
@@ -181,6 +182,9 @@ export default function RegisterPage() {
           name: nameTrim, email: emailNorm, password: pass, ref: sanitiseRef(refCode) || null,
           heardAbout: normaliseHeardAbout(heardAbout),
           heardAboutOther: heardAbout === HEARD_ABOUT_OTHER ? heardAboutOther.trim() || null : null,
+          // BLANK IS NULL, never ''. An empty string in a nullable column is a third state nobody
+          // meant: it reads as "they answered, with nothing".
+          mobile: mobile.trim() || null,
           utm,
         }),
       });
@@ -283,6 +287,27 @@ export default function RegisterPage() {
               autoComplete="new-password"
               className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
+          </div>
+
+          {/* ── OPTIONAL, AND SAID SO TWICE: in the label and in the reason. A number asked for
+              without a reason reads as a marketing capture and gets a fake one typed into it. ── */}
+          <div>
+            <label htmlFor="mobile" className="block text-sm font-medium text-muted mb-1">
+              Mobile <span className="font-normal">(optional)</span>
+            </label>
+            <input
+              id="mobile"
+              data-testid="signup-mobile"
+              type="tel"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+              autoComplete="tel"
+              inputMode="tel"
+              className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+            <p className="mt-1 text-xs text-muted" data-testid="signup-mobile-why">
+              So we can help you get set up.
+            </p>
           </div>
 
           <div>

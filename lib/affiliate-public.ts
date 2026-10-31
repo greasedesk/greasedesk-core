@@ -86,5 +86,9 @@ export function rewardSentence(f: RewardFigures): string {
     return `${f.totalLabel} for each garage you introduce, paid once their yearly invoice is paid.`;
   }
   const months = f.paidMonths === 1 ? 'first paid month' : `first ${f.paidMonths} paid months`;
-  return `${f.instalmentLabel} for each of a garage's ${months} — ${f.totalLabel} a garage, and ${f.totalLabel} is the most one garage can earn.`;
+  // "AND £120 IS THE MOST ONE GARAGE CAN EARN" read as a LIFETIME CAP on the affiliate (owner,
+  // 2026-10-31): the cap is per introduced garage, and the number of garages is unlimited. The old
+  // phrasing put the two facts in the wrong order and used "one garage" for the thing being
+  // counted AND the thing doing the earning. Replacement wording is the owner's own.
+  return `${f.instalmentLabel} for each of a garage's ${months}: up to ${f.totalLabel} for every garage you introduce, and no limit on how many garages.`;
 }

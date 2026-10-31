@@ -29,7 +29,9 @@ export default function ConfirmEmail({ ok, alreadyDone, message }: Props) {
       <Seo
         title="Email confirmed — GreaseDesk affiliates"
         description="Confirming an affiliate email address."
-        path="/affiliate-site/confirm-email"
+        // Bare, like /join and /terms. The token is never in the canonical — it is a credential,
+        // and a canonical is a thing we publish.
+        path="/confirm-email"
         origin={AFFILIATE_SITE_URL}
         ogImage={absoluteAffiliateSiteUrl(BRAND_ASSET)}
       />

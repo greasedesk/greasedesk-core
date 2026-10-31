@@ -158,6 +158,37 @@ export function middleware(req: NextRequest) {
      * address moves. A rewrite does not re-enter middleware, so this cannot loop.
      */
     if (pathname === '/terms') return NextResponse.rewrite(new URL('/affiliate-site/terms', req.url));
+    /**
+     * ── THE PUBLIC ADDRESSES ARE BARE (owner, 2026-10-31) ──────────────────────────────────────
+     * /join and /confirm-email/<token> are what a person types and what a printed card or a poster
+     * can carry; /affiliate-site/join was an internal folder name leaking into the public address.
+     * The page FILES stay inside /affiliate-site so they keep 404ing on the apex for free — exactly
+     * the arrangement /terms above already uses, and for the same reason.
+     *
+     * A REWRITE DOES NOT RE-ENTER MIDDLEWARE, so the pair below cannot loop with the redirect that
+     * follows it: the redirect only ever sees an address a CLIENT asked for.
+     */
+    if (pathname === '/join') return NextResponse.rewrite(new URL('/affiliate-site/join', req.url));
+    if (underPath(pathname, '/confirm-email')) {
+      return NextResponse.rewrite(new URL(`/affiliate-site${pathname}`, req.url));
+    }
+    /**
+     * AND THE OLD ADDRESSES KEEP WORKING, PERMANENTLY. Confirmation links already in people's
+     * inboxes carry /affiliate-site/confirm-email/<token>, and a token is single-use with a
+     * fortnight's life — breaking those would strand an affiliate with a code and no way to prove
+     * their address. So this is a 308 and not a 404, and not a quiet rewrite either: a permanent
+     * redirect tells a crawler the bare form is the real one, which is the point of the tidy.
+     *
+     * 308 rather than 301 because it preserves the method. These are GETs today, but a 301 that
+     * silently turns a future POST into a GET is a bug nobody finds for months.
+     *
+     * NOT /api/affiliate-site — `underPath` anchors on a segment boundary, so the API prefix is
+     * untouched. Redirecting it would break the pages' own fetches.
+     */
+    if (underPath(pathname, '/affiliate-site')) {
+      const bare = pathname.slice('/affiliate-site'.length) || '/';
+      return NextResponse.redirect(new URL(`${bare}${req.nextUrl.search}`, req.url), 308);
+    }
     // THIS HOST'S OWN robots AND sitemap. public/robots.txt is static and cannot vary by Host, so
     // served here it would advertise the APEX sitemap from the affiliate domain and point crawlers
     // at URLs that 404 here. The apex files are untouched.

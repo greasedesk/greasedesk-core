@@ -41,6 +41,8 @@ import { sendNotification, PLATFORM_SEND } from '@/lib/notify';
 import { alertRecipients as resolveRecipients } from '@/lib/platform-contact';
 import { formatMoney } from '@/lib/format-money';
 import { cameVia, referrerSentence } from '@/lib/came-via';
+import { NOT_OURS } from '@/lib/tenant-population';
+import { formatPhone } from '@/lib/phone-format';
 // The payloads are TEMPLATE DATA, which is strings and numbers only. Typed as that rather than as
 // Record<string, unknown>: a template cannot render an object, and the compiler should say so here
 // rather than printing "[object Object]" in an email to the owner.
@@ -273,7 +275,12 @@ async function planShape(db: Db, groupId: string): Promise<string> {
   });
   if (!terms) return 'not recorded';
   const paid = terms.paid_now_pennies;
-  return paid != null ? `${terms.plan} (${formatMoney(paid)} at signup)` : String(terms.plan);
+  if (paid != null) return `${terms.plan} (${formatMoney(paid)} at signup)`;
+  // NOT A CHOICE YET. TenantPlanTerms is written at signup carrying the DEFAULT, so printing it
+  // bare said "Plan: monthly" about a garage that had not reached checkout — and the alert that
+  // says so is the one sent before checkout. The default is still named, because "not recorded"
+  // would hide what they would get if they did nothing.
+  return `not chosen yet (would default to ${terms.plan})`;
 }
 
 /**
@@ -287,6 +294,11 @@ export async function garagePayload(db: Db, groupId: string): Promise<TemplateDa
     select: {
       ref: true, group_name: true, trading_name: true, billing_email: true, phone: true, country_code: true,
       created_at: true, status: true, trial_ends_at: true,
+      // THE PERSON, not just the business. The first alert read "Garage: New garage" because the
+      // trading name is set during onboarding, AFTER registration — so the one field that could
+      // have told you who to ask for was the one field missing. Oldest first: the account that
+      // registered is the one that will answer the phone.
+      users: { where: { role: 'ADMIN' }, orderBy: { created_at: 'asc' }, take: 1, select: { name: true, email: true } },
       sites: { select: { site_name: true } },
       billing: { select: { subscription_status: true, stripe_customer_id: true, first_paid_at: true } },
     },
@@ -304,7 +316,13 @@ export async function garagePayload(db: Db, groupId: string): Promise<TemplateDa
     garage: g.trading_name || g.group_name,
     legalName: g.group_name,
     contactEmail: g.billing_email,
-    contactPhone: g.phone ?? 'not given',
+    // THE PERSON TO ASK FOR. Absent is stated, never blank — a missing row in an alert table reads
+    // as a rendering fault rather than a fact about the garage.
+    ownerName: g.users[0]?.name || g.users[0]?.email || 'not given',
+    // GROUPED SO IT CAN BE DIALLED. `07397387332` has to be transcribed by eye, and the
+    // no-checkout alert exists so somebody rings them. formatPhone hands back anything it does not
+    // recognise unchanged rather than inventing a country code.
+    contactPhone: formatPhone(g.phone) ?? 'not given',
     country: g.country_code ?? 'not chosen yet',
     // SITES ARE OFTEN ZERO HERE, and that is the truth rather than a gap: the site is named in the
     // onboarding step, which happens after registration. Named, so the alert does not read as a
@@ -410,16 +428,10 @@ export async function alertFirstPayment(
 
 // ── THE SWEEP ──────────────────────────────────────────────────────────────────────────────────
 
-/**
- * NOT ONE OF OURS — and `is_internal: false` is the wrong way to write it.
- *
- * Group.is_internal is NULLABLE, and NULL means nobody has said. Postgres puts NULL outside
- * `= false`, so `{ is_internal: false }` matches only the rows somebody explicitly set to false —
- * which here would have been a sweep that skipped almost every real customer and alerted on
- * nothing. (It has happened once already: a query shaped that way matched none of seven tenants.)
- * NULL is a customer, so NULL must be IN.
- */
-const NOT_OURS = { OR: [{ is_internal: null }, { is_internal: false }] } as const;
+// NOT ONE OF OURS. The predicate and its whole reasoning moved to lib/tenant-population when the
+// Engine Room dashboard was found making the same mistake a different way — `{ not: true }`, which
+// also misses NULL. One definition, in a leaf module, because the other caller is a PAGE and this
+// file reaches the database and the notification spine.
 
 /**
  * REGISTERED, AND NEVER REACHED CHECKOUT. Derived, not tracked: a garage that has no Stripe

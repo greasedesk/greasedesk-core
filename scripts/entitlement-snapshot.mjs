@@ -14,8 +14,56 @@
  *
  * SELECTs only. No transaction, no write, no model method that could make one.
  *
- *     DATABASE_URL='<production>' node scripts/entitlement-snapshot.mjs
+ *     DATABASE_URL='<production>' node scripts/entitlement-snapshot.mjs > before.txt
+ *     node scripts/entitlement-snapshot.mjs --diff before.txt after.txt
+ *
+ * ── WHY THE COMPARISON IS A MODE AND NOT A `diff` ──────────────────────────────────────────────
+ * The snapshot stamps the time it was taken, so a plain `diff` of two files can never print
+ * IDENTICAL — the one line that is SUPPOSED to differ guarantees it. During the 2026-10-30 deploy
+ * that produced a report reading "the only difference is the taken: line", which is a human
+ * filtering a known-irrelevant difference by eye, every time, for ever. The knowledge of which
+ * line does not count belongs in the tool.
  */
+
+/** The one line that is meant to differ between two snapshots. */
+const STAMP_PREFIX = 'taken:  ';
+
+/**
+ * COMPARE TWO SNAPSHOTS, ignoring the stamp and nothing else. Every other line must match exactly:
+ * this is evidence about real tenants, so "close enough" is not a verdict it is allowed to reach.
+ */
+if (process.argv[2] === '--diff') {
+  const { readFileSync } = await import('node:fs');
+  const [, , , beforePath, afterPath] = process.argv;
+  if (!beforePath || !afterPath) {
+    console.error('usage: node scripts/entitlement-snapshot.mjs --diff <before.txt> <after.txt>');
+    process.exit(2);
+  }
+  const lines = (f) => readFileSync(f, 'utf8').split('\n').filter((l) => !l.startsWith(STAMP_PREFIX));
+  const a = lines(beforePath);
+  const b = lines(afterPath);
+  const stamps = [beforePath, afterPath].map((f) =>
+    (readFileSync(f, 'utf8').split('\n').find((l) => l.startsWith(STAMP_PREFIX)) ?? '(no stamp)').trim());
+  console.log(`before: ${stamps[0]}`);
+  console.log(`after:  ${stamps[1]}`);
+  // NAMED, so a report cannot say "identical" about two files that were never compared: if one
+  // side is empty the snapshot did not run, and two empty files are not an agreement.
+  if (a.length === 0 || b.length === 0) {
+    console.error(`REFUSING A VERDICT — ${a.length === 0 ? beforePath : afterPath} has no snapshot lines at all.`);
+    process.exit(2);
+  }
+  const diffs = [];
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    if (a[i] !== b[i]) diffs.push(`  line ${i + 1}\n    before: ${a[i] ?? '(absent)'}\n    after:  ${b[i] ?? '(absent)'}`);
+  }
+  if (diffs.length === 0) {
+    console.log(`IDENTICAL — ${a.length} lines compared, the stamp ignored.`);
+    process.exit(0);
+  }
+  console.log(`${diffs.length} DIFFERENCE(S) of ${Math.max(a.length, b.length)} lines compared:`);
+  console.log(diffs.join('\n'));
+  process.exit(1);
+}
 import { classifyUrl } from './_db-target.mjs';
 
 const url = process.env.DATABASE_URL;
@@ -26,7 +74,7 @@ if (!url) {
 }
 const target = classifyUrl(url);
 console.log(`target: ${target}${target === 'production' ? '' : '  ← NOT production; this snapshot is of some other database'}`);
-console.log(`taken:  ${new Date().toISOString()}`);
+console.log(`${STAMP_PREFIX}${new Date().toISOString()}`);
 
 const { PrismaClient } = await import('@prisma/client');
 const prisma = new PrismaClient({ datasources: { db: { url } } });

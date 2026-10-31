@@ -39,8 +39,14 @@ export const EMAIL_VERIFY_PURPOSE = 'email_verify';
 export type MintedVerifyLink = { rawToken: string; url: string; expiresAt: Date };
 
 /** The address a verification link is served at, on the affiliate host. */
+/**
+ * THE BARE PUBLIC ADDRESS (owner, 2026-10-31). The folder name /affiliate-site is internal; the
+ * middleware rewrites /confirm-email/<token> onto it and 308s the old form here, so links already
+ * sent keep working — but a NEW link should carry the address we actually mean, not the one we are
+ * redirecting away from. A link that redirects works and still looks like a mistake in an email.
+ */
 export const verifyLinkUrl = (rawToken: string, baseUrl: string): string =>
-  `${baseUrl.replace(/\/+$/, '')}/affiliate-site/confirm-email/${rawToken}`;
+  `${baseUrl.replace(/\/+$/, '')}/confirm-email/${rawToken}`;
 
 /**
  * Mint one. Supersedes this affiliate's other UNSPENT verification links — a person who asks again

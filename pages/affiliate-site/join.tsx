@@ -81,7 +81,10 @@ export default function AffiliateJoin({ joiningOpen, rewardSentence, garage, hol
       <Seo
         title="Become a GreaseDesk affiliate"
         description="Sign up to the GreaseDesk affiliate programme: your name, your email and your mobile."
-        path="/affiliate-site/join"
+        // THE BARE ADDRESS, like /terms beside it. A canonical naming /affiliate-site/join tells a
+        // crawler the internal folder name is the real URL — which is the whole thing the tidy
+        // removed, and it would have survived the redirect quietly.
+        path="/join"
         origin={AFFILIATE_SITE_URL}
         ogImage={absoluteAffiliateSiteUrl(BRAND_ASSET)}
       />
