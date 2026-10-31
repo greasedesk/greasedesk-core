@@ -18,7 +18,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { requireOperatorApi } from '@/lib/operator-auth';
-import { DRAFT, canEditType, isDocType, sanitiseSlug, nextVersionStamp, resolvePublished, refuseIdenticalPublish } from '@/lib/content';
+// nextVersionStamp and refuseIdenticalPublish went with the publish step into
+// lib/content-publish; resolvePublished stays because the LIST still reads it.
+import { DRAFT, canEditType, isDocType, sanitiseSlug, resolvePublished } from '@/lib/content';
+import { publishDraft } from '@/lib/content-publish';
 
 function audit(actorId: string, action: string, slug: string, country: string, detail: any) {
   return prisma.superAdminAudit.create({ data: {
@@ -103,26 +106,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (b.action === 'publish') {
       const doc = await prisma.document.findUnique({ where: { id: String(b.id ?? '') } });
       if (!doc) return res.status(404).json({ message: 'Document not found.' });
-      if (doc.status !== 'draft') return res.status(409).json({ code: 'immutable', message: 'That version is already published and is immutable. Create a new version instead.' });
-      if (!canEditType(actor.role, doc.type as any) || !inScope(actor as any, doc.country_code)) return res.status(403).json({ message: 'You cannot publish this document.' });
-      // legal REQUIRES an effective date and becomes immutable; page publishes immediately (defaults now).
-      let effectiveFrom: Date;
-      if (doc.type === 'legal') {
-        if (!b.effectiveFrom || !/^\d{4}-\d{2}-\d{2}$/.test(String(b.effectiveFrom))) return res.status(400).json({ message: 'A legal document needs an effective date (YYYY-MM-DD) — the published version becomes immutable.' });
-        effectiveFrom = new Date(String(b.effectiveFrom) + 'T00:00:00.000Z');
-      } else {
-        effectiveFrom = b.effectiveFrom && /^\d{4}-\d{2}-\d{2}$/.test(String(b.effectiveFrom)) ? new Date(String(b.effectiveFrom) + 'T00:00:00.000Z') : new Date();
+      if (!canEditType(actor.role, doc.type as any) || !inScope(actor as any, doc.country_code)) {
+        return res.status(403).json({ message: 'You cannot publish this document.' });
       }
-      // REFUSE A NO-OP PUBLISH. Checked against the version this would supersede, before the stamp
-      // is minted — a spent version number cannot be handed back.
-      const superseded = await resolvePublished(prisma, doc.slug, doc.country_code);
-      const identical = refuseIdenticalPublish(doc.body, superseded?.body ?? null, superseded?.version ?? null);
-      if (identical) return res.status(409).json({ code: identical.code, message: identical.message });
-
-      const version = await nextVersionStamp(prisma, doc.slug, doc.country_code, effectiveFrom);
-      await prisma.document.update({ where: { id: doc.id }, data: { version, status: 'published', published_at: new Date(), effective_from: effectiveFrom } });
-      await audit(actor.userId, 'document.published', doc.slug, doc.country_code, { type: doc.type, version, effective_from: effectiveFrom.toISOString().slice(0, 10) });
-      return res.status(200).json({ ok: true, version, message: `Published ${doc.type === 'legal' ? 'immutable ' : ''}version ${version}.` });
+      /**
+       * ── WHAT HAPPENS ON A PUBLISH LIVES IN lib/content-publish ────────────────────────────────
+       * This handler keeps what is its own: who may publish, which countries they may touch, and
+       * the audit row. The ORDER of the publish itself — bake the figures, refuse an unresolved
+       * placeholder, refuse a no-op against the BAKED body, then stamp and write — moved out when
+       * baking arrived, because a second caller re-deriving that order would get it wrong in a way
+       * nobody would notice until an immutable legal version had `{{totalReward}}` printed in it.
+       */
+      const r = await publishDraft(prisma, { id: doc.id, effectiveFrom: b.effectiveFrom });
+      if (!r.ok) return res.status(r.status).json({ code: r.code, message: r.message });
+      await audit(actor.userId, 'document.published', r.slug, r.country, {
+        type: r.type, version: r.version, effective_from: r.effectiveFrom.toISOString().slice(0, 10),
+        // RECORDED, because it changes what the stored body IS. A reader of this log should be able
+        // to tell a version whose figures were substituted from one published verbatim.
+        figures_baked: r.baked,
+      });
+      return res.status(200).json({
+        ok: true,
+        version: r.version,
+        message: `Published ${r.type === 'legal' ? 'immutable ' : ''}version ${r.version}.`
+          + (r.baked ? ' Figures were baked in, so this version\u2019s text will not change if a setting does.' : ''),
+      });
     }
 
     return res.status(400).json({ message: 'Unknown action.' });

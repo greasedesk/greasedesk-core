@@ -757,14 +757,24 @@ asserted in affiliate-portal-gate and red-proved — flipping the flag reddens t
 table lands, the shape is two tables (the payout, and which accruals it settled) so that paid,
 payable and held cannot drift apart; the design is in this session's transcript.
 
-**2. Bake the terms figures AT PUBLISH TIME.**
-`/terms` substitutes `{{reward}}`, `{{holdDays}}` and the rest from ProgrammeSettings at RENDER
-time, which is what the owner asked for — a reward change cannot leave the terms contradicting the
-programme. The cost: change a setting and the text of an already-published version changes under it,
-so the version stamp alone no longer reproduces what an affiliate accepted. `RepTermsAcceptance`
-records the version, and the per-garage money is frozen separately in `TenantAffiliateTerms`, so
-nothing is wrong today. The fix is to substitute when the document is PUBLISHED, leaving the stored
-body literal; that is a change to the content publish path, shared with the legal documents.
+**2. Bake the terms figures AT PUBLISH TIME — DONE 2026-10-31, same day, at the owner's instruction.**
+The original note described render-time substitution and is kept only for the reasoning: the cost was
+that an already-published version's text moved when a setting moved, so the version stamp no longer
+reproduced what an affiliate accepted.
+
+Substitution now happens ONCE, in `lib/content-publish::publishDraft`, and the stored body is
+literal. A settings change therefore means publishing a NEW version; nothing reaches back. The
+publish step MOVED out of `pages/api/superadmin/content.ts` to get there, because the order became
+load-bearing — bake, refuse an unresolved placeholder, then compare for a no-op — and a second
+caller re-deriving it would have compared the draft and refused exactly the case a settings change
+creates. The Engine Room button and `scripts/publish-affiliate-terms.mjs` call the one function.
+
+**ONE PROTECTION THERE IS WEAKER THAN IT READS.** "The no-op check compares the BAKED body, not the
+draft" is caught by a SOURCE SCAN of lib/content-publish, not by a measured outcome: mutating it to
+compare `doc.body` left every behavioural clause green, because an unbaked draft differs from the
+baked superseded body anyway and the publish goes through for an unrelated reason. Red-proved and
+recorded as such. If that file is reworked, the behavioural case needs building deliberately — it
+would need a superseded version that was itself never baked.
 
 **3. The affiliate dashboard formats money as GBP, literally.**
 `CommissionEntry` carries its own `currency`, and the portal passes `{ currency: 'GBP' }`. True
@@ -787,8 +797,26 @@ their tabs are blank while `/favicon.ico` answers 200 and hides it. One word eac
 taken, because neither host was in this slice.
 
 **6. The browser payee-submit path is UNPROVEN until PAYEE_ENC_KEY is in .env.**
+STILL OPEN 2026-10-31 (second attempt): the owner reported the key was set; `.env` is the only env
+file in the checkout and a case-insensitive grep for "payee" finds no line in it. Reported rather
+than worked around, and no key generated here — the owner holds both values in his password manager
+by his own decision, and a key invented here would not be in it.
 Every payee RULE is proved in-process on an ephemeral key, and the route's REFUSALS (400s) are proved
 through the real server. What is not proved is a successful submit through the browser: the dev
 server has no key, so it correctly answers 503, and the gate PRINTS that rather than passing on it —
 a clause green on 200-or-503 would be vacuous. Set the key, restart, and the gate turns that line
 into a clause.
+
+### SLICE E, SECOND PASS — TWO QUESTIONS THE TERMS RAISED (2026-10-31, owner's)
+
+**The effective date of version 1.** The document's own second line reads "Version 1 · effective
+from the date joining opens", and a LEGAL publish refuses without a concrete `effective_from` —
+PublicDocument then renders that date beside the version stamp. So the page would show a stamp like
+`2026-11-01` next to a line saying the terms take effect when joining opens. Not wrong, and visibly
+two statements about the same thing. Either the owner names the date, or the duplicate line comes
+out of the body. Nothing published until he says.
+
+**The registered address.** Section 1.1 resolves `{{officeAddress}}` from lib/company-info's
+`officeOneLine()`, which yields "Unit 7 Tinsley Street, Tipton, England, DY4 7LH". The owner's draft
+omitted "England". Derived from the single source rather than typed, which is the right mechanism —
+but the exact registered address in a legal document is his to confirm.

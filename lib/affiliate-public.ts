@@ -49,13 +49,23 @@ export type RewardFigures = {
  * Pence only when there are pence — the rule lib/plan-choice already uses for plan prices. £30 must
  * not render "£30.00" beside "£120", and an operator who sets £30.50 must not see "£31".
  */
-const money = (pennies: number, country?: string | null): string => {
+/**
+ * ONE MONEY FORMAT FOR THE WHOLE PROGRAMME, exported since 2026-10-31 because the affiliate terms
+ * needed it. The trailing-zeros rule is the interesting part: £120 rather than £120.00, and £99.50
+ * rather than £99.5. Baking the terms with a second formatter produced a document that said "£120"
+ * in section 3 and "£100.00" in section 6 — both correct, visibly inconsistent, and in a legal
+ * document somebody reads end to end.
+ */
+export const programmeMoney = (pennies: number, country?: string | null): string => {
   const p = getProfile(country ?? DEFAULT_COUNTRY);
   return formatMoney(pennies, {
     currency: p.currency, locale: p.locale,
     maximumFractionDigits: pennies % 100 === 0 ? 0 : 2,
   });
 };
+
+/** The in-file name every existing caller uses. */
+const money = programmeMoney;
 
 export function rewardFigures(terms: RewardTerms, country?: string | null): RewardFigures {
   const total = Math.max(0, Math.trunc(terms.totalRewardPennies));

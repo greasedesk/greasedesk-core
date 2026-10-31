@@ -48,8 +48,11 @@ const PORTAL = await import('../lib/party-portal.ts');
 const PDATA = await import('../lib/affiliate-portal-data.ts');
 const COPY = await import('../lib/affiliate-portal-copy.ts');
 const EARN = await import('../lib/affiliate-earnings.ts');
+const PUBLIC = await import('../lib/affiliate-public.ts');
 const ADMIN = await import('../lib/affiliate-admin.ts');
 const TERMS = await import('../lib/affiliate-terms.ts');
+const PUB = await import('../lib/content-publish.ts');
+const CONTENT = await import('../lib/content.ts');
 const RM = await import('../lib/rep-magic-link.ts');
 
 const out = [];
@@ -84,6 +87,14 @@ const ask = (host, path, { method = 'GET', body, cookie } = {}) => new Promise((
 
 let prisma, browser;
 const made = { repIds: [], groupIds: [], docIds: [] };
+/**
+ * THE SETTING THIS GATE MOVES, AND NOTHING ELSE. Section 10 drops minimum_payout_pennies to 0
+ * to prove a settings change cannot reach a published version. It is restored on the happy path
+ * AND in the registered teardown — the trial-setting-gate incident was a sweep registered with
+ * onTeardown and never called in a finally, which left an operator's own value overwritten.
+ * Null means there is nothing to put back.
+ */
+let minimumRestore = null;
 
 const sweep = async () => {
   if (!prisma) return 0;
@@ -123,6 +134,16 @@ const sweep = async () => {
   if (ids.length) await prisma.rep.deleteMany({ where: { id: { in: ids } } }).catch(() => {});
   await prisma.document.deleteMany({ where: { slug: { in: [PDATA.VIDEO_SLUG, TERMS.AFFILIATE_TERMS_SLUG] }, title: { startsWith: 'ZZAP' } } }).catch(() => {});
   if (made.docIds.length) await prisma.document.deleteMany({ where: { id: { in: made.docIds } } }).catch(() => {});
+  // A LEFTOVER DRAFT WOULD BLOCK THE NEXT RUN, not merely linger: there is one draft row per slug
+  // and country (the `draft` version sentinel is unique), so a gate that died mid-section would make
+  // every later run fail on P2002 at the create. Swept by the sentinel, not only by tracked id.
+  await prisma.document.deleteMany({
+    where: { slug: TERMS.AFFILIATE_TERMS_SLUG, country_code: 'GB', version: 'draft', title: { startsWith: 'ZZAP' } },
+  }).catch(() => {});
+  if (minimumRestore !== null) {
+    await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { minimum_payout_pennies: minimumRestore } }).catch(() => {});
+    minimumRestore = null;
+  }
   await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: `affreq:ip:${GATE_IP}` } } }).catch(() => {});
   return ids.length;
 };
@@ -561,44 +582,182 @@ try {
     !/iframe/i.test(await page.locator('[data-testid="affiliate-videos-section"]').innerHTML()),
     'react-markdown without rehype-raw renders HTML as inert text — widening it for embeds is a decision, not a nicety');
 
-  // ── 10. THE TERMS, AND WHAT AN ACCEPTANCE RECORDS ────────────────────────────────────────────
-  console.log('\n— the terms are a document, and an acceptance names its version —');
+  // ── 10. THE TERMS: BAKED AT PUBLISH, LITERAL FOR EVER AFTER ──────────────────────────────────
+  console.log('\n— the terms are a document, and a published version never changes under it —');
   const summary = await ask(AFF_HOST, '/terms');
   check('before anything is published, /terms still answers', summary.status === 200, `${summary.status}`);
   check('  …with the settled summary, which says so', /being finalised/.test(summary.body),
     'no placeholder prose pretending to be final, and no 404 either');
-  const termsDoc = await prisma.document.create({
+
+  /**
+   * ── THE DRAFT CARRIES PLACEHOLDERS. PUBLISHING IS WHAT RESOLVES THEM ───────────────────────
+   * Driven through lib/content-publish::publishDraft — the same function the Engine Room button
+   * calls — rather than by writing a published row directly. A clause that inserts the finished
+   * article proves the renderer and nothing about the publish.
+   *
+   * The draft deliberately contains ONE placeholder nothing can resolve, so the refusal is tested
+   * before the success is.
+   */
+  const draftBody = [
+    '# ZZAP Affiliate terms',
+    '',
+    'You earn up to {{totalReward}}, or {{instalment}} for each of {{paidMonths}} paid months.',
+    'Held for {{holdDays}} days. {{minimumPayoutSentence}}The first payouts are in December 2026.',
+    'A garage gets {{monthsGiven}} for the price of {{monthsPaid}}: {{offerPrice}} instead of {{renewalPrice}}.',
+    'Trial: {{trialDays}} days. Us: {{legalName}} ({{companyNumber}}).',
+    '',
+    'And one nobody can resolve: {{nonsenseFigure}}',
+  ].join('\n');
+  const draft = await prisma.document.create({
     data: {
       slug: TERMS.AFFILIATE_TERMS_SLUG, title: 'ZZAP Affiliate terms', type: 'legal', country_code: 'GB',
-      body: '## What you earn\n\n{{reward}}\n\nHeld for {{holdDays}} days. {{unknownFigure}}\n',
-      version: '2026-10-31', status: 'published', published_at: new Date(), effective_from: new Date('2026-10-31T00:00:00Z'),
+      body: draftBody, version: CONTENT.DRAFT, status: 'draft',
     },
     select: { id: true },
   });
-  made.docIds.push(termsDoc.id);
-  const published = await ask(AFF_HOST, '/terms');
-  check('once published, the document replaces the summary', published.status === 200
-    && /ZZAP Affiliate terms/.test(published.body) && !/being finalised/.test(published.body),
-    'two statements of the same terms on one page is two documents to keep in step');
-  check('  …with the figures resolved from settings',
-    new RegExp(`Held for ${EARN.AFFILIATE_HOLD_DAYS} days`).test(published.body),
-    `the hold is read from lib/affiliate-earnings (${EARN.AFFILIATE_HOLD_DAYS}), not typed here — a gate that pins a day count against the wall clock goes red the day the constant moves`);
-  check('  …and an unknown placeholder left VISIBLE, not blank', /\{\{unknownFigure\}\}/.test(published.body),
-    'a blank reads as finished prose with a word missing, and would be published unnoticed');
-  check('  …and the version is on the page', /2026-10-31/.test(published.body));
+  made.docIds.push(draft.id);
 
-  const accepted = await TERMS.recordTermsAcceptance(prisma, { repId: affiliate.id, version: '2026-10-31', documentId: termsDoc.id });
+  // READ BEFORE ANYTHING IS PUBLISHED, because the clauses about the FIRST version are about the
+  // minimum that was in force when it was baked — not whatever the gate sets later.
+  const minStart = (await prisma.programmeSettings.findUnique({ where: { id: 'singleton' }, select: { minimum_payout_pennies: true } })).minimum_payout_pennies;
+  const refused = await PUB.publishDraft(prisma, { id: draft.id, effectiveFrom: '2026-10-31' });
+  check('a draft with an unresolvable figure is REFUSED, not published',
+    refused.ok === false && refused.code === 'unresolved_figure', JSON.stringify(refused).slice(0, 120));
+  check('  …and the refusal NAMES the placeholder', !refused.ok && /\{\{nonsenseFigure\}\}/.test(refused.message),
+    'an immutable version cannot be corrected afterwards, so the refusal has to be actionable now');
+  check('  …and nothing was written', (await prisma.document.findUnique({ where: { id: draft.id }, select: { status: true } })).status === 'draft');
+
+  await prisma.document.update({
+    where: { id: draft.id },
+    data: { body: draftBody.replace('\nAnd one nobody can resolve: {{nonsenseFigure}}', '') },
+  });
+  const legalNoDate = await PUB.publishDraft(prisma, { id: draft.id, effectiveFrom: null });
+  check('a legal version with no effective date is refused',
+    legalNoDate.ok === false && legalNoDate.code === 'needs_effective_from', JSON.stringify(legalNoDate).slice(0, 90));
+
+  const pub1 = await PUB.publishDraft(prisma, { id: draft.id, effectiveFrom: '2026-10-31' });
+  check('and then it publishes', pub1.ok === true && pub1.baked === true, JSON.stringify(pub1).slice(0, 120));
+  const stored1 = await prisma.document.findUnique({ where: { id: draft.id }, select: { body: true, version: true } });
+  check('  …with NO placeholder left in the stored body', !TERMS.hasPlaceholder(stored1.body),
+    'the whole point: what is stored is what was agreed to');
+  check('  …and the figures actually in it', stored1.body.includes('£120') && stored1.body.includes('£30')
+    && stored1.body.includes('14 days') && stored1.body.includes('GreaseDesk Ltd'), stored1.body.split('\n')[2]);
+  /**
+   * THE FIGURES COME FROM THE SETTINGS, NOT FROM LITERALS. minimum_payout_pennies and the hold are
+   * both things the owner can legitimately move, and a clause pinned to £100 or to "14 days" goes
+   * red about the code on the day he does — which is the defect property-gate discipline exists to
+   * prevent: pin the RULE, not the number.
+   */
+  const minLabel = PUBLIC.programmeMoney(minStart);
+  const holdPhrase = `Held for ${EARN.AFFILIATE_HOLD_DAYS} days.`;
+  check('  …including the minimum-payout sentence, while there is a minimum',
+    stored1.body.includes(`The minimum payout is ${minLabel};`), stored1.body.split('\n')[3]);
+  /**
+   * THE JUNCTION WITH THE SENTENCE PRESENT — the half the first version of this gate missed.
+   * The spacing clause further down covers the OMITTED case ("Held for 14 days. The first payouts"),
+   * and dropping the trailing space from the non-empty value reddened nothing, because that case was
+   * never asserted. It is the present case that runs the two sentences together.
+   */
+  check('    …with a space between it and the sentence that follows',
+    /next run\. The first payouts/.test(stored1.body) && !/run\.The first/.test(stored1.body),
+    stored1.body.split('\n')[3]);
+  check('  …and the hold read from the constant, not typed into the prose',
+    stored1.body.includes(holdPhrase), holdPhrase);
+  check('  …and one money format throughout, not £120 beside £100.00',
+    !/£\d+\.00/.test(stored1.body), 'both were correct and visibly inconsistent until the dry run printed them together');
+
+  const served1 = await ask(AFF_HOST, '/terms');
+  check('the page serves the published document, not the summary',
+    served1.status === 200 && /ZZAP Affiliate terms/.test(served1.body) && !/being finalised/.test(served1.body));
+  /**
+   * NAMED PLACEHOLDERS, NOT `{{`. A bare brace test matched the i18n locale bundle every page
+   * embeds — "Reminders and offers from {{garage}}" — so it would have gone red on correct code and
+   * told whoever read it that the terms page was broken. The term has to be unique to its subject:
+   * these are THIS document's placeholders, and nothing else in the app has them.
+   */
+  const OWN_PLACEHOLDERS = ['{{totalReward}}', '{{minimumPayoutSentence}}', '{{holdDays}}', '{{legalName}}'];
+  check('  …rendering the stored text VERBATIM',
+    served1.body.includes('£120') && OWN_PLACEHOLDERS.every((ph) => !served1.body.includes(ph)),
+    `render-time substitution is gone — ${OWN_PLACEHOLDERS.filter((ph) => served1.body.includes(ph)).join(', ') || 'none of this document\u2019s placeholders survived'}`);
+
+  /**
+   * ── THE BOARDED DEFECT, AS A CLAUSE: A SETTINGS CHANGE MUST NOT REACH A PUBLISHED VERSION ──
+   * This is what baking was for. Before it, moving minimum_payout_pennies rewrote the text of an
+   * already-published version, so the stamp an affiliate accepted no longer identified the words.
+   */
+  const minBefore = minStart; // read before the first publish; see the note there
+  minimumRestore = minBefore;
+  await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { minimum_payout_pennies: 0 } });
+  const stored2 = await prisma.document.findUnique({ where: { id: draft.id }, select: { body: true } });
+  check('a settings change does NOT change the published version',
+    stored2.body === stored1.body && /The minimum payout is £100;/.test(stored2.body),
+    'the version stamp an affiliate accepted has to keep identifying the same words');
+  const served2 = await ask(AFF_HOST, '/terms');
+  check('  …nor what the page serves for it', /The minimum payout is £100;/.test(served2.body),
+    'a render-time substitution would have silently dropped the sentence from a published version');
+
+  /**
+   * AND A NEW VERSION PICKS THE CHANGE UP — including the OMISSION, which is the owner's rule:
+   * a minimum of zero means there is no minimum, and "The minimum payout is £0" reads as a rule.
+   */
+  const draft2 = await prisma.document.create({
+    data: {
+      slug: TERMS.AFFILIATE_TERMS_SLUG, title: 'ZZAP Affiliate terms', type: 'legal', country_code: 'GB',
+      body: draftBody.replace('\nAnd one nobody can resolve: {{nonsenseFigure}}', ''), version: CONTENT.DRAFT, status: 'draft',
+    },
+    select: { id: true },
+  });
+  made.docIds.push(draft2.id);
+  const pub2 = await PUB.publishDraft(prisma, { id: draft2.id, effectiveFrom: '2026-11-01' });
+  check('a new version, same prose, is NOT refused as a no-op after a settings change',
+    pub2.ok === true, JSON.stringify(pub2).slice(0, 140));
+  check('  …because the comparison is against the BAKED body, not the draft',
+    /refuseIdenticalPublish\(body,/.test(src('lib/content-publish.ts')),
+    'comparing the draft would refuse exactly the case a settings change creates');
+  const stored3 = await prisma.document.findUnique({ where: { id: draft2.id }, select: { body: true, version: true } });
+  check('  …and with no minimum, the SENTENCE IS OMITTED', !/minimum payout/i.test(stored3.body),
+    stored3.body.split('\n')[3]);
+  check('    …leaving the two sentences correctly spaced',
+    stored3.body.includes(`${holdPhrase} The first payouts`),
+    'the omitted value carries its own trailing space, so nothing has to collapse whitespace afterwards');
+  check('  …and it is a different version from the first', stored3.version !== stored1.version,
+    `${stored1.version} then ${stored3.version}`);
+
+  await prisma.programmeSettings.update({ where: { id: 'singleton' }, data: { minimum_payout_pennies: minBefore } });
+  minimumRestore = null;
+
+  // ── AND WHAT AN ACCEPTANCE RECORDS ───────────────────────────────────────────────────────────
+  const accepted = await TERMS.recordTermsAcceptance(prisma, { repId: affiliate.id, version: stored1.version, documentId: draft.id });
   check('an acceptance records WHICH version', accepted === true
-    && (await prisma.repTermsAcceptance.count({ where: { rep_id: affiliate.id, version: '2026-10-31' } })) === 1);
+    && (await prisma.repTermsAcceptance.count({ where: { rep_id: affiliate.id, version: stored1.version } })) === 1);
   check('  …and with nothing published, nothing is invented',
     (await TERMS.recordTermsAcceptance(prisma, { repId: repParty.id, version: null })) === false
     && (await prisma.repTermsAcceptance.count({ where: { rep_id: repParty.id } })) === 0,
     'writing today’s date would reference a document that does not exist');
   check('  …and the record is append-only, so a second acceptance does not overwrite the first',
     await (async () => {
-      await TERMS.recordTermsAcceptance(prisma, { repId: affiliate.id, version: '2026-12-01', documentId: null });
+      await TERMS.recordTermsAcceptance(prisma, { repId: affiliate.id, version: stored3.version, documentId: draft2.id });
       return (await prisma.repTermsAcceptance.count({ where: { rep_id: affiliate.id } })) === 2;
     })(), 'a terms_version column would have erased what the first acceptance was to');
+  check('  …so two affiliates on two versions are distinguishable for ever',
+    stored1.version !== stored3.version
+    && (await prisma.repTermsAcceptance.count({ where: { rep_id: affiliate.id, version: stored1.version } })) === 1,
+    'which is only true because the published bodies are literal');
+
+  // ── THE SOURCE FILE AND THE SCRIPT THAT PUTS IT IN ───────────────────────────────────────────
+  const source = src('content/affiliate-terms-v1.md');
+  check('the real terms are a file in the repository', source.length > 4000, `${source.length} characters`);
+  check('  …carrying placeholders rather than typed figures',
+    TERMS.hasPlaceholder(source) && !/£120|£600|£750/.test(source),
+    'a figure typed into the prose is one that can disagree with the programme');
+  const srcFigures = await TERMS.termsFigures(prisma);
+  const srcBaked = TERMS.bakeFigures(source, srcFigures);
+  check('  …and every one of them resolves', srcBaked.unfilled.length === 0, srcBaked.unfilled.join(', ') || 'none unresolved');
+  check('  …so the real document would publish rather than be refused',
+    TERMS.refuseUnbaked(srcBaked.unfilled) === null);
+  check('  …and its baked text carries the figures a reader checks',
+    srcBaked.body.includes('£120') && srcBaked.body.includes('12 months for the price of 8')
+    && srcBaked.body.includes('£600 instead of £750'), 'section 3 and section 4, from settings');
 
   // ── 11. THE OTHER PARTY'S DOOR IS SHUT, WITH A REAL SESSION ──────────────────────────────────
   console.log('\n— and an affiliate session reaches nothing of the rep’s —');

@@ -147,38 +147,31 @@ export const getServerSideProps: GetServerSideProps<Props> = async () => {
   const { rewardFigures, rewardSentence } = await import('@/lib/affiliate-public');
 
   const { resolvePublished } = await import('@/lib/content');
-  const { AFFILIATE_TERMS_SLUG, fillTerms } = await import('@/lib/affiliate-terms');
+  const { AFFILIATE_TERMS_SLUG } = await import('@/lib/affiliate-terms');
 
   const terms = await currentTerms(prisma);
   const figures = rewardFigures({ totalRewardPennies: terms.totalRewardPennies, instalmentPennies: terms.instalmentPennies });
   const choice = await publicPlanChoice(prisma, { referred: true });
 
   /**
-   * THE FIGURES THE DOCUMENT MAY REFER TO. Every one is RESOLVED, never typed — the same resolvers
-   * the summary below uses, so the published terms and the summary cannot quote different money.
-   * An unknown placeholder survives as literal braces; see lib/affiliate-terms for why that is
-   * louder than a blank.
+   * ── THE BODY IS RENDERED AS STORED. NOTHING IS SUBSTITUTED HERE (owner, 2026-10-31) ──────────
+   * It used to fill `{{totalReward}}` and the rest on every request from live settings. That made
+   * the published text move when a setting moved, so the version an affiliate accepted no longer
+   * identified the words they agreed to. The figures are now baked ONCE, at publish, by
+   * lib/content-publish — so what is read back here is literal, and changing a setting means
+   * publishing a new version rather than quietly rewriting an old one.
+   *
+   * A published body therefore contains no placeholders at all, and the publish refuses if it
+   * would. affiliate-portal-gate asserts both halves.
    */
   const published = await resolvePublished(prisma, AFFILIATE_TERMS_SLUG, 'GB');
-  const docFigures = {
-    reward: rewardSentence(figures),
-    totalReward: figures.totalLabel,
-    instalment: figures.instalmentLabel ?? undefined,
-    holdDays: AFFILIATE_HOLD_DAYS,
-    monthsGiven: choice.annual.monthsGiven,
-    monthsPaid: choice.annual.monthsPaid,
-    offerPrice: choice.annual.totalLabel,
-    renewalPrice: choice.annual.renewalTotalLabel,
-    legalName: COMPANY.legalName,
-    companyNumber: COMPANY.companyNumber,
-  };
 
   return {
     props: {
       doc: published
         ? {
           title: published.title,
-          body: fillTerms(published.body, docFigures),
+          body: published.body,
           version: published.version,
           effectiveFrom: published.effective_from ? published.effective_from.toISOString().slice(0, 10) : null,
         }
