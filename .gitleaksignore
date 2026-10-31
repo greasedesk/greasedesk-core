@@ -16,6 +16,19 @@
 #
 # Every credential from this incident is now rotated, so nothing listed here is a live exposure.
 #
+# RESEND_API_KEY — VERIFIED AT THE PROVIDER 2026-10-31. The rotation line above was a CLAIM until
+# then: the only key active on the Resend account is "greasedesk-prod-2026-08", created August 2026,
+# and the 2025 key in the 6b0be09 blob no longer exists there. So the entry is accurate and this is
+# not a live exposure. Checked because a written rule is not a tested rule.
+#
+# READ THIS BEFORE RE-AUDITING, or you will raise the alarm the 2026-10-31 audit raised. This
+# machine's local .env still holds the OLD key, byte-identical (SHA-256) to the value in the
+# 6b0be09 blob. Hashing .env against history therefore MATCHES — and that match means the local
+# file is STALE, not that the rotation was skipped. The local key is dead: a platform send driven
+# from this machine on 2026-10-26 came back 401 validation_error and recorded a NotificationLog row
+# with status `failed`. Only the provider's key list settles this. A hash comparison cannot, for the
+# same reason the suppressions below have to exist — nothing on this side can know a string is dead.
+#
 # DO NOT "clean up" these lines by deleting them. Rotation does not alter git history: the old
 # values are still in the 6b0be09 blobs, byte for byte, and the scanner cannot know a string is
 # dead. Deleting a fingerprint therefore does NOT make future leaks fail louder — it makes EVERY
