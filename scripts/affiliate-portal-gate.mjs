@@ -56,6 +56,7 @@ const PADMIN = await import('../lib/payee-admin.ts');
 const PORTAL = await import('../lib/party-portal.ts');
 const PDATA = await import('../lib/affiliate-portal-data.ts');
 const COPY = await import('../lib/affiliate-portal-copy.ts');
+const NAV = await import('../lib/affiliate-portal-nav.ts');
 const EARN = await import('../lib/affiliate-earnings.ts');
 const PUBLIC = await import('../lib/affiliate-public.ts');
 const ADMIN = await import('../lib/affiliate-admin.ts');
@@ -81,6 +82,20 @@ const RESOLVER = [
 const MARK = '@zz-affiliate-portal.invalid';
 const PREFIX = `ZZAP${randomUUID().slice(0, 6).toUpperCase()}`;
 const GATE_IP = '203.0.113.11';
+/**
+ * ── THE BROWSER GETS ITS OWN ADDRESS, ONE PER RUN ───────────────────────────────────────────────
+ * spendRepLink takes a token from lib/auth-rate-limit's per-IP bucket: 30 rep sign-ins an hour, and
+ * clientIp reads x-forwarded-for, which the dev server sets from the socket. So every run of this
+ * gate spent two of ONE bucket for 127.0.0.1, and on the sixteenth run in an hour the sign-in simply
+ * stopped working — presenting as a 30-second timeout waiting for the dashboard, with no page error
+ * and nothing in the log about a limit. It read exactly like a broken page, and I spent three
+ * red-proofs blaming a paragraph I had moved.
+ *
+ * A per-run address in the documentation range isolates each run, the same reason GATE_IP above
+ * exists for the request-link clauses. It does NOT weaken the limiter: nothing here claims to test
+ * it, and signInLimitNote below names it the moment a sign-in does not complete.
+ */
+const SIGNIN_IP = `203.0.113.${20 + Math.floor(Math.random() * 200)}`;
 
 const ask = (host, path, { method = 'GET', body, cookie } = {}) => new Promise((resolve) => {
   const headers = { Host: `${host}:${B.port}`, 'x-forwarded-for': GATE_IP };
@@ -104,6 +119,22 @@ const made = { repIds: [], groupIds: [], docIds: [] };
  * Null means there is nothing to put back.
  */
 let minimumRestore = null;
+
+/**
+ * WHY A SIGN-IN MIGHT NOT HAVE COMPLETED — written into the failure, because the symptom names the
+ * wrong conclusion. A spent bucket looks identical to a page that will not render, and the first
+ * reading of it is always the code you just changed.
+ */
+const signInLimitNote = async (ip) => {
+  try {
+    const since = new Date(Date.now() - 60 * 60 * 1000);
+    const used = await prisma.authRateLimit.count({ where: { key: `repauth:ip:${ip}`, created_at: { gte: since } } });
+    return `rep sign-ins from ${ip} in the last hour: ${used} of 30`
+      + (used >= 30 ? ' — THE LIMITER IS SPENT, which is the likelier cause than the page' : '');
+  } catch (e) {
+    return `could not read the sign-in limiter: ${String(e).slice(0, 80)}`;
+  }
+};
 
 const sweep = async () => {
   if (!prisma) return 0;
@@ -154,6 +185,21 @@ const sweep = async () => {
     minimumRestore = null;
   }
   await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: `affreq:ip:${GATE_IP}` } } }).catch(() => {});
+  /**
+   * AND THIS RUN'S OWN SIGN-IN BUCKET. The browser carries a per-run address, so these rows are NOT
+   * loopback and the runner's own loopback sweep can never reach them — while takeToken prunes only
+   * the key it is taking, and a one-shot random key is never taken again. Without this line the
+   * isolation that fixed the limiter would quietly leak rows into authRateLimit for ever. The
+   * isolation and the cleanup are one decision, not two.
+   */
+  /**
+   * BY PREFIX, NOT BY THIS RUN'S KEY. A run that dies before its finally block leaves rows under an
+   * address nothing will ever name again — and 203.0.113.0/24 is the documentation range, used by
+   * nothing in this codebase but this gate, so the whole range is ours to clear. Same reasoning as
+   * the leftover draft above: the sweep removes what an earlier crashed run left, not only what
+   * this one made.
+   */
+  await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: 'repauth:ip:203.0.113.' } } }).catch(() => {});
   return ids.length;
 };
 
@@ -307,7 +353,7 @@ try {
   // ── 4. SIGNING IN, AND WHAT THE PAGE ACTUALLY SHOWS ──────────────────────────────────────────
   console.log('\n— and a real browser gets in and reads it —');
   browser = await chromium.launch({ channel: 'chrome', args: RESOLVER });
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-for': SIGNIN_IP } });
   const page = await ctx.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e.message).slice(0, 200)));
@@ -318,7 +364,10 @@ try {
   check('the landing page runs without throwing', pageErrors.length === 0,
     pageErrors[0] ?? 'no uncaught error — a server-only import reaching the bundle shows up HERE');
   await page.click('[data-testid="affiliate-enter"]');
-  await page.waitForSelector('[data-testid="affiliate-home"]');
+  await page.waitForSelector('[data-testid="affiliate-home"]', { timeout: 20000 }).catch(async (e) => {
+    throw new Error(`the affiliate never reached the dashboard (${page.url()}) — ${await signInLimitNote(SIGNIN_IP)}; `
+      + `page errors: ${JSON.stringify(pageErrors)} — ${String(e).slice(0, 80)}`);
+  });
   check('  …and the link signs the affiliate in', AM.urlUnder(page.url(), PORTAL.portalHomePath('affiliate')), page.url());
   check('  …with the dashboard running clean too', pageErrors.length === 0, pageErrors[0] ?? 'still no uncaught error');
 
@@ -331,7 +380,9 @@ try {
   check('  …and a QR built on the server',
     (await page.locator('[data-testid="affiliate-qr"]').count()) === 1 && qrIsServerBuilt,
     'a client-rendered QR would make the poster depend on JS for the one thing it exists to carry');
-  check('  …the four figures are rendered', ['earn-earned', 'earn-held', 'earn-payable', 'earn-paid']
+  // IN THE MARKUP, which is all `includes` can say: five of the six sections are display:none on
+  // arrival, and section 4a is where each one is proved VISIBLE through its own menu item.
+  check('  …the four figures are in the markup', ['earn-earned', 'earn-held', 'earn-payable', 'earn-paid']
     .every((t) => html.includes(t)));
   check('  …and "paid" reads as no record rather than £0.00',
     /No payouts yet/.test(await page.locator('[data-testid="earn-paid"]').innerText()),
@@ -344,6 +395,150 @@ try {
   check('  …the garage is listed with its status', /Paying/.test(await page.locator('[data-testid="affiliate-garages"]').innerText()));
   check('  …four how-it-works steps', (await page.locator('[data-testid="affiliate-how-section"] ol > li').count()) === 4);
   check('  …and the poster is one click away', (await page.locator('[data-testid="affiliate-poster-link"]').count()) === 1);
+
+  // ── 4a. THE MENU, AND ONE SECTION AT A TIME ──────────────────────────────────────────────────
+  /**
+   * EVERY CLAUSE HERE ASKS `isVisible()`, NOT `count()` OR `innerText()`, AND THAT IS THE WHOLE
+   * POINT OF THE SECTION.
+   *
+   * The six sections all live in the DOM and five of them are display:none. The HTML spec says an
+   * element that is NOT BEING RENDERED returns its textContent from `innerText` — so every clause
+   * above that reads `innerText` kept passing when I hid the thing it was reading, and the first run
+   * after the menu landed was 189 green with nothing proved about what a person can see. A count and
+   * a string match cannot tell a rendered section from a hidden one; only visibility can.
+   *
+   * THE CONTENT IS ASSERTED THROUGH THE MENU, not alongside it: click the item, and the element the
+   * section exists for has to appear. A menu whose items highlight correctly and show the wrong pane
+   * would pass a nav-only check.
+   */
+  console.log('\n— the menu moves one section at a time, and the logo does not point at the tenant app —');
+  const paneOf = (k) => page.locator(`[data-testid="portal-section-${k}"]`);
+  const navOf = (k) => page.locator(`[data-testid="portal-nav-${k}"]`);
+  /** The element each section EXISTS for — so "the pane is visible" cannot pass over an empty box. */
+  const CONTENT_OF = {
+    overview: 'affiliate-how-section',
+    share: 'affiliate-code',
+    posts: 'affiliate-posts-section',
+    garages: 'affiliate-garages-section',
+    earnings: 'earn-earned',
+    'payment-details': 'payee-form',
+  };
+
+  check('the rail is on the page with the logo at the top',
+    (await page.locator('[data-testid="portal-rail"]').count()) === 1
+    && (await page.locator('[data-testid="portal-logo"] img').count()) === 1);
+  /**
+   * BrandLogo DEFAULTS ITS HREF TO /admin/dashboard, which does not exist on this host. A shell that
+   * took the default would have shipped a logo whose only job is to go home and which 404s instead.
+   */
+  check('  …and the logo goes to the portal, not to the tenant app',
+    (await page.locator('[data-testid="portal-logo"] a').getAttribute('href')) === PORTAL.portalHomePath('affiliate'),
+    await page.locator('[data-testid="portal-logo"] a').getAttribute('href'));
+  // ENUMERATED FROM THE EXPORTED TABLE, never from a list typed here: a seventh section added to the
+  // nav and never rendered is exactly the gap a hand-written list cannot see.
+  check('  …a menu item and a pane for every section in the table',
+    NAV.PORTAL_SECTIONS.length === 6
+    && (await Promise.all(NAV.PORTAL_SECTIONS.map(async (sec) => (await navOf(sec.key).count()) === 1
+      && (await paneOf(sec.key).count()) === 1 && !!CONTENT_OF[sec.key]))).every(Boolean),
+    NAV.PORTAL_SECTIONS.map((x) => x.key).join(', '));
+  check('  …and the owner’s menu, in his words',
+    ['Overview', 'Share', 'Posts & videos', 'My garages', 'Earnings', 'Payment details']
+      .every((l, i) => NAV.PORTAL_SECTIONS[i].label === l),
+    NAV.PORTAL_SECTIONS.map((x) => x.label).join(' · '));
+  check('  …with Terms and Sign out below them, as links out rather than sections',
+    (await page.locator('[data-testid="portal-link-terms"]').count()) === 1
+    && (await page.locator('[data-testid="portal-signout"]').count()) === 1
+    && NAV.PORTAL_SECTIONS.every((sec) => sec.key !== 'terms'));
+
+  const visibleKeys = async () => {
+    const vis = [];
+    for (const sec of NAV.PORTAL_SECTIONS) if (await paneOf(sec.key).isVisible()) vis.push(sec.key);
+    return vis;
+  };
+  check('on arrival exactly one section is showing, and it is the overview',
+    JSON.stringify(await visibleKeys()) === JSON.stringify([NAV.PORTAL_DEFAULT_SECTION]),
+    (await visibleKeys()).join(', ') || 'NOTHING is visible');
+
+  for (const sec of NAV.PORTAL_SECTIONS) {
+    await navOf(sec.key).click();
+    await page.waitForFunction(
+      (k) => !document.querySelector(`[data-testid="portal-section-${k}"]`).hasAttribute('hidden'),
+      sec.key, { timeout: 4000 },
+    ).catch(() => {});
+    const vis = await visibleKeys();
+    const content = page.locator(`[data-testid="${CONTENT_OF[sec.key]}"]`);
+    check(`  …“${sec.label}” shows ${CONTENT_OF[sec.key]} and hides the other five`,
+      JSON.stringify(vis) === JSON.stringify([sec.key]) && await content.isVisible(),
+      `visible: ${vis.join(', ') || 'none'}; ${CONTENT_OF[sec.key]} ${await content.isVisible() ? 'visible' : 'HIDDEN'}`);
+    check(`    …the address bar says so, and the item is marked current`,
+      new URL(page.url()).hash === `#${sec.key}`
+      && (await navOf(sec.key).getAttribute('aria-current')) === 'page',
+      `${new URL(page.url()).hash} · aria-current=${await navOf(sec.key).getAttribute('aria-current')}`);
+  }
+
+  /**
+   * A PASTED ADDRESS, which is the reason the hash is the source of truth rather than a piece of
+   * state kept in step with it. A fresh load of /dashboard#earnings must open on Earnings.
+   */
+  /**
+   * ── THE DOCUMENT HAS TO BE LOADED AFRESH, AND THE FIRST VERSION OF THIS WAS NOT ──────────────
+   * A `goto` to a URL that differs from the current one only in its FRAGMENT does not reload the
+   * document — the browser fires hashchange on the page already open. So this clause arrived at
+   * `#earnings` from `#payment-details` and proved the listener a second time, while the thing it
+   * claims to test (the hash being read ON ARRIVAL) was never exercised. Deleting the on-mount read
+   * left the whole gate green.
+   *
+   * So: leave the document first. A different PATH is a real navigation, and the hashed address is
+   * then a cold load, which is what a pasted link actually is.
+   */
+  await page.goto(`${AFF}/poster`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}#earnings`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
+  await page.waitForFunction(() => !document.querySelector('[data-testid="portal-section-earnings"]').hasAttribute('hidden'),
+    null, { timeout: 4000 }).catch(() => {});
+  check('a pasted link opens on the section it names',
+    JSON.stringify(await visibleKeys()) === JSON.stringify(['earnings']), (await visibleKeys()).join(', ') || 'none');
+  // A STALE OR MANGLED HASH OPENS THE PORTAL rather than a page with every section hidden — the
+  // failure mode of a lookup that throws, or of one that returns undefined and renders nothing.
+  await page.goto(`${AFF}/poster`, { waitUntil: 'domcontentloaded' }); // a cold load again — see above
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}#not-a-section`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
+  check('  …and an unrecognised one opens the overview rather than nothing at all',
+    JSON.stringify(await visibleKeys()) === JSON.stringify([NAV.PORTAL_DEFAULT_SECTION]),
+    (await visibleKeys()).join(', ') || 'NOTHING is visible');
+  check('  …which is what sectionFromHash says on its own, for every shape of input',
+    ['#earnings', 'earnings', '#EARNINGS', ' #earnings ', '#', '', '#nope', null, undefined]
+      .map((h) => NAV.sectionFromHash(h))
+      .join(',') === `earnings,earnings,earnings,earnings,${'overview,'.repeat(4)}overview`,
+    ['#earnings', 'earnings', '#EARNINGS', ' #earnings ', '#', '', '#nope', null, undefined].map((h) => `${JSON.stringify(h)}→${NAV.sectionFromHash(h)}`).join(' '));
+
+  /**
+   * ── ON A PHONE: THE RAIL IS GONE AND THERE IS A WAY TO THE MENU ──────────────────────────────
+   * The owner asked for it to collapse, so the clause is that the rail is NOT visible at phone width
+   * and that the button is — a "renders at 390px" check would pass with both on screen at once.
+   */
+  await page.setViewportSize({ width: 390, height: 844 });
+  const railVisible = await page.locator('[data-testid="portal-rail"]').isVisible();
+  const buttonVisible = await page.locator('[data-testid="portal-menu-button"]').isVisible();
+  check('at phone width the rail is gone and a menu button is there', !railVisible && buttonVisible,
+    `rail ${railVisible ? 'VISIBLE' : 'hidden'} · button ${buttonVisible ? 'visible' : 'MISSING'}`);
+  check('  …and the menu is closed until it is asked for',
+    (await page.locator('[data-testid="portal-mobile-nav"]').count()) === 0);
+  await page.locator('[data-testid="portal-menu-button"]').click();
+  await page.waitForSelector('[data-testid="portal-mobile-nav"]');
+  check('  …it opens with the same items', (await page.locator('[data-testid="portal-mobile-nav"] [data-testid^="portal-nav-"]').count()) === 6);
+  await page.locator('[data-testid="portal-mobile-nav"] [data-testid="portal-nav-garages"]').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid="portal-section-garages"]').hasAttribute('hidden'),
+    null, { timeout: 4000 }).catch(() => {});
+  // IT CLOSES ON NAVIGATE. An overlay left open covers the section the person just asked to see,
+  // which on a phone is the whole screen — the change would be invisible and read as a dead menu.
+  check('  …and choosing one closes it and shows that section',
+    (await page.locator('[data-testid="portal-mobile-nav"]').count()) === 0
+    && await paneOf('garages').isVisible(),
+    `overlay ${(await page.locator('[data-testid="portal-mobile-nav"]').count()) ? 'STILL OPEN' : 'closed'}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
 
   // ── 4b. THE POSTER, WHICH IS THE ONE PAGE THAT OWNS A PAPER SIZE ─────────────────────────────
   console.log('\n— and the printable sheet carries the same code and the same offer —');
@@ -381,7 +576,8 @@ try {
 
   // ── 4c. THE PAYEE FORM, THROUGH THE REAL ROUTE ───────────────────────────────────────────────
   console.log('\n— and the payee route refuses before it encrypts anything —');
-  check('the form is on the dashboard', (await page.locator('[data-testid="payee-form"]').count()) === 1);
+  check('the form is in the dashboard’s markup', (await page.locator('[data-testid="payee-form"]').count()) === 1,
+    'section 4a proves it is VISIBLE when Payment details is chosen — a count cannot say that');
   check('  …and says WHY a person checks it',
     /checked by a person/.test(await page.locator('[data-testid="affiliate-payee-section"]').innerText()),
     'an unexplained delay reads as a fault');
@@ -485,6 +681,78 @@ try {
     'a literal #ad inside each post is one edit away from being dropped from one of them');
   check('  …and the page shows them with copy buttons',
     (await page.locator('[data-testid^="affiliate-copy-post-"]').count()) === 3);
+
+  // ── 6b. NOTHING PROMISES WHAT THE TERMS DO NOT ───────────────────────────────────────────────
+  /**
+   * THE DEFECT THIS SECTION EXISTS FOR (owner, 2026-10-31): step 3 said the hold meant "we are not
+   * asking for money back from you later" and step 4 said "nothing is ever taken back from money we
+   * have already sent you". Terms 6.5 and 6.6 say a full refund or a chargeback cancels that
+   * payment's reward and DEDUCTS it from the next payout if it was already paid; section 7 recovers
+   * one earned on a garage the affiliate could not earn on. The public terms summary carried the
+   * same reassurance in its own words — "we do not ask for money back".
+   *
+   * A reassurance that holds in most cases is read as a guarantee on the day it does not, and the
+   * person reading it is owed money. So this asks the FUNCTIONS what they return, and then sweeps
+   * every rendered surface for the shape of the promise rather than for the three sentences that
+   * happened to be written.
+   */
+  console.log('\n— and nothing in the portal promises what the terms do not —');
+  const how = COPY.howItWorks({ holdDays: 14, monthsGiven: 12, monthsPaid: 8 });
+  check('the hold is described as catching MOST refunds, not as making us never ask',
+    /most refunds/.test(how[2].body) && !/(not|never) ask/i.test(how[2].body), how[2].body);
+  check('  …and step 4 says the deduction instead of denying it',
+    how[3].body.includes(COPY.REFUND_RULE) && /comes off your next payout/.test(how[3].body), how[3].body);
+  check('  …from ONE constant, so the two places it is said cannot drift',
+    COPY.REFUND_RULE.length > 40
+    && (src('pages/affiliate-portal/dashboard.tsx').match(/REFUND_RULE/g) ?? []).length >= 2
+    && !/comes off your next payout/.test(src('pages/affiliate-portal/dashboard.tsx')),
+    'the earnings section and step 4 both render it; a second copy is a promise that gets corrected once');
+  check('  …and it keeps the distinction the terms make, between a full refund and a partial one',
+    /in full/.test(COPY.REFUND_RULE), COPY.REFUND_RULE);
+
+  /**
+   * THE SWEEP. Over RENDERED output — the served dashboard (all six sections are in the DOM, so one
+   * fetch covers every word of the portal), the poster, and the public terms page. Not over source:
+   * a source scan reads the comments that explain the fix as if they were the copy, and the lesson
+   * on the board is that a term matching something other than its subject proves nothing.
+   */
+  const PROMISES = [
+    /not asking for money back/i,
+    /(?:never|not|don.t|do not) ask(?:ing)?[^.]{0,30}for money back/i,
+    /nothing is ever taken back/i,
+    /we do not ask for money back/i,
+    /yours to keep/i,
+    /(?:no|zero) risk\b/i,
+    /risk[- ]free/i,
+    /guarantee/i,
+  ];
+  const termsPage = await ask(AFF_HOST, '/terms');
+  const SURFACES = [
+    ['the dashboard, every section of it', servedEarly.body],
+    ['the printable poster', poster.body],
+    ['the public terms page', termsPage.body],
+  ];
+  for (const [what, body] of SURFACES) {
+    // THE TEXT, NOT THE MARKUP: a class name or a chunk URL is not something anybody reads, and
+    // tag soup joins words that are separate on screen.
+    const text = String(body).replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ');
+    const hits = PROMISES.filter((re) => re.test(text)).map((re) => String(re));
+    check(`  …${what} makes none of the promises`, body.length > 500 && hits.length === 0,
+      hits.length ? hits.join(' · ') : `${text.length} characters of rendered text swept`);
+  }
+  // AND THE SWEEP IS NOT VACUOUS: the same regexes, over the sentence they were written for.
+  check('    …and the sweep would catch one if it were there',
+    PROMISES.some((re) => re.test('Nothing is ever taken back from money we have already sent you.'))
+    && PROMISES.some((re) => re.test('A reversal is set against what you earn next, and we do not ask for money back.')),
+    'a filter that matches nothing reports a clean sweep over a population it cannot see');
+
+  check('the deduction is rendered where the money is READ, not only in the steps',
+    (await page.locator('[data-testid="affiliate-refund-rule"]').count()) === 1
+    && (await paneOf('earnings').locator('[data-testid="affiliate-refund-rule"]').count()) === 1,
+    'somebody counting on a payable figure is the person who needs to know it can still move');
+  check('  …and the public summary now states the deduction and the recovery',
+    /comes off your next payout/.test(termsPage.body) && /cancelled and recovered/.test(termsPage.body),
+    'terms 6.5, 6.6 and 7, in the summary that stands until the solicitor’s version is published');
 
   // ── 7. WHO WE MAY BE ASKED TO PAY ────────────────────────────────────────────────────────────
   console.log('\n— the refusals on a proposed payee —');
@@ -840,6 +1108,43 @@ try {
     'it used to classify the session and return, so an affiliate cookie would have passed')
 
   // ── 12. THE SIGN-IN ENDPOINT ANSWERS THE SAME WAY TO EVERYONE ────────────────────────────────
+  // ── 12b. THE WAY OUT ─────────────────────────────────────────────────────────────────────────
+  /**
+   * SIGN OUT IS PROVED BY SIGNING OUT, not by a control existing and not by reading the source for
+   * `signOut(`. The portal is reached by an emailed link, so somebody who opens it on a borrowed
+   * phone has no other way to end the session — a button that renders and does nothing is the
+   * failure that matters, and it looks identical to one that works.
+   *
+   * IN ITS OWN CONTEXT, with its own link, because this destroys the session: the rest of the gate
+   * is still using the cookie from the first one.
+   */
+  console.log('\n— and the way out actually lets go —');
+  const outCtx = await browser.newContext({ extraHTTPHeaders: { 'x-forwarded-for': SIGNIN_IP } });
+  const outPage = await outCtx.newPage();
+  const outLink = await RM.mintRepLink({ repId: affiliate.id, sentTo: affiliate.email, baseUrl: AFF });
+  await outPage.goto(outLink.url, { waitUntil: 'domcontentloaded' });
+  await outPage.waitForSelector('[data-testid="affiliate-enter"]');
+  await outPage.click('[data-testid="affiliate-enter"]');
+  await outPage.waitForSelector('[data-testid="affiliate-home"]', { timeout: 20000 }).catch(async (e) => {
+    throw new Error(`the second sign-in never landed (${outPage.url()}) — ${await signInLimitNote(SIGNIN_IP)} — ${String(e).slice(0, 80)}`);
+  });
+  const hadSession = (await outCtx.cookies()).some((c) => /next-auth\.session-token/.test(c.name));
+  check('a second sign-in gets its own session', hadSession);
+  await outPage.locator('[data-testid="portal-signout"]').click();
+  await outPage.waitForURL((u) => AM.urlUnder(String(u), PORTAL.portalSignInPath('affiliate')), { timeout: 10000 })
+    .catch(() => {});
+  check('  …and Sign out lands on the portal’s own sign-in page',
+    AM.urlUnder(outPage.url(), PORTAL.portalSignInPath('affiliate')), outPage.url());
+  const stillThere = (await outCtx.cookies()).filter((c) => /next-auth\.session-token/.test(c.name) && c.value);
+  check('  …with the session cookie gone, not just the page changed',
+    stillThere.length === 0, stillThere.map((c) => `${c.name} still set`).join(', ') || 'no session cookie remains');
+  // THE REAL TEST OF A SIGN-OUT: the page it was protecting no longer opens for that browser.
+  await outPage.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
+  check('  …and the dashboard no longer opens in that browser',
+    !AM.urlUnder(outPage.url(), PORTAL.portalHomePath('affiliate'))
+    || (await outPage.locator('[data-testid="affiliate-home"]').count()) === 0, outPage.url());
+  await outCtx.close();
+
   console.log('\n— asking for a link tells nobody who is on the programme —');
   const before = await prisma.repMagicLink.count({ where: { rep_id: repParty.id } });
   const askRep = await ask(AFF_HOST, '/api/affiliate-portal/request-link', { method: 'POST', body: JSON.stringify({ email: repParty.email }) });

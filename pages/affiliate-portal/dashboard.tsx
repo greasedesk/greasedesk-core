@@ -7,19 +7,30 @@
  * No sort code, no account number, no per-garage revenue, no pay-run hold reasons. A component
  * cannot render a field that was never fetched, and a later edit to this file cannot uncover one.
  *
+ * ── ONE FETCH, SIX SECTIONS ─────────────────────────────────────────────────────────────────────
+ * The menu switches which section is shown; it does not navigate. affiliatePortalData is a nine-deep
+ * serial chain of queries and the functions are pinned to lhr1 beside the database for exactly that
+ * reason, so six routes would pay that chain again on every click. lib/affiliate-portal-nav's header
+ * carries the reasoning; the hash in the address bar is the single source of truth for which section
+ * is open, and this file's only job is to render the one it names.
+ *
  * ── THE QR IS BUILT ON THE SERVER ───────────────────────────────────────────────────────────────
  * `qrcode` renders to a data URL in getServerSideProps and arrives as a string. Doing it in the
  * browser would ship the library to every visitor and leave the poster depending on client JS to
  * contain the one thing it exists to carry.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireAffiliatePage } from '@/lib/rep-auth';
 import { affiliatePortalData, type PortalData } from '@/lib/affiliate-portal-data';
 import { formatMoney } from '@/lib/format-money';
-import { PAYEE_COPY, AD_LABEL } from '@/lib/affiliate-portal-copy';
+import { PAYEE_COPY, AD_LABEL, REFUND_RULE } from '@/lib/affiliate-portal-copy';
 import { PAYEE_KINDS, SORT_CODE_DIGITS, ACCOUNT_NUMBER_DIGITS } from '@/lib/payee';
+import AffiliatePortalShell from '@/components/affiliate-portal/AffiliatePortalShell';
+import {
+  PORTAL_DEFAULT_SECTION, sectionFromHash, type PortalSectionKey,
+} from '@/lib/affiliate-portal-nav';
 
 type Props = { data: PortalData; qr: string };
 
@@ -47,6 +58,38 @@ function CopyButton({ text, label, testId }: { text: string; label: string; test
       {done ? 'Copied' : label}
     </button>
   );
+}
+
+/**
+ * WHICH SECTION IS OPEN, READ FROM THE ADDRESS BAR.
+ *
+ * The server cannot know: a fragment is never sent to it. So the first render is the default section
+ * and the hash is read on mount — which is right for a signed-in, noindex page, and is why the
+ * sections are all in the DOM rather than fetched one at a time.
+ *
+ * THE LISTENER IS THE WHOLE MECHANISM. The menu items are plain `#key` links, so clicking one
+ * changes the hash and this fires; nothing calls a setter directly. One path in, so a pasted link,
+ * a click and the Back button cannot disagree about what is showing.
+ */
+function useHashSection(): PortalSectionKey {
+  const [active, setActive] = useState<PortalSectionKey>(PORTAL_DEFAULT_SECTION);
+  useEffect(() => {
+    const read = () => setActive(sectionFromHash(window.location.hash));
+    read();
+    window.addEventListener('hashchange', read);
+    return () => window.removeEventListener('hashchange', read);
+  }, []);
+  return active;
+}
+
+/**
+ * HIDDEN, NOT UNMOUNTED. The `hidden` attribute (display:none via Tailwind's preflight) keeps the
+ * payee form's half-typed input and a copied-post confirmation alive while somebody checks their
+ * earnings — and keeps a clause that asserts a section is NOT visible honest, because Playwright
+ * reports a display:none element as hidden rather than as absent.
+ */
+function Pane({ k, active, children }: { k: PortalSectionKey; active: PortalSectionKey; children: React.ReactNode }) {
+  return <div hidden={k !== active} data-testid={`portal-section-${k}`} className="space-y-6">{children}</div>;
 }
 
 function Section({ title, children, testId }: { title: string; children: React.ReactNode; testId?: string }) {
@@ -155,28 +198,65 @@ function PayeeForm({ state, masked, accountName }: PortalData['payee']) {
 
 export default function AffiliateDashboard({ data, qr }: Props) {
   const e = data.earnings;
+  const active = useHashSection();
   return (
     <>
       <Head><title>Your affiliate page — GreaseDesk</title><meta name="robots" content="noindex" /></Head>
-      <main className="min-h-screen bg-canvas">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
-          <header>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-ink tracking-tight" data-testid="affiliate-home">
-              {data.name}
-            </h1>
-            <p className="mt-1 text-sm text-muted">Your GreaseDesk affiliate page</p>
-          </header>
+      <AffiliatePortalShell active={active}>
+        {/* OUTSIDE THE SECTIONS, because these three are true wherever you are standing: whose page
+            this is, that the account is paused, and which terms were accepted. A suspension notice
+            that only appeared on Overview would be missed by somebody who opened Earnings. */}
+        <header className="mb-6">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-ink tracking-tight" data-testid="affiliate-home">
+            {data.name}
+          </h1>
+          <p className="mt-1 text-sm text-muted">Your GreaseDesk affiliate page</p>
+        </header>
 
-          {/* SUSPENSION IS SAID PLAINLY AND THE PAGE STILL OPENS. Suspension stops new attribution
-              and never touches what is already earned, so hiding the earnings would be a lie about
-              money that is still theirs. */}
-          {data.suspended && (
-            <div className="rounded-2xl border border-line bg-surface p-5 text-sm text-ink" data-testid="affiliate-suspended">
-              Your account is paused, so new sign-ups will not be matched to you. Anything you have already
-              earned is unaffected and still shown below.
-            </div>
+        {data.suspended && (
+          <div className="mb-6 rounded-2xl border border-line bg-surface p-5 text-sm text-ink" data-testid="affiliate-suspended">
+            Your account is paused, so new sign-ups will not be matched to you. Anything you have already
+            earned is unaffected and still shown below.
+          </div>
+        )}
+
+        <Pane k="overview" active={active}>
+          <Section title="How it works" testId="affiliate-how-section">
+            <ol className="mt-4 space-y-4">
+              {data.howItWorks.map((s) => (
+                <li key={s.n} className="flex items-start gap-3">
+                  <span className="shrink-0 w-7 h-7 rounded-full bg-accent text-white text-sm font-semibold flex items-center justify-center">
+                    {s.n}
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-ink">{s.title}</p>
+                    <p className="text-sm text-muted mt-0.5">{s.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Section>
+
+          {/* THE ONE THING STOPPING THEM BEING PAID, said on the page they land on. It is a NUDGE and
+              not a block: everything else on the portal works without bank details, and rewards wait
+              rather than being lost (terms 6.3). It disappears the moment there is anything to pay
+              into, including a request still being checked — "nothing from you" is the only state
+              that needs anything doing about it. */}
+          {data.payee.state === 'none' && (
+            <Section title="Before we can pay you" testId="affiliate-next-step">
+              <p className="mt-2 text-sm text-muted">
+                We do not have your bank details yet. Nothing is lost while we wait — your rewards sit
+                there until they arrive.
+              </p>
+              <a href="#payment-details" data-testid="affiliate-next-step-link"
+                className="mt-4 min-h-[44px] inline-flex items-center px-4 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-semibold transition-colors">
+                Add your payment details
+              </a>
+            </Section>
           )}
+        </Pane>
 
+        <Pane k="share" active={active}>
           <Section title="Your code and link" testId="affiliate-code-section">
             <p className="mt-2 text-sm text-muted">Anyone who signs up through these is matched to you.</p>
             <p className="mt-4 text-3xl font-extrabold tracking-[0.15em] text-ink" data-testid="affiliate-code">
@@ -198,39 +278,9 @@ export default function AffiliateDashboard({ data, qr }: Props) {
               </a>
             </div>
           </Section>
+        </Pane>
 
-          <Section title="How it works" testId="affiliate-how-section">
-            <ol className="mt-4 space-y-4">
-              {data.howItWorks.map((s) => (
-                <li key={s.n} className="flex items-start gap-3">
-                  <span className="shrink-0 w-7 h-7 rounded-full bg-accent text-white text-sm font-semibold flex items-center justify-center">
-                    {s.n}
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-ink">{s.title}</p>
-                    <p className="text-sm text-muted mt-0.5">{s.body}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </Section>
-
-          {/* EMPTY SLOTS ARE HIDDEN, not shown as "coming soon": an empty frame promises something
-              nobody committed to. The section simply is not there until the owner publishes a video. */}
-          {data.videos.length > 0 && (
-            <Section title="Videos" testId="affiliate-videos-section">
-              <ul className="mt-4 space-y-2">
-                {data.videos.map((v) => (
-                  <li key={v.url}>
-                    <a href={v.url} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
-                      {v.title}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )}
-
+        <Pane k="posts" active={active}>
           <Section title="Ready-made posts" testId="affiliate-posts-section">
             <p className="mt-2 text-sm text-muted">
               Each one already starts with {AD_LABEL}, which the advertising rules require when you are
@@ -249,6 +299,24 @@ export default function AffiliateDashboard({ data, qr }: Props) {
             </ul>
           </Section>
 
+          {/* EMPTY SLOTS ARE HIDDEN, not shown as "coming soon": an empty frame promises something
+              nobody committed to. The section simply is not there until the owner publishes a video. */}
+          {data.videos.length > 0 && (
+            <Section title="Videos" testId="affiliate-videos-section">
+              <ul className="mt-4 space-y-2">
+                {data.videos.map((v) => (
+                  <li key={v.url}>
+                    <a href={v.url} target="_blank" rel="noreferrer" className="text-sm text-accent hover:underline">
+                      {v.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+        </Pane>
+
+        <Pane k="garages" active={active}>
           <Section title="Your garages" testId="affiliate-garages-section">
             {data.garages.length === 0 ? (
               // NOT AN EMPTY TABLE. "None yet" is a different fact from a row of dashes.
@@ -266,7 +334,9 @@ export default function AffiliateDashboard({ data, qr }: Props) {
               </ul>
             )}
           </Section>
+        </Pane>
 
+        <Pane k="earnings" active={active}>
           <Section title="Your rewards" testId="affiliate-earnings-section">
             <dl className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div>
@@ -309,20 +379,26 @@ export default function AffiliateDashboard({ data, qr }: Props) {
             <p className="mt-1 text-sm text-muted" data-testid="affiliate-minimum">
               We send a payment once at least {money(data.minimumPayoutPennies)} is payable.
             </p>
+            {/* THE SAME SENTENCE AS STEP 4, from the same constant. Said here because this is the
+                screen somebody reads when they are counting on a figure, and terms 6.5 and 6.6 mean
+                a figure on it can still move after a payout. */}
+            <p className="mt-4 text-sm text-muted" data-testid="affiliate-refund-rule">{REFUND_RULE}</p>
           </Section>
+        </Pane>
 
+        <Pane k="payment-details" active={active}>
           <Section title="Where we send it" testId="affiliate-payee-section">
             <PayeeForm {...data.payee} />
           </Section>
+        </Pane>
 
-          <footer className="pt-2 pb-8 text-xs text-muted">
-            <a href="/terms" className="text-accent hover:underline">Affiliate terms</a>
-            {data.terms.acceptedVersion && (
-              <span data-testid="affiliate-terms-accepted"> — you accepted version {data.terms.acceptedVersion} on {data.terms.acceptedAt}</span>
-            )}
-          </footer>
-        </div>
-      </main>
+        <footer className="pt-8 pb-2 text-xs text-muted">
+          <a href="/terms" className="text-accent hover:underline">Affiliate terms</a>
+          {data.terms.acceptedVersion && (
+            <span data-testid="affiliate-terms-accepted"> — you accepted version {data.terms.acceptedVersion} on {data.terms.acceptedAt}</span>
+          )}
+        </footer>
+      </AffiliatePortalShell>
     </>
   );
 }

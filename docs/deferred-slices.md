@@ -884,4 +884,68 @@ to a substitution whenever the thing being put back is somebody's secret.
          node scripts/encrypt-rep-bank.mjs --yes-production --expect-rows=0 > /tmp/enc.log 2>&1
      Dry run, no key needed, refuses if the count is not 0. If it reports nothing to do, step 3 is
      finished and `--write` is never needed.
-  4. Push — TOMORROW. Four commits unpushed. The terms are NOT published and wait for the solicitor.
+  4. Push — DONE 2026-10-31 23:0x. `/api/version` reported `60972a8` on production, ref main, env
+     production, source runtime. The terms are NOT published and wait for the solicitor; `/terms`
+     serves the settled summary until then.
+
+Step 3 came back clean on production: 0 rows hold bank details, nothing to do, exit 0. So the one-off
+re-encrypt was never needed, and the legacy plaintext branch in `lib/payee-crypto` can be deleted on
+the evidence of a count rather than of a migration — still boarded, now cheap.
+
+### MEASURED ON PRODUCTION AFTER THE PUSH (2026-10-31)
+
+  • `affiliates.` serves all four icons; `er.` and `reps.` still 404 the three sized PNGs and answer
+    `/favicon.ico` only. The boarded gap, confirmed rather than inferred. One word each in
+    middleware's host branches; still the owner's call.
+  • `/signin` 200, `/dashboard` 307 signed out, `/terms` 200, the payee API 404 both signed-out and
+    on the apex. The guards and the host isolation hold on the real hosts.
+  • `/icon-192.png` and `/icon-512.png` 404 everywhere INCLUDING the apex — they do not exist. I
+    invented those filenames while checking; the real assets are favicon-16x16, favicon-32x32 and
+    apple-touch-icon. A 404 for a path nobody references is not a finding.
+
+### THE MENU, AND THE PROMISES THAT DID NOT MATCH THE TERMS (2026-10-31, owner)
+
+**The menu** is sections, not pages: `lib/affiliate-portal-nav` holds the table, the hash is the
+single source of truth, and `AffiliatePortalShell` is the dark rail with the same tokens as
+AdminLayout. The reason it is not six routes is latency — `affiliatePortalData` is a NINE-DEEP serial
+chain and the functions are pinned to lhr1 beside the database precisely because depth is latency, so
+six routes would pay that chain again on every click of the menu.
+
+**`BrandLogo` defaults its href to `/admin/dashboard`**, which does not exist on the affiliate host.
+A shell that took the default would have shipped a logo whose only job is to go home and which 404s;
+there is now a clause on the attribute.
+
+**The promises.** Step 3 said the hold meant "we are not asking for money back from you later" and
+step 4 said "nothing is ever taken back from money we have already sent you". Terms 6.5 and 6.6 say a
+full refund or a chargeback CANCELS that payment's reward and deducts it from the next payout if it
+was already paid. The sweep the owner asked for found a THIRD place he had not named: the public
+terms summary on `/terms` said "we do not ask for money back" — and terms §7 recovers a reward earned
+on a garage the affiliate could not earn on, so that one was contradicted by the agreement twice
+over. All three corrected; the deduction is now one constant, `REFUND_RULE`, rendered in step 4 and
+on the earnings screen, which is where somebody counting on a figure reads it.
+
+A reassurance that holds in most cases is read as a guarantee on the day it does not — and the person
+reading this one is owed money.
+
+### A GATE THAT STOPPED WORKING AT THE SIXTEENTH RUN (2026-10-31)
+
+`spendRepLink` takes a token from the per-IP bucket: 30 rep sign-ins an hour, keyed on
+`x-forwarded-for`, which the dev server sets from the socket. Every run of affiliate-portal-gate spent
+two of ONE bucket for `127.0.0.1` — and the new sign-out proof doubled the cost per run. On the
+sixteenth run in an hour the sign-in stopped working and presented as a 30-second timeout waiting for
+the dashboard, with NO page error and nothing about a limit anywhere. It read exactly like a page I
+had broken, and I spent three red-proofs blaming a paragraph I had moved.
+
+Fixed two ways, and the second matters more: the browser context now carries a per-run address in the
+documentation range (the same isolation `GATE_IP` already gave the request-link clauses), and a failed
+sign-in now REPORTS the bucket — "rep sign-ins from this IP in the last hour: N of 30 — THE LIMITER IS
+SPENT, which is the likelier cause than the page".
+
+**The standing lesson is the first one, not the fix:** a gate's own cumulative side effects can make
+it fail, and a limiter's symptom is indistinguishable from the defect you are hunting. Three proofs
+in a row came back "inconclusive" and I read them as "red" until I counted the rows.
+
+**And one clause of mine never reached its subject.** "A pasted link opens on the section it names"
+navigated from `#payment-details` to `#earnings` — a URL differing only in its FRAGMENT does not
+reload the document, so the clause re-proved the hashchange listener while the on-arrival read went
+untested. Deleting that read left the whole gate green. It now leaves the document first.

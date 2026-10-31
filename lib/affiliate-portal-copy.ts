@@ -84,7 +84,31 @@ export function socialPosts(i: PostInputs): SocialPost[] {
  *
  * Step 3 names the hold, because the commonest question an affiliate has is why a reward they can
  * see is not yet money — and answering it before they ask is cheaper than answering it afterwards.
+ *
+ * ── AND IT MUST NOT PROMISE WHAT THE TERMS DO NOT (owner, 2026-10-31) ───────────────────────────
+ * Step 3 said the hold meant "we are not asking for money back from you later" and step 4 said
+ * "nothing is ever taken back from money we have already sent you". Terms 6.5 and 6.6 say the
+ * opposite in the case that matters: a full refund or a chargeback cancels that payment's reward,
+ * and if it was already paid it is DEDUCTED FROM THE NEXT PAYOUT. The hold catches most refunds; it
+ * does not catch all of them, and a reassurance that only holds most of the time is read as a
+ * guarantee on the day it fails.
+ *
+ * So the deduction is said once, as REFUND_RULE below, and step 4 and the earnings section both
+ * render that one string. A promise written twice is a promise that gets corrected once.
  */
+/**
+ * WHAT HAPPENS WHEN A GARAGE IS REFUNDED, in the affiliate's own terms. Terms 6.5 and 6.6 in one
+ * sentence: a full refund or a chargeback cancels the reward that payment earned, and if we have
+ * already paid it, the next payout is smaller by that much. A partial refund — a goodwill gesture
+ * on an invoice the garage still paid — leaves the reward alone, which is why "in full" is in here
+ * and is not a detail to tidy away.
+ *
+ * ONE STRING, TWO READERS: step 4 of how-it-works and the earnings section. The thing a person is
+ * owed money under should not be phrased two ways on one page.
+ */
+export const REFUND_RULE = 'If a garage is refunded in full, or its bank reverses a payment, the reward it earned is '
+  + 'cancelled — and if we have already paid you, it comes off your next payout.';
+
 export type HowStep = { n: number; title: string; body: string };
 
 export function howItWorks(a: { holdDays: number; monthsGiven: number; monthsPaid: number }): HowStep[] {
@@ -104,14 +128,14 @@ export function howItWorks(a: { holdDays: number; monthsGiven: number; monthsPai
     {
       n: 3,
       title: 'You earn as they pay',
-      body: `Each time that garage pays us, your reward is added below. It is held for ${a.holdDays} days first — `
-        + 'long enough for a refund to come back, so we are not asking for money back from you later.',
+      body: `Each time that garage pays us, your reward is added below. It is held for ${a.holdDays} days first, `
+        + 'which is long enough for most refunds to show up before we pay you anything.',
     },
     {
       n: 4,
       title: 'We pay you',
       body: 'Once your details are with us, rewards that have passed the hold go out in the next payment run. '
-        + 'Nothing is ever taken back from money we have already sent you.',
+        + REFUND_RULE,
     },
   ];
 }

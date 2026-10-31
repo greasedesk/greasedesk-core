@@ -57,8 +57,12 @@ export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, g
     { heading: 'On a yearly payment', body: `If the garage pays for a year up front, the whole ${totalLabel} is earned once that invoice is paid.` },
     { heading: 'What the garage gets', body: `${garage.monthsGiven} months for the price of ${garage.monthsPaid} on their first year — ${garage.offerLabel} instead of ${garage.renewalLabel} — frozen at the day they sign up, whatever we change later.` },
     { heading: 'When it becomes payable', body: `${holdDays} days after the garage's payment clears. Payment is by bank transfer and we need your bank details before anything can be sent; what you have earned waits until they are there.` },
-    { heading: 'Refunds', body: 'If we refund a garage’s payment in full, the reward that payment earned is reversed. A partial refund leaves it alone. A reversal is set against what you earn next, and we do not ask for money back.' },
-    { heading: 'Garages you own or work for', body: 'You cannot earn on a garage you own, work for, or are part of. This is checked when you sign up and again when a reward would be earned.' },
+    // IT DOES NOT SAY "we do not ask for money back", WHICH IT DID UNTIL 2026-10-31. Terms 6.5 and
+    // 6.6 deduct a cancelled reward from the next payout, and section 7 recovers one earned on a
+    // garage you could not earn on. A summary that reassures where the agreement does not is the
+    // sentence somebody quotes back on the one day it matters.
+    { heading: 'Refunds and chargebacks', body: 'If we refund a garage’s payment in full, or its bank reverses it, the reward that payment earned is cancelled; if we have already paid you, it comes off your next payout. A partial refund, such as a goodwill gesture, leaves the reward alone.' },
+    { heading: 'Garages you own or work for', body: 'You cannot earn on a garage you own, work for, or are part of. This is checked when you sign up and again when a reward would be earned, and a reward found to have been earned this way is cancelled and recovered.' },
     { heading: 'Changes to the programme', body: 'We will give you 30 days’ notice before changing what the programme pays. A garage already referred keeps the terms it was referred under.' },
     { heading: 'Labelling your content', body: 'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the post or the description — and we ask everyone to do it. It applies wherever you post: video, text, social or email.' },
     { heading: 'Tax', body: 'What you earn is yours to declare. We deduct nothing from it and we are not able to advise you about it.' },
