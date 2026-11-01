@@ -1102,3 +1102,25 @@ artefact.
   • **The menu-walk clause failed by TIMEOUT**, which killed the run and took the forty clauses after
     it. Caught now, so a Terms item pointing elsewhere is a red.
 
+### AND IT SHIPPED WITH A DEAD MENU (owner, on the live site, 2026-11-01)
+
+From `/my-terms` every section item did nothing. The shell rendered a bare `#key` wherever it was
+mounted, so off the dashboard each item pointed at `/my-terms#earnings` — a page with no panes and
+no `hashchange` listener. Six items that look alive and are dead.
+
+`sectionHref(key, from)` in the nav leaf: bare on the dashboard, the dashboard's own path anywhere
+else. NOT absolute everywhere, which would also have fixed it and would re-pay `affiliatePortalData`'s
+whole chain to move between panes of a page already open — the latency this menu is sections-not-pages
+for. The rule depends on where the menu IS, which is what `active` already says, so it is a function
+of both rather than a conditional inside the component.
+
+**Every clause that missed it started on the dashboard.** Section 4a walks all six items with the
+dashboard already open, where a bare hash is correct. 10b walked INTO the terms page and stopped
+there. Nothing walked OUT. The new clauses start on `/my-terms`, return to it before each click, and
+assert the landing — the dashboard, that section visible, and only that one. The red-proof prints the
+owner's bug back verbatim, six times: `/my-terms#earnings · visible: none`.
+
+**The standing lesson:** a shared component's correctness can depend on where it is mounted, and a
+menu asserted only from its first home is asserted on one of its mountings. The second page to mount
+it is where the assumption shows.
+

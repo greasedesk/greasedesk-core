@@ -22,7 +22,7 @@ import React, { useState } from 'react';
 import { signOut } from 'next-auth/react';
 import BrandLogo from '@/components/BrandLogo';
 import { portalHomePath, portalSignInPath } from '@/lib/party-portal';
-import { PORTAL_SECTIONS, PORTAL_LINKS, type PortalNavKey } from '@/lib/affiliate-portal-nav';
+import { PORTAL_SECTIONS, PORTAL_LINKS, sectionHref, type PortalNavKey } from '@/lib/affiliate-portal-nav';
 
 const HOME = portalHomePath('affiliate');
 const SIGN_IN = portalSignInPath('affiliate');
@@ -33,17 +33,21 @@ const navLink = (active: boolean) =>
   }`;
 
 /**
- * THE ITEMS ARE REAL LINKS to `#key`, not buttons calling a handler.
+ * THE ITEMS ARE REAL LINKS, not buttons calling a handler.
  *
  * So the address bar carries the section, a menu item can be opened in a new tab or sent to
  * somebody, and the page has one source of truth to read instead of state to keep in step with a
  * URL. The page listens for the hash; this component only has to say where each item points.
+ *
+ * AND WHERE THAT IS DEPENDS ON WHERE THE MENU IS. A bare `#key` is right on the dashboard and dead
+ * anywhere else — it addressed the Terms page, which has no panes and no listener, so every item
+ * looked alive and did nothing. sectionHref holds the rule; this component holds no conditional.
  */
 function NavList({ active, onNavigate }: { active: PortalNavKey; onNavigate?: () => void }) {
   return (
     <>
       {PORTAL_SECTIONS.map((s) => (
-        <a key={s.key} href={`#${s.key}`} onClick={onNavigate} data-testid={`portal-nav-${s.key}`}
+        <a key={s.key} href={sectionHref(s.key, active)} onClick={onNavigate} data-testid={`portal-nav-${s.key}`}
           aria-current={active === s.key ? 'page' : undefined} className={navLink(active === s.key)}>
           <span className="mr-3 text-lg" aria-hidden="true">{s.icon}</span>
           {s.label}

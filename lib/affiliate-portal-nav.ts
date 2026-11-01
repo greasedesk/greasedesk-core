@@ -3,9 +3,11 @@
  * THE AFFILIATE PORTAL'S MENU. One table, read by the shell, by the page that renders the sections,
  * and by a gate that checks every item in it leads somewhere.
  *
- * A LEAF — no imports — for the reason lib/affiliate-portal-copy is one: a constant pulled from a
- * module that reaches the database ships Prisma to the browser, and this list is rendered in the
- * browser on every portal page.
+ * A LEAF — it imports lib/party-portal and nothing else, for the reason lib/affiliate-portal-copy
+ * imports nothing: a constant pulled from a module that reaches the database ships Prisma to the
+ * browser, and this list is rendered in the browser on every portal page. party-portal is itself a
+ * zero-import leaf, and it is imported rather than copied because the dashboard's address must have
+ * ONE home — see sectionHref below, which exists because a menu item was addressing the wrong page.
  *
  * ── SECTIONS, NOT PAGES, AND THE REASON IS LATENCY ──────────────────────────────────────────────
  * The owner left the choice open ("its own page or anchor, your call"). affiliatePortalData is a
@@ -38,6 +40,8 @@
  * and date they accepted. The public page is unchanged and still lives at /terms for the people it
  * was written for — two audiences, two pages, and neither pretending to be the other.
  */
+
+import { portalHomePath } from '@/lib/party-portal';
 
 export type PortalSectionKey = 'overview' | 'share' | 'posts' | 'garages' | 'earnings' | 'payment-details';
 
@@ -92,6 +96,30 @@ export const PORTAL_LINKS: readonly PortalLink[] = [
  * one — an item that highlights on six screens and goes dead on the seventh reads as a bug.
  */
 export type PortalNavKey = PortalSectionKey | PortalLinkKey;
+
+/** Is this nav key one of the dashboard's sections? Enumerated from the table, never a name test. */
+export const isSectionKey = (k: unknown): k is PortalSectionKey =>
+  PORTAL_SECTIONS.some((s) => s.key === k);
+
+/**
+ * ── WHERE A MENU ITEM POINTS, GIVEN WHERE YOU ARE STANDING (owner, 2026-11-01, live bug) ────────
+ * The shell rendered a bare `#key` wherever it was mounted. On the dashboard that is right: the six
+ * sections are panes in ONE document and the hash is what selects them. On the Terms page — the
+ * first page to mount this menu that is not the dashboard — a bare hash addresses THAT page, so
+ * every section item silently did nothing: no pane to show, no listener to fire, and a menu that
+ * looks alive and is dead.
+ *
+ * The rule therefore depends on where the menu is, which is exactly what `active` already says. So
+ * it lives here as a function of both rather than as a conditional inside the component: a gate can
+ * ask it about every combination without a browser, and there is one place to be wrong.
+ *
+ * NOT "always absolute", which would also have fixed the bug. A full navigation per click would
+ * re-pay affiliatePortalData's whole chain to move between panes of a page already open — the
+ * latency this menu is sections-not-pages for. Absolute off the dashboard, bare on it.
+ */
+export function sectionHref(key: PortalSectionKey, from: PortalNavKey): string {
+  return isSectionKey(from) ? `#${key}` : `${portalHomePath('affiliate')}#${key}`;
+}
 
 /**
  * FAILS TO THE DEFAULT RATHER THAN THROWING. The input is whatever is in somebody's address bar,

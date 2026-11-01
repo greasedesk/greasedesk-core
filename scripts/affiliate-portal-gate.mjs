@@ -1284,6 +1284,61 @@ try {
     (await page.locator('[data-testid="portal-section-overview"]').count()) === 0
     && (await page.locator('[data-testid="portal-terms-accepted"]').isVisible()),
     'the dashboard’s panes are not here, and the acceptance line is');
+  /**
+   * ── AND THE MENU WORKS FROM THE TERMS PAGE, WHICH IS THE BUG THIS SECTION GREW BY ────────────
+   * Shipped broken on 2026-11-01 and found by the owner on the live site: the shell rendered a bare
+   * `#key` wherever it was mounted, so from /my-terms every section item pointed at
+   * /my-terms#earnings — a page with no panes and no hashchange listener. Six menu items that
+   * looked alive and did nothing.
+   *
+   * THE CLAUSES THAT MISSED IT ALL STARTED ON THE DASHBOARD. Section 4a walks every item with the
+   * dashboard already open, where a bare hash is correct; 10b walked INTO the terms page and
+   * stopped there. Nothing walked OUT. So this starts on /my-terms, returning to it before each
+   * click, and asserts the landing: the dashboard, that section visible, and only that one.
+   */
+  console.log('\n— and from the terms page the menu goes back to the dashboard, not nowhere —');
+  await page.goto(`${AFF}${NAV.PORTAL_TERMS_PATH}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="portal-terms-heading"]');
+  const offHrefs = await Promise.all(NAV.PORTAL_SECTIONS.map((sec) => navOf(sec.key).getAttribute('href')));
+  check('every section item carries the dashboard’s path while standing off it',
+    offHrefs.every((h, i) => h === `${PORTAL.portalHomePath('affiliate')}#${NAV.PORTAL_SECTIONS[i].key}`),
+    offHrefs.join(' '));
+  for (const sec of NAV.PORTAL_SECTIONS) {
+    // BACK TO THE TERMS PAGE FIRST, every time: the clause is about leaving it, and after the first
+    // click the menu is being read from the dashboard, where a bare hash would work.
+    if (new URL(page.url()).pathname !== NAV.PORTAL_TERMS_PATH) {
+      await page.goto(`${AFF}${NAV.PORTAL_TERMS_PATH}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('[data-testid="portal-terms-heading"]');
+    }
+    await navOf(sec.key).click();
+    await page.waitForSelector('[data-testid="affiliate-home"]', { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(
+      (k) => !document.querySelector(`[data-testid="portal-section-${k}"]`)?.hasAttribute('hidden'),
+      sec.key, { timeout: 6000 },
+    ).catch(() => {});
+    const landedOnDashboard = new URL(page.url()).pathname === PORTAL.portalHomePath('affiliate');
+    const vis = landedOnDashboard ? await visibleKeys() : [];
+    check(`  …“${sec.label}” lands on the dashboard showing ${sec.key}, and nothing else`,
+      landedOnDashboard && JSON.stringify(vis) === JSON.stringify([sec.key])
+      && new URL(page.url()).hash === `#${sec.key}`,
+      `${new URL(page.url()).pathname}${new URL(page.url()).hash} · visible: ${vis.join(', ') || 'none'}`);
+  }
+  /**
+   * AND THE RULE ON ITS OWN, over both sides of it. Bare ON the dashboard matters as much as
+   * absolute off it: making every item absolute would also have fixed the bug, and would re-pay
+   * affiliatePortalData's whole chain to move between panes of a page that is already open.
+   */
+  check('the rule itself: bare on the dashboard, the dashboard’s path anywhere else',
+    NAV.PORTAL_SECTIONS.every((sec) => NAV.sectionHref(sec.key, 'overview') === `#${sec.key}`)
+    && NAV.PORTAL_SECTIONS.every((sec) => NAV.sectionHref(sec.key, 'earnings') === `#${sec.key}`)
+    && NAV.PORTAL_SECTIONS.every((sec) => NAV.sectionHref(sec.key, 'terms')
+      === `${PORTAL.portalHomePath('affiliate')}#${sec.key}`),
+    `from a section: ${NAV.sectionHref('earnings', 'overview')} · from Terms: ${NAV.sectionHref('earnings', 'terms')}`);
+  check('  …and "where you are" is read from the section table rather than guessed at',
+    NAV.isSectionKey('earnings') && !NAV.isSectionKey('terms') && !NAV.isSectionKey('')
+    && NAV.PORTAL_LINKS.every((l) => !NAV.isSectionKey(l.key)),
+    'a link key that tested as a section would make the menu bare on the Terms page again');
+
   await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="affiliate-home"]');
   check('  …and the dashboard’s footer points at it rather than at the public page',
