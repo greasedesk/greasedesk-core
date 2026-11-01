@@ -10,6 +10,7 @@
 import { smsText, isOneSegment } from '@/lib/sms-text';
 import { portalSignInUrl } from '@/lib/party-portal';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
+import { PROMOTION_CHANNELS } from '@/lib/affiliate-portal-copy';
 
 /** Named once; see the affiliate_welcome note on why this is not typed into the prose. */
 const AFFILIATE_SIGN_IN_URL = portalSignInUrl('affiliate');
@@ -814,7 +815,14 @@ export const NOTIFICATION_TEMPLATES = {
            is at <a href="${AFFILIATE_SIGN_IN_URL}">${AFFILIATE_SIGN_IN_URL}</a>. We email you a sign-in link
            each time; there is no password to remember.</p>
         <p style="font-size:13px;color:#475569">UK advertising rules require affiliate content to be labelled as an
-           ad — “#ad” at the start of a post or description — and we ask everyone to do it.</p>`),
+           ad — “#ad” at the start of a post or description — and we ask everyone to do it.</p>
+        <!-- THE OTHER HALF OF THE RULES, ADDED WITH TERMS v2 (2026-11-01). This email stated the
+             labelling rule and stopped, which was the whole of section 8 that mattered while v1
+             allowed lawful B2B email. v2 forbids electronic marketing outright and 8.7 ends the
+             agreement over it, so the welcome that hands somebody their code and tells them to go
+             and promote cannot be the one surface that leaves the channel rule out. One constant,
+             shared with the portal and the public page — see lib/affiliate-portal-copy. -->
+        <p style="font-size:13px;color:#475569">${esc(PROMOTION_CHANNELS)}</p>`),
     }),
   },
   // ── PROSPECTING SEQUENCE — PLACEHOLDER COPY (2026-09-10) ───────────────────────────────────────

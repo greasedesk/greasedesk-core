@@ -25,7 +25,7 @@ import type { GetServerSideProps } from 'next';
 import { requireAffiliatePage } from '@/lib/rep-auth';
 import { affiliatePortalData, type PortalData } from '@/lib/affiliate-portal-data';
 import { formatMoney } from '@/lib/format-money';
-import { PAYEE_COPY, AD_LABEL, REFUND_RULE } from '@/lib/affiliate-portal-copy';
+import { PAYEE_COPY, AD_LABEL, REFUND_RULE, PROMOTION_CHANNELS } from '@/lib/affiliate-portal-copy';
 import {
   PAYEE_KINDS, SORT_CODE_DIGITS, ACCOUNT_NUMBER_DIGITS, sortCodeAsTyped, normaliseSortCode,
 } from '@/lib/payee';
@@ -308,6 +308,10 @@ export default function AffiliateDashboard({ data, qr }: Props) {
               Each one already starts with {AD_LABEL}, which the advertising rules require when you are
               paid for a recommendation. Please leave it in.
             </p>
+            {/* WHERE THEY MAY PUT IT, beside the Copy buttons rather than only in the terms. A person
+                about to copy a post is choosing a destination in the same moment, and terms 8.3 is the
+                rule that decides it — 8.7 ends the agreement over a breach of it. */}
+            <p className="mt-2 text-sm text-muted" data-testid="affiliate-posts-channels">{PROMOTION_CHANNELS}</p>
             <ul className="mt-4 space-y-4">
               {data.posts.map((p) => (
                 <li key={p.id} className="border border-line rounded-xl p-4 bg-canvas">

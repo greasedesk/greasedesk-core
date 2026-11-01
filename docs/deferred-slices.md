@@ -1317,3 +1317,103 @@ the ref AND the group name and refused anything else. Core went straight back to
 where clause is an OMITTED FILTER, not a match on nothing — so a fixture that failed to sign up
 would have turned that line into "delete every tenant's mobile record in the database", which is
 exactly the state that locks ZZ. It never fired. It was one failed fixture away.
+
+---
+
+## The affiliate terms, version 2 — and the product that recommended what they ban (2026-11-01)
+
+The solicitor approved version 2 and it supersedes v1. It is in `content/affiliate-terms.md` as the
+unpublished draft, figures still placeholders, baked at publish. **Nothing is published yet** — the
+dry run is read, the publish is the owner's.
+
+**The file lost its `-v1`.** A file called `affiliate-terms-v1.md` holding version 2's words is a
+name that reads wrong, and the version was never the filename's business: it lives on the `Document`
+row, stamped at publish. Three readers moved with it (the seed registry, the publish script, the
+gate), `content/**` is a glob in `next.config.js` so the trace was unaffected, and a clause now
+asserts the script's `SOURCE` const and the seed registry name ONE path that resolves.
+
+**What v2 changes.** 1.3 adds that there are no quotas and we do not direct the method. 6.2 pays a
+closing balance in full whatever its size. 6.5 deducts a paid reward from future rewards and says we
+will not ask for it back. 7 recovers only where the reward was earned by fraud or a deliberate
+breach, where v1 recovered always. 8.7 is new: an unlabelled ad or a text in breach of 8.3 ends the
+agreement immediately, with an indemnity. 9.4 names that breach as grounds. 10.2 says a change
+applies forwards only. 11.4 caps liability at the greater of what is owed and what was paid in the
+last twelve months, with the carve-outs the law requires.
+
+**And 8.3 is the one that reached into the product.** v1's "No spam" permitted email and text to
+anybody lawfully contactable under PECR — which, for a trade audience, is most garages in the
+country. v2 forbids electronic marketing outright, to a person or a business alike, and allows only
+public channels, face to face, and a reply to somebody who asked.
+
+The portal was recommending the banned channel, in three places:
+
+- One of the three **ready-made posts** was a cold message to a garage — "Thought of you —" — titled
+  "A message to a garage you know", pre-written, with a Copy button under it.
+- **Step 1 of how-it-works** opened "Anywhere you like — a message, a post, a printed card on the
+  counter."
+- And the file's own comment called the message **"how most of these introductions will really
+  happen"** — so the reasoning was recorded, and it was the reasoning that was now wrong.
+
+The post is now a **reply**, which 8.3 expressly allows, and its title is what makes it one: a post
+whose title does not say it answers a question is a post somebody sends cold. The plain register was
+the useful thing about it and is kept; what changed is who starts the conversation.
+
+**The rule is one constant, read on five surfaces.** `PROMOTION_CHANNELS` in
+`lib/affiliate-portal-copy`: the posts pane beside the Copy buttons, step 1 of how-it-works, the
+welcome email, the public page (creator section and questions) and the settled summary. Five copies
+of a sentence people are held to is the shape `REFUND_RULE` already exists to avoid. It says the
+permitted channels FIRST, because a rule that only forbids leaves somebody to guess at the rest, and
+it carries the reply carve-out, because without it the ban reads as "never mention it to a customer
+who asks" — which is not what 8.3 says and is the first thing anybody will do.
+
+`lib/affiliate-terms-summary` said **NO IMPORTS** and now imports that one leaf. The property that
+mattered — nothing on that path reaches the database — is unchanged, because the copy leaf has no
+imports of its own. What is gone is only the claim that the count is zero, and that was the cheap
+half of the trade.
+
+**v2 made an existing clause wrong, which is the gate earning its keep.** It asserted the summary
+said "cancelled and recovered" — true of v1, and under v2 the summary was the HARSHER of the two
+documents. Same defect as a summary that reassures where the agreement does not, pointing the other
+way, and still a statement about somebody's money the agreement does not support. The clause now
+asserts the conditional sentence AND that the unconditional one is gone.
+
+**There was no production publish command, and the one in the header looked like one.** `.env` holds
+the GATE database — that is the premise every gate here runs on — so publishing "the terms" locally
+would have spent a version stamp on the gate database, printed a tidy ✓, and left production showing
+the summary. It matters more here than anywhere the flag already existed, because **a published
+legal version is immutable**: the stamp is spent and the words cannot be corrected, so an
+irreversible write aimed at the wrong database is the one mistake an editor cannot undo. The script
+now takes `--yes-production`, reading `.migrate-target.production` like `migrate-apply` and
+`encrypt-rep-bank`, refusing in both directions, and printing the endpoint and the Environment
+marker on every run. **The dry run needs no terminal; the write does** — reading production's
+figures and printing what WOULD be stored changes nothing and somebody should be able to have it put
+in front of them, but spending the version asks for a terminal and for the endpoint id to be typed.
+
+### Two clauses of mine that were not about their subject
+
+Both the same shape, both found by a red-proof rather than by reading.
+
+1. A sweep for the retired filename across the readers **went red on the gate itself**: its source
+   contains `affiliate-terms-v1` — as the regex literal doing the searching. The term was not unique
+   to its subject. The replacement is the better clause anyway: the two writers must AGREE on a path
+   that RESOLVES, rather than one retired string being absent from four files.
+2. The pointer clause read `content/[a-z0-9-]+\.md` out of the publish script and matched its
+   **header comment**, four lines above the code. A red-proof that pointed the real `SOURCE` const
+   at a file that does not exist **passed cleanly** — the clause was asserting the documentation. It
+   now anchors on the `SOURCE =` assignment, and a second condition requires every `content/*.md`
+   path in that file to be the same one, so the header cannot drift from the const either.
+
+### Noted, not changed
+
+- **The baked address says "England".** `officeOneLine()` resolves to "Unit 7 Tinsley Street,
+  Tipton, England, DY4 7LH"; the solicitor's document has it without. Both are the registered
+  address and the difference is not legal substance, but the published words will differ from the
+  docx by that one word. Changing it moves every surface that prints the address.
+- **8.1 still says the #ad label applies "wherever you post: video, text, social media or email"**,
+  while 8.3 forbids marketing email. Not a contradiction — a reply is permitted and still needs
+  labelling — but it is the one place in v2 where email is named as somewhere you might post.
+- **The `#ad` label stays on the reply post.** It reads oddly in a one-to-one message, and the
+  alternative is worse: the label is attached by one function with a clause on it, and exempting one
+  post makes it something somebody has to remember.
+- With the minimum payout at £0 the sentence is omitted and 6.2's "whatever its size" loses the rule
+  it was contrasting with. Harmless, not false; it would read oddly.

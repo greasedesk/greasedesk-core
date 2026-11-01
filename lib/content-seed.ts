@@ -58,7 +58,7 @@ export const SEEDABLE_DRAFTS: readonly SeedableDraft[] = [
     slug: AFFILIATE_TERMS_SLUG,
     country: 'GB',
     type: 'legal',
-    file: 'content/affiliate-terms-v1.md',
+    file: 'content/affiliate-terms.md',
     fallbackTitle: 'GreaseDesk Affiliate Terms',
   },
 ];

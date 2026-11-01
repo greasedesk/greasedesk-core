@@ -32,6 +32,7 @@ import Seo from '@/components/marketing/Seo';
 import AffiliateSiteChrome from '@/components/affiliate-site/AffiliateSiteChrome';
 import { AFFILIATE_SITE_URL, absoluteAffiliateSiteUrl } from '@/lib/company-info';
 import { WAITLIST_LIMITS, WAITLIST_AUDIENCES, type WaitlistAudience } from '@/lib/affiliate-waitlist';
+import { PROMOTION_CHANNELS } from '@/lib/affiliate-portal-copy';
 
 const input = 'w-full p-3 bg-surface border border-line rounded-lg text-ink text-base focus:ring-2 focus:ring-accent focus:border-accent outline-none';
 
@@ -97,6 +98,12 @@ const COPY = {
       // section, in the video question, and in the terms — all three, because a rule a person meets
       // only after they have signed up is a rule we sprang on them.
       'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the post or the description — and we ask everyone to do it.',
+      // AND WHERE (terms v2, 2026-11-01). Said in the creator's own section by the same reasoning as
+      // the labelling bullet above, which the owner wrote on 2026-10-30: a rule a person meets only
+      // after they have signed up is a rule we sprang on them. It applies with more force here —
+      // 8.3 is the clause a creator with a trade mailing list would otherwise breach on day one,
+      // and 8.7 ends the agreement over it. This section is where that reader is standing.
+      PROMOTION_CHANNELS,
     ],
   },
 
@@ -155,6 +162,10 @@ const COPY = {
     {
       q: 'Can I talk about the offer in a video?',
       a: 'Yes, and you can quote the figures on this page as they stand. UK advertising rules require affiliate content to be labelled as an ad — put “#ad” at the start of the post or the description — and we ask everyone to do it. If we change the programme we’ll tell you 30 days before it changes.',
+    },
+    {
+      q: 'Where can I promote GreaseDesk?',
+      a: PROMOTION_CHANNELS,
     },
     {
       q: 'Is this the same as being a reseller?',

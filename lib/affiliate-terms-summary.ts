@@ -13,9 +13,16 @@
  * promise about refunds was written twice and said two different things, and it took the owner
  * reading his own terms to find it. Written once, read twice.
  *
- * ── A LEAF: NO IMPORTS ──────────────────────────────────────────────────────────────────────────
+ * ── A LEAF, AND IT IMPORTS ONE OTHER LEAF ───────────────────────────────────────────────
  * Rendered in the browser on both surfaces. A constant pulled from a module that reaches the
  * database ships Prisma to the browser — lib/affiliate-portal-nav's header carries the measurement.
+ *
+ * This file said NO IMPORTS until terms v2 (2026-11-01), when the channel rule arrived on five
+ * surfaces at once and the choice was one import or a fifth copy of a sentence people are held to.
+ * lib/affiliate-portal-copy is itself a leaf with no imports of its own, so the property that
+ * mattered — nothing on this path reaches the database — is unchanged; what is gone is only the
+ * claim that the number of imports is zero. The import is the cheap half of the trade: the rule is
+ * now impossible to state two ways, and that is the failure this file's own history is made of.
  *
  * ── NO FIGURE IS TYPED IN HERE ──────────────────────────────────────────────────────────────────
  * Every number arrives as an argument, resolved by the caller from the same resolvers the public
@@ -23,6 +30,8 @@
  * this file would be a second source for the reward, and the terms contradicting the programme is
  * the exact failure the content system's baking exists to prevent.
  */
+
+import { PROMOTION_CHANNELS } from '@/lib/affiliate-portal-copy';
 
 export type TermsSummaryFigures = {
   /** lib/affiliate-public's own sentence about what an introduction pays. Never assembled here. */
@@ -84,9 +93,14 @@ export function termsSummary(f: TermsSummaryFigures): TermsSummarySection[] {
     },
     {
       heading: 'Garages you own or work for',
+      // "CANCELLED AND RECOVERED" UNTIL TERMS v2 (2026-11-01). v1 recovered in every case; v2
+      // section 7 cancels in every case and recovers only where the reward was earned by fraud or a
+      // deliberate breach. The summary was the harsher of the two documents, which is the same
+      // defect as a summary that reassures where the agreement does not — pointing the other way,
+      // and still a statement about somebody's money that the agreement does not support.
       body: 'You cannot earn on a garage you own, work for, or are part of. This is checked when you sign up '
         + 'and again when a reward would be earned, and a reward found to have been earned this way is '
-        + 'cancelled and recovered.',
+        + 'cancelled — and recovered as well, if it was earned by fraud or a deliberate breach.',
     },
     {
       heading: 'Changes to the programme',
@@ -98,6 +112,14 @@ export function termsSummary(f: TermsSummaryFigures): TermsSummarySection[] {
       body: 'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the '
         + 'post or the description — and we ask everyone to do it. It applies wherever you post: video, text, '
         + 'social or email.',
+    },
+    {
+      // THE SUMMARY'S JOB IS TO BE THE SETTLED TERMS, and from v2 this is one of the two rules a
+      // breach of which ends the agreement immediately (8.7). A summary that lists the labelling
+      // rule and omits this one is a summary that misleads by what it leaves out — and the reader
+      // is somebody deciding whether to join on the strength of it.
+      heading: 'Where you can promote us',
+      body: PROMOTION_CHANNELS,
     },
     {
       heading: 'Tax',

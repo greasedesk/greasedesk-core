@@ -27,6 +27,28 @@ export const AD_LABEL = '#ad';
 /** Prepends the label. The ONE place it is attached — see the header. */
 const labelled = (body: string): string => `${AD_LABEL} ${body.trim()}`;
 
+/**
+ * WHERE AN AFFILIATE MAY PROMOTE US — terms 8.3, in one sentence, said on every surface that invites
+ * somebody to go and promote.
+ *
+ * ── WHY A CONSTANT AND NOT FIVE SENTENCES (terms v2, 2026-11-01) ────────────────────────────────
+ * Version 1 of the terms allowed email and text to anyone the affiliate could lawfully contact under
+ * PECR — which, for a trade audience, is most garages in the country. Version 2 forbids it outright,
+ * to a person or a business alike, and 8.7 makes a breach grounds for immediate termination with an
+ * indemnity for what it costs us. A rule that expensive is read on five surfaces: the ready-made
+ * posts, the welcome email, the public page’s questions, its creator section and the terms summary.
+ * Five copies is the shape REFUND_RULE below already exists to avoid — a promise written twice is a
+ * promise that gets corrected once.
+ *
+ * IT SAYS THE PERMITTED CHANNELS FIRST, because somebody reading it is deciding what to do next and
+ * a rule that only forbids leaves them to guess at the rest. The reply carve-out is in here rather
+ * than left as a detail of the full terms: without it the ban reads as “never mention it to a
+ * customer who asks”, which is not what 8.3 says and is the first thing anybody will do.
+ */
+export const PROMOTION_CHANNELS = 'Promote GreaseDesk in your own public channels — posts, videos, your '
+  + 'website — and in person. Do not send marketing emails or texts about it to anyone, including '
+  + 'businesses. You can always reply to someone who asks you about it.';
+
 export type SocialPost = { id: string; title: string; text: string };
 
 export type PostInputs = {
@@ -38,8 +60,18 @@ export type PostInputs = {
 
 /**
  * THREE POSTS, FOR THREE PLACES SOMEBODY ACTUALLY POSTS. Short for a story caption, medium for a
- * local Facebook group, and one plain-spoken one for a WhatsApp message to a garage they know —
- * which is how most of these introductions will really happen.
+ * local trade group, and one plain-spoken one for a REPLY to somebody who has asked.
+ *
+ * ── THE THIRD ONE WAS A MESSAGE NOBODY ASKED FOR (terms v2, 2026-11-01) ──────────────────
+ * It was titled “A message to a garage you know”, it opened “Thought of you —”, and this comment
+ * recommended it as “how most of these introductions will really happen”. Under terms 8.3 it is now
+ * the one thing an affiliate must not do: an unsolicited electronic message about GreaseDesk to a
+ * business, which 8.7 makes grounds for immediate termination and an indemnity. We were shipping it
+ * pre-written, under a Copy button, on the screen that teaches people how the programme works.
+ *
+ * So it is a REPLY, which 8.3 expressly allows, and the title is what makes it one — a post whose
+ * title does not say it answers a question is a post somebody sends cold. The plain register is kept,
+ * because that was the useful thing about it; what changed is who starts the conversation.
  *
  * NO PRICE IS CLAIMED. The offer is expressed in MONTHS ("twelve for the price of eight"), which is
  * what the frozen terms guarantee that garage; a pound figure would be a promise about a price that
@@ -67,11 +99,11 @@ export function socialPosts(i: PostInputs): SocialPost[] {
       ),
     },
     {
-      id: 'direct',
-      title: 'A message to a garage you know',
+      id: 'reply',
+      title: 'A reply, when somebody asks you about it',
       text: labelled(
-        `Thought of you — GreaseDesk is garage software that handles the diary, job cards, quotes and invoices. `
-        + `There is a free trial, and if you go through my link you get ${months}. ${i.referralLink}`,
+        `Happy to tell you about it — GreaseDesk is garage software that handles the diary, job cards, quotes `
+        + `and invoices. There is a free trial, and if you go through my link you get ${months}. ${i.referralLink}`,
       ),
     },
   ];
@@ -116,8 +148,12 @@ export function howItWorks(a: { holdDays: number; monthsGiven: number; monthsPai
     {
       n: 1,
       title: 'Share your link or your code',
-      body: 'Anywhere you like — a message, a post, a printed card on the counter. The link carries your code, '
-        + 'so a garage that uses it is matched to you automatically.',
+      // "ANYWHERE YOU LIKE — A MESSAGE, A POST, A PRINTED CARD ON THE COUNTER" until terms v2.
+      // The first three words and the first example were both the thing 8.3 now forbids, on step ONE
+      // of how the programme works. The rule arrives from PROMOTION_CHANNELS rather than being
+      // re-phrased here, so this step and the posts pane cannot come to say different things.
+      body: `${PROMOTION_CHANNELS} The link carries your code, so a garage that uses it is matched to you `
+        + 'automatically.',
     },
     {
       n: 2,

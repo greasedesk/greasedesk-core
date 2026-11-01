@@ -33,7 +33,7 @@ import './_ts.mjs';
 const { gatePrisma, describeError, gateOrigin, affiliateOrigin, repOrigin, serverReady, onTeardown } = await import('./_gate-preflight.mjs');
 const http = await import('node:http');
 const { randomUUID, randomBytes } = await import('node:crypto');
-const { readFileSync } = await import('node:fs');
+const { readFileSync, readdirSync } = await import('node:fs');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 
 /**
@@ -65,6 +65,7 @@ const PUB = await import('../lib/content-publish.ts');
 const CONTENT = await import('../lib/content.ts');
 const SEED = await import('../lib/content-seed.ts');
 const RM = await import('../lib/rep-magic-link.ts');
+const TPL = await import('../lib/notification-templates.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -928,9 +929,20 @@ try {
     (await page.locator('[data-testid="affiliate-refund-rule"]').count()) === 1
     && (await paneOf('earnings').locator('[data-testid="affiliate-refund-rule"]').count()) === 1,
     'somebody counting on a payable figure is the person who needs to know it can still move');
-  check('  …and the public summary now states the deduction and the recovery',
-    /comes off your next payout/.test(termsPage.body) && /cancelled and recovered/.test(termsPage.body),
-    'terms 6.5, 6.6 and 7, in the summary that stands until the solicitor’s version is published');
+  /**
+   * THIS CLAUSE USED TO ASSERT "cancelled and recovered", and terms v2 made it wrong (2026-11-01).
+   * v1 recovered a reward earned on a garage the affiliate could not earn on in EVERY case; v2
+   * section 7 cancels in every case and recovers only where it was earned by fraud or a deliberate
+   * breach. The summary was therefore the harsher of the two documents — the mirror image of the
+   * reassurance defect this whole section exists for, and just as much a statement about somebody's
+   * money that the agreement does not support. The last line is what keeps the fix honest: the
+   * unconditional sentence must be GONE, not merely joined by a conditional one.
+   */
+  check('  …and the public summary states the deduction, and recovers only where the terms do',
+    /comes off your next payout/.test(termsPage.body)
+    && /cancelled — and recovered as well, if it was earned by fraud or a deliberate breach/.test(termsPage.body)
+    && !/cancelled and recovered/.test(termsPage.body),
+    'terms 6.5, 6.6 and 7 — v2 recovers on fraud or a deliberate breach, not as a matter of course');
   /**
    * ── ONE SOURCE FOR THE SUMMARY, READ BY BOTH SCREENS (owner, 2026-11-01) ─────────────────────
    * The settled summary used to be a literal array inside the public page. The portal now has its
@@ -953,6 +965,100 @@ try {
     src('lib/affiliate-terms-summary.ts').includes(SUMMARY_MARK)
     && /comes off your next payout/.test(src('lib/affiliate-terms-summary.ts')),
     'a word that is in no file would make the clause above pass over nothing');
+
+  // ── 6c. WHERE AN AFFILIATE MAY PROMOTE US, SAID WHEREVER WE SEND THEM OUT ──────────────
+  /**
+   * TERMS v2, 8.3 (solicitor-approved, 2026-11-01). Version 1 allowed email and text to anybody the
+   * affiliate could lawfully contact under PECR, which for a trade audience is most garages in the
+   * country. Version 2 forbids electronic marketing outright — to a person or a business alike — and
+   * 8.7 makes a breach grounds for immediate termination with an indemnity for what it costs us.
+   *
+   * THE PORTAL WAS RECOMMENDING THE BANNED CHANNEL. One of the three ready-made posts was a cold
+   * message to a garage ("Thought of you —"), pre-written, with a Copy button under it; step 1 of
+   * how-it-works opened "Anywhere you like — a message, a post…"; and the file's own comment called
+   * the message "how most of these introductions will really happen". A rule that ends the agreement
+   * cannot live only in the agreement when the product is handing people the opposite.
+   *
+   * ASKED OF THE RENDERED SURFACES. The sentence is one constant, so a clause reading it out of the
+   * file it lives in would be agreeing with itself; these fetch the dashboard, the public page and
+   * the welcome email and look for it where somebody would read it.
+   */
+  console.log('\n— and where they may promote us is said on every surface that sends them out —');
+  const CH = COPY.PROMOTION_CHANNELS;
+  /** Filled by the single-source clause below and read again by section 10's rename clause. */
+  let channelSources = [];
+  check('the channel rule says the permitted channels AND the ban AND the reply',
+    /public channels/i.test(CH) && /in person/i.test(CH)
+    && /do not send marketing emails or texts/i.test(CH) && /including businesses/i.test(CH)
+    && /reply to someone who asks/i.test(CH),
+    'a rule that only forbids leaves somebody to guess at the rest; and without the reply carve-out '
+    + 'it reads as "never mention it to a customer who asks", which is not what 8.3 says');
+  check('  …and it is said in ONE file, so five surfaces cannot come to say five things',
+    (() => {
+      const mark = 'Do not send marketing emails or texts';
+      const roots = ['lib', 'pages', 'components'];
+      const hits = [];
+      const walk = (d) => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const f = `${d}/${e.name}`;
+          if (e.isDirectory()) walk(f);
+          else if (/\.tsx?$/.test(e.name) && src(f).includes(mark)) hits.push(f);
+        }
+      };
+      for (const r of roots) walk(r);
+      channelSources = hits;
+      return hits.length === 1 && hits[0] === 'lib/affiliate-portal-copy.ts';
+    })(),
+    channelSources.join(' · '));
+  check('  …no ready-made post is a message nobody asked for',
+    posts.every((p) => !/thought of you|message to a garage|drop (?:them|him|her) a|text them|email them/i.test(`${p.title} ${p.text}`)),
+    posts.map((p) => p.title).join(' | '));
+  check('    …and the third one is a REPLY, said in its own title',
+    posts[2].id === 'reply' && /reply/i.test(posts[2].title) && /asks/i.test(posts[2].title),
+    `${posts[2].id} · ${posts[2].title} — a post whose title does not say it answers a question is a post somebody sends cold`);
+  check('  …and step 1 of how-it-works carries the rule instead of "anywhere you like"',
+    how[0].body.includes(CH) && !/anywhere you like/i.test(how[0].body), how[0].body);
+  check('  …and the dashboard renders it beside the Copy buttons',
+    servedEarly.body.includes(CH)
+    && (await page.locator('[data-testid="affiliate-posts-channels"]').count()) === 1,
+    'the screen where somebody copies a post is the screen where they pick a destination');
+  const publicPage = await ask(AFF_HOST, '/');
+  check('  …and the public page says it twice: in the creator section and in the questions',
+    publicPage.status === 200 && (publicPage.body.split(CH).length - 1) >= 2,
+    `${publicPage.status} · ${publicPage.body.split(CH).length - 1} occurrences — a rule met only after signing up is one we sprang on them`);
+  check('  …and the welcome email, which is where they are handed the code and told to go',
+    TPL.NOTIFICATION_TEMPLATES.affiliate_welcome.email({
+      refCode: 'ZZTEST00', referralLink: 'https://example.invalid/r', monthsGiven: 12, monthsPaid: 8,
+      link: 'https://example.invalid/v', expiryDays: 14,
+    }).html.includes(CH),
+    'it stated the labelling rule and stopped, which was the whole of section 8 that mattered under v1');
+  check('  …and the settled summary, which is the terms until the owner publishes',
+    termsPage.body.includes(CH) && myTermsPage.body.includes(CH),
+    `public ${termsPage.body.includes(CH) ? 'yes' : 'NO'} · portal ${myTermsPage.body.includes(CH) ? 'yes' : 'NO'}`);
+
+  /**
+   * AND A SWEEP FOR THE INVITATION ITSELF. Narrow on purpose: these are the shapes that WERE wrong,
+   * and a guard naming what it knows about catches only what somebody thought of. The clauses above
+   * are the ones that generalise — they say the rule REACHES every surface rather than that one
+   * wording is absent from it. This is the cheap second net, not the proof.
+   */
+  const INVITES = [
+    /anywhere you like/i,
+    /thought of you/i,
+    /\b(?:text|message|email|whatsapp|dm)\s+(?:them|a garage|garages|the garage)\b/i,
+    /\byour (?:mailing )?list\b/i,
+    /\bbulk (?:email|text|message)/i,
+  ];
+  for (const [what, body] of [...SURFACES, ['the public page', publicPage.body]]) {
+    const text = String(body).replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ');
+    const hits = INVITES.filter((re) => re.test(text)).map((re) => String(re));
+    check(`  …${what} invites nobody to email or text a garage`, body.length > 500 && hits.length === 0,
+      hits.length ? hits.join(' · ') : `${text.length} characters swept`);
+  }
+  check('    …and the sweep would catch the post we used to ship',
+    INVITES.some((re) => re.test('#ad Thought of you — GreaseDesk is garage software'))
+    && INVITES.some((re) => re.test('Anywhere you like — a message, a post, a printed card on the counter.')),
+    'a filter that matches nothing reports a clean sweep over a population it cannot see');
 
   // ── 7. WHO WE MAY BE ASKED TO PAY ────────────────────────────────────────────────────────────
   console.log('\n— the refusals on a proposed payee —');
@@ -1239,7 +1345,7 @@ try {
     'which is only true because the published bodies are literal');
 
   // ── THE SOURCE FILE AND THE SCRIPT THAT PUTS IT IN ───────────────────────────────────────────
-  const source = src('content/affiliate-terms-v1.md');
+  const source = src('content/affiliate-terms.md');
   check('the real terms are a file in the repository', source.length > 4000, `${source.length} characters`);
   check('  …carrying placeholders rather than typed figures',
     TERMS.hasPlaceholder(source) && !/£120|£600|£750/.test(source),
@@ -1252,6 +1358,70 @@ try {
   check('  …and its baked text carries the figures a reader checks',
     srcBaked.body.includes('£120') && srcBaked.body.includes('12 months for the price of 8')
     && srcBaked.body.includes('£600 instead of £750'), 'section 3 and section 4, from settings');
+
+  /**
+   * ── AND IT IS VERSION 2, THE ONE THE SOLICITOR APPROVED (2026-11-01) ──────────────────
+   * Eight clauses v2 added or rewrote, each asserted by the sentence that carries it, plus the v1
+   * wording that had to GO: "No spam" permitted email and text to anybody lawfully contactable under
+   * PECR, and a file holding both would publish a document that contradicts itself.
+   */
+  check('the draft is version 2: electronic marketing is banned outright',
+    source.includes('**Public channels and in person only.**')
+    && source.includes('whether a person or a business')
+    && !/No spam/i.test(source) && !/PECR/.test(source),
+    'v1 allowed lawful B2B email; a file carrying both rules publishes a document at odds with itself');
+  const V2 = [
+    ['1.3 — no quotas, and we do not direct the method', 'There are no minimum introductions, quotas or targets'],
+    ['6.2 — a closing balance is paid whatever its size', 'any balance you are owed is paid in full in the next payout run'],
+    ['6.5 — a paid reward is deducted, never demanded back', 'We will not ask you to repay it'],
+    ['7 — recovery only on fraud or a deliberate breach', 'Where it was earned through fraud or a deliberate breach of this section'],
+    ['8.7 — the indemnity for an unlabelled ad or a text', 'cover any fines, costs or losses we reasonably incur'],
+    ['9.4 — and it is grounds to end the agreement at once', 'electronic marketing in breach of 8.3'],
+    ['10.2 — a change applies forwards only', 'A change applies only from the date it takes effect'],
+    ['11.4 — the liability carve-outs the law requires', 'death or personal injury caused by negligence'],
+  ];
+  for (const [what, sentence] of V2) {
+    check(`  …${what}`, source.includes(sentence), sentence);
+  }
+  /**
+   * AND THE NUMBER 8.3 POINTS AT 8.3. Two clauses of v2 cite it by number, so an item inserted
+   * anywhere above it silently re-aims both at the wrong rule — in a document that is IMMUTABLE once
+   * published. This is the one clause here that is about structure rather than wording, and it is the
+   * one that can go red from an edit nobody thought was risky.
+   */
+  const s8 = (source.split('\n## 8.')[1] ?? '').split('\n## ')[0];
+  const items8 = s8.split('\n').filter((l) => /^\d+\. /.test(l));
+  check('  …and 8.3 IS the third item of section 8, which 8.7 and 9.4 both cite by number',
+    items8.length === 7 && /^3\. \*\*Public channels and in person only\.\*\*/.test(items8[2]),
+    `${items8.length} items · third reads “${(items8[2] ?? '').slice(0, 48)}…”`);
+  /**
+   * AND THE TWO READERS OF THE FILE NAME A FILE THAT IS THERE.
+   *
+   * This clause first swept the readers for the retired name and went red on itself: the gate's own
+   * source contains `affiliate-terms-v1` — as the regex literal doing the searching. The term was
+   * not unique to its subject, which is the board's own lesson, and the version below is the better
+   * clause anyway: it asserts the two writers AGREE on a path that RESOLVES, rather than that one
+   * retired string is absent from four files.
+   */
+  /**
+   * THE PATH IS READ OFF THE `SOURCE` CONST, NOT THE FIRST ONE IN THE FILE. The loose version of
+   * this matched the script's HEADER COMMENT — "PUBLISH THE AFFILIATE TERMS from content/…" — which
+   * sits four lines above the code, so a red-proof that pointed the real const at a file that does
+   * not exist passed cleanly. The clause was asserting the documentation.
+   *
+   * `scriptMentions` is what closes it from the other side: every content/*.md path in that file
+   * must be the SAME path, so the header and the const cannot drift apart either.
+   */
+  const scriptSrc = src('scripts/publish-affiliate-terms.mjs');
+  const scriptPath = (/SOURCE = `\$\{ROOT\}\/(content\/[a-z0-9-]+\.md)`/.exec(scriptSrc) ?? [])[1] ?? '';
+  const scriptMentions = [...new Set(scriptSrc.match(/content\/[a-z0-9-]+\.md/g) ?? [])];
+  const registered = SEED.SEEDABLE_DRAFTS.find((d) => d.slug === TERMS.AFFILIATE_TERMS_SLUG);
+  check('  …and the publish script and the seed registry name ONE file, which is there',
+    scriptPath !== '' && scriptPath === registered?.file && src(scriptPath).length > 4000
+    && scriptMentions.length === 1,
+    `const ${scriptPath || '(none)'} · registry ${registered?.file ?? '(none)'} · named as `
+    + `${scriptMentions.join(', ') || '(nowhere)'} · ${src(scriptPath).length} characters`
+    + ' — a registry naming a file that is not there reports no_file and shows an empty Content screen');
 
   // ── 10b. THE PORTAL'S OWN TERMS PAGE, AND WHAT *THEY* ACCEPTED ───────────────────────────────
   /**
