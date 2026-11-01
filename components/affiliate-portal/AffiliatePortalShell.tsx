@@ -22,7 +22,7 @@ import React, { useState } from 'react';
 import { signOut } from 'next-auth/react';
 import BrandLogo from '@/components/BrandLogo';
 import { portalHomePath, portalSignInPath } from '@/lib/party-portal';
-import { PORTAL_SECTIONS, PORTAL_LINKS, type PortalSectionKey } from '@/lib/affiliate-portal-nav';
+import { PORTAL_SECTIONS, PORTAL_LINKS, type PortalNavKey } from '@/lib/affiliate-portal-nav';
 
 const HOME = portalHomePath('affiliate');
 const SIGN_IN = portalSignInPath('affiliate');
@@ -39,7 +39,7 @@ const navLink = (active: boolean) =>
  * somebody, and the page has one source of truth to read instead of state to keep in step with a
  * URL. The page listens for the hash; this component only has to say where each item points.
  */
-function NavList({ active, onNavigate }: { active: PortalSectionKey; onNavigate?: () => void }) {
+function NavList({ active, onNavigate }: { active: PortalNavKey; onNavigate?: () => void }) {
   return (
     <>
       {PORTAL_SECTIONS.map((s) => (
@@ -53,13 +53,19 @@ function NavList({ active, onNavigate }: { active: PortalSectionKey; onNavigate?
   );
 }
 
-/** The links that LEAVE the page, kept visibly apart from the sections — see the nav table's header. */
-function LinkList({ onNavigate }: { onNavigate?: () => void }) {
+/**
+ * The links that LEAVE the page, kept visibly apart from the sections — see the nav table's header.
+ *
+ * THEY HIGHLIGHT WHEN YOU ARE ON THEM, exactly as a section does. Terms is a page inside this same
+ * shell, so an item that never marked itself current would leave the menu claiming you are still on
+ * Overview while you are reading the agreement.
+ */
+function LinkList({ active, onNavigate }: { active: PortalNavKey; onNavigate?: () => void }) {
   return (
     <>
       {PORTAL_LINKS.map((l) => (
         <a key={l.key} href={l.href} onClick={onNavigate} data-testid={`portal-link-${l.key}`}
-          className="flex items-center p-3 rounded-lg text-sidebar-fg hover:bg-sidebar-line transition-colors">
+          aria-current={active === l.key ? 'page' : undefined} className={navLink(active === l.key)}>
           <span className="mr-3 text-lg" aria-hidden="true">📄</span>
           {l.label}
         </a>
@@ -74,7 +80,7 @@ function LinkList({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export default function AffiliatePortalShell(
-  { active, children }: { active: PortalSectionKey; children: React.ReactNode },
+  { active, children }: { active: PortalNavKey; children: React.ReactNode },
 ) {
   const [open, setOpen] = useState(false);
   return (
@@ -88,7 +94,7 @@ export default function AffiliatePortalShell(
           <NavList active={active} />
         </nav>
         <div className="shrink-0 pt-3 mt-2 border-t border-sidebar-line space-y-1">
-          <LinkList />
+          <LinkList active={active} />
         </div>
       </aside>
 
@@ -116,7 +122,7 @@ export default function AffiliatePortalShell(
             {/* CLOSES ON NAVIGATE. The section changes underneath the overlay, so leaving it open
                 would hide the thing the person just asked to see. */}
             <nav className="space-y-2" aria-label="Affiliate menu"><NavList active={active} onNavigate={() => setOpen(false)} /></nav>
-            <div className="pt-3 mt-2 border-t border-sidebar-line space-y-1"><LinkList onNavigate={() => setOpen(false)} /></div>
+            <div className="pt-3 mt-2 border-t border-sidebar-line space-y-1"><LinkList active={active} onNavigate={() => setOpen(false)} /></div>
           </div>
         </div>
       )}

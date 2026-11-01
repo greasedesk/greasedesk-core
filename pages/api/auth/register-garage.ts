@@ -15,7 +15,7 @@ import { ensureStartingPlanTerms } from '@/lib/billing-plans';
 import { findPartyByRefCode, type RefMatch } from '@/lib/attribution';
 import { attributeAtSignup } from '@/lib/affiliate';
 import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/lib/signup-source';
-import { normaliseSignupMobile } from '@/lib/phone-format';
+import { normaliseSignupMobile, refuseSignupMobile } from '@/lib/phone-format';
 import { toE164Digits } from '@/lib/contact-routes';
 import { alertGarageRegistered } from '@/lib/operator-alerts';
 
@@ -78,6 +78,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .json({ ok: false, where: 'validate', message: 'Password must be at least 8 characters.' });
     }
 
+    /**
+     * ── THE MOBILE IS REQUIRED (owner, 2026-11-01), AND REFUSED HERE RATHER THAN ON THE PAGE ────
+     * The page checks it too, with this same function so the words match, but the page's check is
+     * convenience: this endpoint is the write surface and a POST does not have to come from a form.
+     *
+     * REFUSED BEFORE ANYTHING IS CREATED, and before the password is hashed — a signup that is
+     * going to be turned away should cost nothing and leave nothing behind.
+     *
+     * STILL UNVERIFIED, deliberately: the shape is plausible, which is not the same as the number
+     * being theirs. The onboarding step still sends a code and phone_verified_at stays null — see
+     * the TwoFactorSecret write below, whose comment carries the rest of that reasoning.
+     */
+    const mobileRefusal = refuseSignupMobile(mobile);
+    if (mobileRefusal) {
+      return res.status(400).json({ ok: false, where: 'validate', message: mobileRefusal });
+    }
+    /**
+     * ONE PARSER, AND IT CANNOT DISAGREE WITH THE REFUSAL ABOVE. toE164Digits is the comms spine's
+     * normaliser; refuseSignupMobile has already accepted the shape, so a null here would mean our
+     * two parsers disagree about the same string — which is a refusal and not something to write
+     * around. Nothing should reach it; it costs one comparison, and the alternative is a garage
+     * whose mobile silently never landed.
+     */
+    const mobileE164 = toE164Digits(normaliseSignupMobile(mobile));
+    if (!mobileE164) {
+      console.error('[register-garage] a mobile passed refuseSignupMobile and produced no E.164 — refusing');
+      return res.status(400).json({ ok: false, where: 'validate', message: 'We could not read that mobile number.' });
+    }
+
     const existing = await prisma.user.findUnique({ where: { email: emailNorm } });
     if (existing) {
       return res
@@ -128,8 +157,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       /**
-       * THE OPTIONAL MOBILE (owner, 2026-10-31) — the PERSON'S number, where the onboarding
-       * "Confirm your mobile number" step looks for it.
+       * THE MOBILE (owner, 2026-10-31 optional, 2026-11-01 REQUIRED) — the PERSON'S number, where
+       * the onboarding "Confirm your mobile number" step looks for it.
+       *
+       * THE WRITE IS UNCONDITIONAL NOW, and that is the change: the refusal above means every
+       * garage arriving here gave one. There is no `if` left to hide a signup that quietly stored
+       * no number at all.
        *
        * ── WHY NOT Group.phone, WHICH IS WHERE IT WENT FIRST ──────────────────────────────────
        * Group.phone is the COMPANY contact number — the customer-facing fallback when a site has
@@ -148,18 +181,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
        * toE164Digits is the comms spine's normaliser (lib/contact-routes); a second parser here
        * would be a second answer to "what is this number".
        */
-      const mobileE164 = toE164Digits(normaliseSignupMobile(mobile));
-      if (mobileE164) {
-        await tx.twoFactorSecret.create({
-          data: {
-            subject_type: 'tenant', subject_id: user.id,
-            method: 'sms', secret: null,
-            phone_e164: mobileE164,
-            // NOT recorded, NOT verified, NOT enabled. See above.
-            phone_recorded_at: null, phone_verified_at: null, enabled: false,
-          },
-        });
-      }
+      await tx.twoFactorSecret.create({
+        data: {
+          subject_type: 'tenant', subject_id: user.id,
+          method: 'sms', secret: null,
+          phone_e164: mobileE164,
+          // NOT recorded, NOT verified, NOT enabled. See above.
+          phone_recorded_at: null, phone_verified_at: null, enabled: false,
+        },
+      });
 
       // THE GARAGE'S FIRST TERMS ROW, in the SAME transaction as the garage. Outside it, a failure
       // between the two would leave a garage with no record of what it was offered — and the whole

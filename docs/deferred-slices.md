@@ -790,11 +790,12 @@ after that, nothing should be plaintext again, and the branch could only be reac
 around the chokepoint. Add the gate clause that asserts every stored value is `v1:`-prefixed, then
 remove the branch. A guard whose premise has expired is a blindfold.
 
-**5. The favicon gap is open on er. and reps. too.**
-`ICON_ASSETS` in middleware.ts is allowed on the affiliate host only. The Engine Room and the
-reseller site carry the identical fault — `/favicon-32x32.png` and `/apple-touch-icon.png` 404, so
-their tabs are blank while `/favicon.ico` answers 200 and hides it. One word each; deliberately not
-taken, because neither host was in this slice.
+**5. The favicon gap — OFF THE BOARD 2026-11-01, by the owner, on his own measurement.**
+He checked all four hosts in a clean browser: every site shows its icon, and the blank tab that put
+this on the board was his browser's cache. So `ICON_ASSETS` stays allowed on the affiliate host only
+and `er.` and `reps.` keep answering `/favicon.ico` alone, which is what their tabs show. The
+middleware comment now records that as a decision rather than an omission — a door opened because it
+was easy is a door nobody later remembers deciding to open.
 
 **6. The browser payee-submit path — CLOSED 2026-10-31.** The key is in `.env`, the dev server was
 restarted to read it, and the submit is proved end to end: the form posts, the route answers 200, and
@@ -896,7 +897,10 @@ the evidence of a count rather than of a migration — still boarded, now cheap.
 
   • `affiliates.` serves all four icons; `er.` and `reps.` still 404 the three sized PNGs and answer
     `/favicon.ico` only. The boarded gap, confirmed rather than inferred. One word each in
-    middleware's host branches; still the owner's call.
+    middleware's host branches; still the owner's call. **CLOSED 2026-11-01:** he checked all four
+    hosts himself in a clean browser — every site shows its icon, the blank tab was his cache, and
+    the sized PNGs stay shut on `er.` and `reps.` by decision. The measurement above stands; what
+    changed is that it is no longer a gap to fix.
   • `/signin` 200, `/dashboard` 307 signed out, `/terms` 200, the payee API 404 both signed-out and
     on the apex. The guards and the host isolation hold on the real hosts.
   • `/icon-192.png` and `/icon-512.png` 404 everywhere INCLUDING the apex — they do not exist. I
@@ -907,9 +911,10 @@ the evidence of a count rather than of a migration — still boarded, now cheap.
 
 **The menu** is sections, not pages: `lib/affiliate-portal-nav` holds the table, the hash is the
 single source of truth, and `AffiliatePortalShell` is the dark rail with the same tokens as
-AdminLayout. The reason it is not six routes is latency — `affiliatePortalData` is a NINE-DEEP serial
+AdminLayout. The reason it is not six routes is latency — `affiliatePortalData` was a NINE-DEEP serial
 chain and the functions are pinned to lhr1 beside the database precisely because depth is latency, so
-six routes would pay that chain again on every click of the menu.
+six routes would pay that chain again on every click of the menu. (It is SEVEN-deep from 2026-11-01:
+the terms document and the acceptance row went with the Terms page, which is its own read.)
 
 **`BrandLogo` defaults its href to `/admin/dashboard`**, which does not exist on the affiliate host.
 A shell that took the default would have shipped a logo whose only job is to go home and which 404s;
@@ -949,3 +954,151 @@ in a row came back "inconclusive" and I read them as "red" until I counted the r
 navigated from `#payment-details` to `#earnings` — a URL differing only in its FRAGMENT does not
 reload the document, so the clause re-proved the hashchange listener while the on-arrival read went
 untested. Deleting that read left the whole gate green. It now leaves the document first.
+
+---
+
+## FIVE THINGS THE OWNER ASKED FOR AFTER THE MENU (2026-11-01)
+
+One commit, no migration: nothing here needed a schema change, which is worth saying because two of
+the five sound like they would. The mobile stays NULLABLE in the database and is required at the
+write surface; the seeded terms draft is a ROW in a table that already exists.
+
+### 1. The sort code groups itself, and still stores six digits
+
+`sortCodeAsTyped(raw, previous)` in lib/payee — `11-03-00` as the digits land, and a paste of
+`11 03 00`, `110300` or `11-03-00` all settle to the same thing. What is SENT is `normaliseSortCode`,
+so the grouping never reaches the database and the route's refusal is untouched.
+
+**`previous` is the whole of the interesting part.** Deleting a separator is indistinguishable from
+deleting a digit if you only look at the digits — and without the distinction the field cannot be
+edited from the right: backspace over the `-` in `11-03` leaves the six digits unchanged, the
+grouping puts the dash straight back, and the key appears to do nothing. The rule deletes the digit
+IN FRONT of the separator, which is what somebody means by it.
+
+Asserted both ways: the pure table over eleven shapes, the field itself typed one key at a time
+(`pressSequentially`, because `fill()` would prove the paste path twice over), and **what the form
+sends, read off the wire** — the request is intercepted and answered in the gate rather than allowed
+through, because a real submit would supersede the pending payee request the Engine Room clauses
+below it still read. A gate's own side effects breaking its own later clauses is the shape of defect
+that cost three red-proofs here a day earlier.
+
+### 2. The favicon came off the board
+
+See the measurement above. The middleware comment now records it as a decision: *a door opened
+because it was easy is a door nobody later remembers deciding to open.*
+
+### 3. Terms opens inside the portal, showing what THEY accepted
+
+The menu's Terms pointed at `/terms`, the PUBLIC page. A signed-in affiliate clicking an item in
+their own menu left the portal, lost the menu, and landed on the page written for somebody deciding
+whether to join — and it answered the wrong question, because the person asking is asking "what did
+I agree to, and when".
+
+`pages/affiliate-portal/terms.tsx` at **`/my-terms`**, inside the same shell, with the Terms item
+marked current (the shell now takes a `PortalNavKey`, not a section key — an item that highlights on
+six screens and goes dead on the seventh reads as a bug). The address lives in ONE place, the nav
+table, which middleware imports: the same arrangement lib/party-portal exists for. It is NOT `/terms`
+because that address belongs to the public page on the same host, and one address serving two
+audiences would mean deciding who is asking from a cookie, in middleware, per request.
+
+**It shows the version they accepted, not the current one.** `RepTermsAcceptance.version` is frozen
+at acceptance and the page reads the DOCUMENT behind it; a newer published version is NAMED with a
+link to the public page rather than quietly swapped in. Showing today's text under "you accepted
+this" would be a claim about somebody's agreement that changes without them.
+
+**Three states, and the middle one is real:**
+
+  • a version and a date — they accepted a published document, and it is shown;
+  • a date and NO version — they accepted the SETTLED SUMMARY, before anything was published. This is
+    the state the owner's own affiliate row is in. Inventing a stamp would reference words that never
+    existed under that name;
+  • neither — said plainly, with a phone number, and never filled in with today.
+
+**The settled summary left the page it was written on.** It was a literal array inside
+pages/affiliate-site/terms.tsx, which was right while one page showed it; two statements of one
+agreement is one of them being out of date, which is exactly how the refund promise came to be wrong
+in three places at once the day before. `lib/affiliate-terms-summary` is a leaf, no figure typed into
+it, read by both screens — and the gate asserts the words are on both RENDERED pages and in NEITHER
+page file, so they cannot have come from anywhere else.
+
+**The acceptance line moved off the dashboard footer**, where it only appeared when there WAS a
+version — so an affiliate who accepted the summary saw nothing at all. That removed the last reader
+of `PortalData.terms`, and with it two of the nine queries in the dashboard's chain: the terms
+document and the acceptance row. `currentVersion` had never been rendered by anything.
+
+**And the new page joined the promises sweep the same day it was written.** Four surfaces now, not
+three. The three the owner found were in three different files.
+
+### 4. The v1 terms text is seeded as an unpublished draft
+
+`lib/content-seed`: a registry of documents whose first draft ships in the repository, and one of
+them. It fires the first time the owner opens **Engine Room → Content**, from the file that shipped
+with the deploy.
+
+**Not at build, which is what "at deploy" sounds like.** A build writing rows writes from a build
+container, on every build including every preview, against whatever `DATABASE_URL` that environment
+holds — and dev and production share one database here. The shape used instead is
+`getProgrammeSettings`'s: the row is made by the first person who needs it, inside a request that is
+already authenticated, owner-only because the one registered document is `legal`.
+
+**Two guards, answering different questions.** Any row for (slug, country) means there is nothing to
+seed. A prior `document.seeded` audit row means it has already happened *even if nothing is there
+now* — which is the case the first guard cannot see: discarding the draft deletes the row, and
+without this the seed would put it back on the next page load for ever. A deletion record cannot
+reference its subject; the audit row IS the evidence and outlives what it is about.
+
+It never publishes and cannot: status `draft`, the DRAFT sentinel, no effective date, `created_by`
+NULL because no operator did it. **The body goes in UNBAKED**, placeholders intact, exactly as
+`publish-affiliate-terms.mjs --write` leaves it — baking now would mean the owner's next edit started
+from substituted text and lost the placeholders for ever. Publishing is what bakes them, refuses an
+unresolved one, and spends a version: his separate step, after the solicitor.
+
+`content/**` is traced into the serverless function (next.config.js), the same mechanism the locale
+JSON needed and for the same reason: the tracer cannot see a path built from `process.cwd()` at
+runtime, and an untraced file is simply absent in production while the seed reports `no_file` for
+ever. That one is asserted by reading the source, because a build-time include has no other witness.
+
+### 5. The mobile is required at signup
+
+Required, labelled "Mobile", a plausible UK mobile, still unverified. `refuseSignupMobile` in
+lib/phone-format returns the SENTENCE rather than a boolean, so the page and the endpoint say the
+same words — a person correcting a field until the page is happy must not then be refused by the
+route in different language.
+
+**Plausible is the whole claim, and the name says so.** `07` and nine more digits, however it is
+written. It is not evidence the number exists, belongs to them, or can receive a message; the SMS
+step still proves that and `phone_verified_at` stays null. A landline is refused rather than
+accepted, because a real number that cannot do the one thing the field is for would leave a garage
+stalled at a step it can never pass.
+
+**Blank is its own sentence**, because the fix is different: type something, rather than correct
+something.
+
+The write is now UNCONDITIONAL inside the transaction — there is no `if` left to hide a signup that
+quietly stored no number — and the refusal happens before the password is hashed.
+
+**The blast radius was three gates, not one.** came-via, attribution and operator-alerts all sign a
+garage up through the real form; without a mobile each would have waited for a page that never
+arrives. Every gate garage now gives `07700900123` — Ofcom's reserved drama range, allocated to
+nobody, because a made-up 07 number is somebody's phone and these garages end up in alert rows a
+person might one day ring.
+
+**And one clause had its premise removed.** "A skipped mobile writes nothing at all" was about a
+state the form can no longer produce. It is replaced by the fact that now matters — every signup
+carries one, on the PERSON and not on `Group.phone` — and the onboarding comparison it fed keeps its
+other arm by DELETING the TwoFactorSecret row from one fixture: "a garage from before the field was
+required" is a real population, every garage that signed up while it was optional, not a fixture
+artefact.
+
+### What the red-proofs caught in the clauses themselves
+
+  • **"it does not invent a date" swept the whole page for today's date** — and went red on correct
+    code, because version 2 was published with today's effective date and the "a newer version
+    exists" notice names it legitimately. The claim is about the acceptance SENTENCE, so that is what
+    it asserts now. A term has to be unique to its subject.
+  • **A fallback title identical to the file's own heading** made its clause unprovable: one string
+    standing in for two facts, so it could not tell "the heading won" from "the fallback was used".
+    The oracle is now the file's first line, parsed a different way from the function under test.
+  • **The menu-walk clause failed by TIMEOUT**, which killed the run and took the forty clauses after
+    it. Caught now, so a Terms item pointing elsewhere is a red.
+

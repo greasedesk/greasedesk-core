@@ -9,10 +9,14 @@
  *
  * ── SECTIONS, NOT PAGES, AND THE REASON IS LATENCY ──────────────────────────────────────────────
  * The owner left the choice open ("its own page or anchor, your call"). affiliatePortalData is a
- * NINE-DEEP serial chain of queries — rep, settings, terms, groups, entries, payee, two documents,
- * the acceptance row — and functions are pinned to lhr1 beside Neon in eu-west-2 precisely because
- * query depth is latency. Six pages would each pay that chain again on every click of the menu, so
- * one fetch serves the whole portal and the menu switches which section is shown.
+ * SEVEN-DEEP serial chain of queries — rep, settings, terms, groups, entries, payee, the video
+ * document — and functions are pinned to lhr1 beside Neon in eu-west-2 precisely because query
+ * depth is latency. Six pages would each pay that chain again on every click of the menu, so one
+ * fetch serves the whole portal and the menu switches which section is shown.
+ *
+ * It was NINE until 2026-11-01: the terms document and the acceptance row went with the Terms page,
+ * which is its own read. The number is written here because it is the reason for the design, and a
+ * reason carrying a stale number is a reason nobody can check.
  *
  * THE HASH IS THE SOURCE OF TRUTH, not a piece of component state the hash is kept in step with.
  * The menu items are real links to `#key`; the page listens for the hash changing and renders the
@@ -23,6 +27,16 @@
  * is printed, and the terms are a published legal document that is also read by people who are not
  * signed in. They appear in the menu as links, in their own list, because "goes somewhere else" and
  * "shows a different part of this page" are different things to a person reading a menu.
+ *
+ * ── TERMS NOW OPENS INSIDE THE PORTAL (owner, 2026-11-01) ───────────────────────────────────────
+ * It pointed at /terms, the PUBLIC page — so a signed-in affiliate clicking an item in their own
+ * menu left their portal, lost the menu, and landed on the page we show to someone deciding whether
+ * to join. It said nothing about what they had accepted, which is the one thing a signed-in person
+ * is asking of that screen.
+ *
+ * So the menu's Terms goes to the portal's own page, which carries the agreement AND the version
+ * and date they accepted. The public page is unchanged and still lives at /terms for the people it
+ * was written for — two audiences, two pages, and neither pretending to be the other.
  */
 
 export type PortalSectionKey = 'overview' | 'share' | 'posts' | 'garages' | 'earnings' | 'payment-details';
@@ -50,12 +64,34 @@ export const PORTAL_SECTIONS: readonly PortalSection[] = [
 /** What a visitor with no hash sees, and what an unrecognised hash falls back to. */
 export const PORTAL_DEFAULT_SECTION: PortalSectionKey = 'overview';
 
-export type PortalLink = { key: string; label: string; href: string };
+export type PortalLinkKey = 'terms';
+export type PortalLink = { key: PortalLinkKey; label: string; href: string };
+
+/**
+ * THE PORTAL'S OWN TERMS PAGE, and the ONE home for its address.
+ *
+ * middleware imports this constant rather than spelling the path again — the same arrangement
+ * lib/party-portal exists for, and for the reason recorded there: an address written in two places
+ * gets changed in one of them, and the half that is wrong is a page nobody can reach.
+ *
+ * NOT /terms, which belongs to the public page on this same host. Two documents at one address
+ * would mean deciding WHO is asking in middleware, from a cookie, on every request — and a page
+ * that serves two audiences inherits one of them, which is how a 404 came to tell the public site's
+ * visitors they were still signed in.
+ */
+export const PORTAL_TERMS_PATH = '/my-terms';
 
 /** Pages, not sections — see the header. */
 export const PORTAL_LINKS: readonly PortalLink[] = [
-  { key: 'terms', label: 'Terms', href: '/terms' },
+  { key: 'terms', label: 'Terms', href: PORTAL_TERMS_PATH },
 ];
+
+/**
+ * WHAT THE MENU CAN BE SHOWING: one of the dashboard's sections, or one of the pages. The shell
+ * takes this rather than a section key, so the Terms page can mark its own menu item as the current
+ * one — an item that highlights on six screens and goes dead on the seventh reads as a bug.
+ */
+export type PortalNavKey = PortalSectionKey | PortalLinkKey;
 
 /**
  * FAILS TO THE DEFAULT RATHER THAN THROWING. The input is whatever is in somebody's address bar,

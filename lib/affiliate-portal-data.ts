@@ -78,7 +78,6 @@ export type PortalData = {
   posts: SocialPost[];
   payee: { state: PayeeState; masked: string | null; accountName: string | null };
   videos: PortalVideo[];
-  terms: { currentVersion: string | null; acceptedVersion: string | null; acceptedAt: string | null };
 };
 
 /**
@@ -152,12 +151,14 @@ export async function affiliatePortalData(repId: string, db: Db = defaultDb as D
   const payeeState: PayeeState = pending ? 'pending' : (held as PayeeState);
 
   const videoDoc = await resolvePublished(db, VIDEO_SLUG, 'GB');
-  const termsDoc = await resolvePublished(db, AFFILIATE_TERMS_SLUG, 'GB');
-  const accepted = await db.repTermsAcceptance.findFirst({
-    where: { rep_id: rep.id },
-    orderBy: { accepted_at: 'desc' },
-    select: { version: true, accepted_at: true },
-  });
+  /**
+   * ── THE TERMS DOCUMENT AND THE ACCEPTANCE ROW LEFT THIS CHAIN (owner, 2026-11-01) ─────────────
+   * Two of the nine reads were here for a footer line — "you accepted version X on Y" — and a
+   * `currentVersion` field that nothing ever rendered. Terms is now its own page inside the portal
+   * (lib/affiliate-portal-terms), which is where that question is answered in all three of its
+   * states, so the dashboard pays for neither read. The slug is still exported from here, because
+   * the public page and the signup's acceptance row have to mean the same document.
+   */
 
   const link = referralLink(rep.ref_code, COMPANY.siteUrl);
   return {
@@ -193,10 +194,5 @@ export async function affiliatePortalData(repId: string, db: Db = defaultDb as D
       accountName: pending?.account_name ?? rep.bank_account_name ?? null,
     },
     videos: videoDoc ? parseVideoList(videoDoc.body) : [],
-    terms: {
-      currentVersion: termsDoc?.version ?? null,
-      acceptedVersion: accepted?.version ?? null,
-      acceptedAt: accepted?.accepted_at ? accepted.accepted_at.toISOString().slice(0, 10) : null,
-    },
   };
 }

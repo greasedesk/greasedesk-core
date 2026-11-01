@@ -8,7 +8,7 @@
  * cannot render a field that was never fetched, and a later edit to this file cannot uncover one.
  *
  * ── ONE FETCH, SIX SECTIONS ─────────────────────────────────────────────────────────────────────
- * The menu switches which section is shown; it does not navigate. affiliatePortalData is a nine-deep
+ * The menu switches which section is shown; it does not navigate. affiliatePortalData is a seven-deep
  * serial chain of queries and the functions are pinned to lhr1 beside the database for exactly that
  * reason, so six routes would pay that chain again on every click. lib/affiliate-portal-nav's header
  * carries the reasoning; the hash in the address bar is the single source of truth for which section
@@ -26,10 +26,12 @@ import { requireAffiliatePage } from '@/lib/rep-auth';
 import { affiliatePortalData, type PortalData } from '@/lib/affiliate-portal-data';
 import { formatMoney } from '@/lib/format-money';
 import { PAYEE_COPY, AD_LABEL, REFUND_RULE } from '@/lib/affiliate-portal-copy';
-import { PAYEE_KINDS, SORT_CODE_DIGITS, ACCOUNT_NUMBER_DIGITS } from '@/lib/payee';
+import {
+  PAYEE_KINDS, SORT_CODE_DIGITS, ACCOUNT_NUMBER_DIGITS, sortCodeAsTyped, normaliseSortCode,
+} from '@/lib/payee';
 import AffiliatePortalShell from '@/components/affiliate-portal/AffiliatePortalShell';
 import {
-  PORTAL_DEFAULT_SECTION, sectionFromHash, type PortalSectionKey,
+  PORTAL_DEFAULT_SECTION, PORTAL_TERMS_PATH, sectionFromHash, type PortalSectionKey,
 } from '@/lib/affiliate-portal-nav';
 
 type Props = { data: PortalData; qr: string };
@@ -117,7 +119,15 @@ function PayeeForm({ state, masked, accountName }: PortalData['payee']) {
     try {
       const r = await fetch('/api/affiliate-portal/payee', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payeeKind: kind, accountName: accountNameIn, sortCode, accountNumber, nomineeEmail }),
+        /**
+         * THE SIX DIGITS, NOT WHAT THE FIELD SHOWS. The field groups as somebody types — '11-03-00'
+         * — and the grouping is for their eyes only: the route normalises anyway, so sending the
+         * dashes would work and would leave two shapes of the same value travelling the wire.
+         */
+        body: JSON.stringify({
+          payeeKind: kind, accountName: accountNameIn, accountNumber, nomineeEmail,
+          sortCode: normaliseSortCode(sortCode),
+        }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) { setMsg(body?.message ?? 'We could not save that.'); return; }
@@ -169,8 +179,13 @@ function PayeeForm({ state, masked, accountName }: PortalData['payee']) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm text-ink mb-1" htmlFor="payee-sort">Sort code</label>
-              <input id="payee-sort" value={sortCode} onChange={(e) => setSortCode(e.target.value)} required
-                inputMode="numeric" maxLength={8} placeholder="00-00-00" data-testid="payee-sort" autoComplete="off"
+              {/* GROUPED AS IT IS TYPED, and on paste, by the one rule in lib/payee. The previous
+                  value is passed because deleting a separator is only distinguishable from
+                  deleting a digit by comparing the two — see sortCodeAsTyped. */}
+              <input id="payee-sort" value={sortCode} required
+                onChange={(e) => setSortCode(sortCodeAsTyped(e.target.value, sortCode))}
+                inputMode="numeric" maxLength={SORT_CODE_DIGITS + 2} placeholder="00-00-00"
+                data-testid="payee-sort" autoComplete="off"
                 className="w-full min-h-[48px] border border-line rounded-lg px-3 bg-surface text-ink" />
             </div>
             <div>
@@ -203,9 +218,9 @@ export default function AffiliateDashboard({ data, qr }: Props) {
     <>
       <Head><title>Your affiliate page — GreaseDesk</title><meta name="robots" content="noindex" /></Head>
       <AffiliatePortalShell active={active}>
-        {/* OUTSIDE THE SECTIONS, because these three are true wherever you are standing: whose page
-            this is, that the account is paused, and which terms were accepted. A suspension notice
-            that only appeared on Overview would be missed by somebody who opened Earnings. */}
+        {/* OUTSIDE THE SECTIONS, because these are true wherever you are standing: whose page this
+            is, that the account is paused, and where the agreement lives. A suspension notice that
+            only appeared on Overview would be missed by somebody who opened Earnings. */}
         <header className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-extrabold text-ink tracking-tight" data-testid="affiliate-home">
             {data.name}
@@ -392,11 +407,15 @@ export default function AffiliateDashboard({ data, qr }: Props) {
           </Section>
         </Pane>
 
+        {/* ── THE AGREEMENT IS A PAGE NOW, AND THE ACCEPTANCE LINE WENT WITH IT (owner, 2026-11-01)
+            This said "you accepted version X on Y" in the footer, which was the only place that
+            fact appeared and only when there WAS a version — an affiliate who accepted the summary
+            saw nothing at all. /my-terms answers it in all three states, inside this same shell,
+            so there is one renderer of it rather than two that can drift. */}
         <footer className="pt-8 pb-2 text-xs text-muted">
-          <a href="/terms" className="text-accent hover:underline">Affiliate terms</a>
-          {data.terms.acceptedVersion && (
-            <span data-testid="affiliate-terms-accepted"> — you accepted version {data.terms.acceptedVersion} on {data.terms.acceptedAt}</span>
-          )}
+          <a href={PORTAL_TERMS_PATH} className="text-accent hover:underline" data-testid="affiliate-terms-footer-link">
+            Affiliate terms, and what you accepted
+          </a>
         </footer>
       </AffiliatePortalShell>
     </>

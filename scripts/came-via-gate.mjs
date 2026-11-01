@@ -51,6 +51,15 @@ const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ?
 const PREFIX = 'ZZCV';
 const LOW = PREFIX.toLowerCase();
 const PASS = 'GateGarage!2026';
+/**
+ * THE MOBILE EVERY SIGNUP IN THIS GATE GIVES — required from 2026-11-01, so a signup without one
+ * does not complete and every clause below that needs a garage needs a number first.
+ *
+ * 07700 900xxx is Ofcom's RESERVED DRAMA RANGE: numbers that exist for fiction and are allocated to
+ * nobody. A made-up 07 number is somebody's phone, and this gate's garages end up in alert rows and
+ * onboarding states that a person might one day ring.
+ */
+const MOBILE = '07700900123';
 const OP_EMAIL = `${LOW}-came-via-gate@greasedesk.test`;
 const OP_PASS = 'GateCameVia!2026';
 
@@ -127,7 +136,7 @@ try {
   browser = await chromium.launch({ channel: 'chrome' });
 
   /** Sign up through the real page. Returns the group's five columns, read back from the database. */
-  const signUp = async (n, { urlRef = null, urlUtm = null, heard = null, other = null, consent = null, cookies = null, visitFirst = null, mobile = null } = {}) => {
+  const signUp = async (n, { urlRef = null, urlUtm = null, heard = null, other = null, consent = null, cookies = null, visitFirst = null, mobile = MOBILE } = {}) => {
     const ctx = await browser.newContext();
     if (cookies) await ctx.addCookies(cookies);
     const page = await ctx.newPage();
@@ -171,7 +180,10 @@ try {
     await page.fill('input[type="password"]', PASS);
     if (heard) await page.selectOption('[data-testid="heard-about"]', heard);
     if (other !== null) await page.fill('[data-testid="heard-about-other"]', other);
-    if (mobile !== null) await page.fill('[data-testid="signup-mobile"]', mobile);
+    // ALWAYS FILLED, because the field is required and the form will not submit without it. The
+    // REFUSAL is driven in its own block below rather than by passing nothing here — a helper that
+    // can produce a signup that never happens makes every clause reading its return value lie.
+    await page.fill('[data-testid="signup-mobile"]', mobile);
     await page.click('button[type="submit"]');
     await page.waitForURL(/check-email/, { timeout: 20000 });
     const cookiesAfter = await ctx.cookies();
@@ -226,13 +238,20 @@ try {
     skipped.group?.heard_about === null && skipped.group?.heard_about_other === null
     && skipped.group?.utm_source === null && skipped.group?.utm_medium === null && skipped.group?.utm_campaign === null,
     'not "direct", not an empty string — an optional question that was not answered');
-  // ── THE OPTIONAL MOBILE GOES WHERE THE STEP VERIFIES IT, AND NOWHERE ELSE ───────────────────
+  // ── THE MOBILE GOES WHERE THE STEP VERIFIES IT, AND NOWHERE ELSE ────────────────────────────
   // It went to Group.phone first, which was wrong twice over: that column is the COMPANY's
   // customer-facing number, and pages/api/setup-wizard counts the contact step done on
   // `!!(group.phone || group.whatsapp)` — so a personal mobile would have become the number this
   // garage's customers are given, and skipped the step that would have confirmed it.
-  check('a skipped mobile writes nothing at all', skipped.twoFa === null && skipped.group?.phone === null,
-    `2FA row ${JSON.stringify(skipped.twoFa)}, Group.phone ${JSON.stringify(skipped.group?.phone)}`);
+  //
+  // IT IS NO LONGER OPTIONAL (owner, 2026-11-01), so "a skipped mobile writes nothing" is a state
+  // the form can no longer produce — the clause that used to be here had its premise removed. What
+  // replaces it is the fact that now matters: every signup carries one, on the person, not the
+  // company. The no-mobile case is still real for garages that signed up while it was optional, and
+  // the onboarding comparison below is driven against exactly that.
+  check('every signup now carries the number, on the PERSON',
+    skipped.twoFa?.phone_e164 === CR.toE164Digits(MOBILE) && skipped.group?.phone === null,
+    `phone_e164 ${JSON.stringify(skipped.twoFa?.phone_e164)}, Group.phone ${JSON.stringify(skipped.group?.phone)}`);
   const rang = await signUp('mobile', { mobile: ' 07397 387332 ' });
   // DIGITS, NO '+'. That is what lib/contact-routes::toE164Digits returns and what
   // confirmPhoneVerification already stores, so it is the column's convention — asserted against
@@ -262,18 +281,114 @@ try {
   for (const gid of [rang.group?.id, skipped.group?.id]) {
     await prisma.group.update({ where: { id: gid }, data: { country_code: 'GB' } });
   }
+  /**
+   * ── AND THE OTHER ARM OF THE COMPARISON IS MADE, NOT ASSUMED ─────────────────────────────────
+   * "A garage that gave no mobile" is no longer something the form can produce, and that does not
+   * make the population empty: every garage that signed up while the field was optional is in
+   * exactly this state. So the row is removed from one fixture to put it in that state, rather than
+   * the clause being deleted along with the state it was about.
+   */
+  await prisma.twoFactorSecret.deleteMany({ where: { subject_type: 'tenant', subject_id: skipped.user?.id } });
   const stateWith = await OB.getOnboardingState(rang.group?.id, { userId: rang.user?.id, isAdmin: true });
   check('the onboarding phone step still stands, with the number already on file',
     stateWith.firstIncompleteStep === 'phone' && stateWith.onboarded === false,
     `first incomplete: ${stateWith.firstIncompleteStep}`);
   const stateWithout = await OB.getOnboardingState(skipped.group?.id, { userId: skipped.user?.id, isAdmin: true });
-  check('  …exactly as it does for a garage that gave no mobile — the number changes nothing here',
+  check('  …exactly as it does for a garage from before the field was required — the number changes nothing here',
     stateWithout.firstIncompleteStep === stateWith.firstIncompleteStep,
     `with ${stateWith.firstIncompleteStep} / without ${stateWithout.firstIncompleteStep}`);
   // NOT VACUOUS: if 'phone' were never the first incomplete step for either, both clauses above
   // would agree about something else entirely and prove nothing about this field.
   check('  …and that step is genuinely the one being asked about',
     stateWith.firstIncompleteStep === 'phone', 'if this moves, the two clauses above stop being about the mobile');
+
+  /**
+   * ── THE FIELD IS REQUIRED, AND THE REFUSAL IS THE SAME SENTENCE IN BOTH PLACES ───────────────
+   * The owner's instruction (2026-11-01): required, labelled "Mobile", a plausible UK mobile, and
+   * still unverified at signup. Three surfaces have to agree — the browser's own `required`, the
+   * page's refusal, and the endpoint's — because a POST does not have to come from a form.
+   */
+  console.log('\n— and the mobile is required, with one sentence for it —');
+  const mobPage = await (await browser.newContext()).newPage();
+  await mobPage.goto(`${gateOrigin()}/register`, { waitUntil: 'domcontentloaded' });
+  await mobPage.waitForSelector('[data-testid="signup-mobile"]');
+  check('the field is marked required on the page itself',
+    (await mobPage.locator('[data-testid="signup-mobile"]').getAttribute('required')) !== null,
+    'the browser stops an empty submit before any of our code runs');
+  check('  …and the label no longer calls it optional, with the promise under it',
+    !/\(optional\)/.test(await mobPage.locator('label[for="mobile"]').innerText())
+    && /won.t use it for marketing/i.test(await mobPage.locator('[data-testid="signup-mobile-why"]').innerText()),
+    await mobPage.locator('[data-testid="signup-mobile-why"]').innerText());
+  const mobAddr = `${LOW}-landline@example.invalid`;
+  await mobPage.fill('input[autocomplete="name"]', `${PREFIX} landline`);
+  await mobPage.fill('input[type="email"]', mobAddr);
+  await mobPage.fill('input[type="password"]', PASS);
+  // A LANDLINE IS A REAL NUMBER THAT CANNOT DO THE ONE THING THIS FIELD IS FOR, so `required` is
+  // satisfied and only our own rule can refuse it. That is why this case is driven and not the
+  // empty one: the empty one never reaches our code.
+  await mobPage.fill('[data-testid="signup-mobile"]', '01204 123456');
+  await mobPage.click('button[type="submit"]');
+  await mobPage.waitForSelector('[data-testid="signup-error"]', { timeout: 10000 }).catch(() => {});
+  const shown = await mobPage.locator('[data-testid="signup-error"]').innerText().catch(() => '');
+  check('a landline is refused ON THE PAGE, in words that say what to type',
+    /starting 07/.test(shown) && shown.includes(PF.UK_MOBILE_REFUSAL),
+    shown.replace(/\n/g, ' ').slice(0, 120) || 'no error was shown');
+  check('  …and no garage was created by the attempt',
+    (await prisma.user.findUnique({ where: { email: mobAddr }, select: { id: true } })) === null,
+    'a refusal that still signs somebody up is not a refusal');
+  /**
+   * AND THE ENDPOINT REFUSES IT TOO, from a page on the origin. The page's check is convenience;
+   * this is the write surface. 400 and the SAME sentence, so somebody who corrects the field is not
+   * then refused in different words by the route.
+   */
+  /**
+   * `mobile: null` MEANS THE KEY IS OMITTED, deliberately, rather than `undefined` being passed to
+   * evaluate: an undefined inside a serialized argument is not a thing to rely on, and "the field
+   * was absent from the body" is the case being tested.
+   */
+  const rawMobile = async (mobile, email) => mobPage.evaluate(async ([origin, m, e]) => {
+    const r = await fetch(`${origin}/api/auth/register-garage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'ZZCV raw', email: e, password: 'GateGarage!2026', ...(m === null ? {} : { mobile: m }) }),
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, [gateOrigin(), mobile, email]);
+  const noneSent = await rawMobile(null, `${LOW}-raw-none@example.invalid`);
+  check('the endpoint refuses a POST with no mobile at all',
+    noneSent.status === 400 && /mobile number/i.test(String(noneSent.body?.message)),
+    `${noneSent.status} ${JSON.stringify(noneSent.body?.message)}`);
+  const landlineSent = await rawMobile('01204123456', `${LOW}-raw-landline@example.invalid`);
+  check('  …and one that is not a mobile, in the same sentence as the page',
+    landlineSent.status === 400 && landlineSent.body?.message === PF.UK_MOBILE_REFUSAL,
+    `${landlineSent.status} ${JSON.stringify(landlineSent.body?.message)}`);
+  check('  …and nothing was written by either',
+    (await prisma.user.count({ where: { email: { startsWith: `${LOW}-raw-` } } })) === 0,
+    'refused before the password is hashed and before any row is created');
+  const okSent = await rawMobile('+44 7700 900125', `${LOW}-raw-ok@example.invalid`);
+  check('  …while a UK mobile written internationally is accepted',
+    okSent.status === 201,
+    `${okSent.status} ${JSON.stringify(okSent.body?.message ?? '')} — the refusal is about the shape, not about the +`);
+  check('    …and lands normalised, still unverified',
+    await (async () => {
+      const u = await prisma.user.findUnique({ where: { email: `${LOW}-raw-ok@example.invalid` }, select: { id: true } });
+      const tf = u && await prisma.twoFactorSecret.findUnique({
+        where: { subject_type_subject_id: { subject_type: 'tenant', subject_id: u.id } },
+        select: { phone_e164: true, phone_verified_at: true, phone_recorded_at: true, enabled: true },
+      });
+      return tf?.phone_e164 === '447700900125' && tf?.phone_verified_at === null
+        && tf?.phone_recorded_at === null && tf?.enabled === false;
+    })(), 'required is not verified — the SMS step still has to happen');
+  check('the shape rule, over the numbers people actually type',
+    ['07700900123', ' 07700 900123 ', '+447700900123', '447700900123', '0044 7700 900123']
+      .every((m) => PF.plausibleUkMobile(m))
+    && ['', '  ', '0770090012', '077009001234', '01204123456', '02079460000', '+353871234567', 'ask me later']
+      .every((m) => !PF.plausibleUkMobile(m)),
+    'a GB mobile is 07 and nine more digits, however it is written; a landline and a +353 are not');
+  check('  …and an empty field is its own sentence, because the fix is different',
+    PF.refuseSignupMobile('') !== PF.refuseSignupMobile('01204123456')
+    && /Enter your mobile number/.test(PF.refuseSignupMobile('')),
+    `${JSON.stringify(PF.refuseSignupMobile(''))}`);
+  await mobPage.context().close();
 
   // THE STORAGE NORMALISER, including what it REFUSES. A column holding "ask me later" is worse
   // than an empty one: the alert built on it prints it to somebody about to dial.
@@ -302,6 +417,10 @@ try {
       body: JSON.stringify({
         name: 'ZZCV handposted', email: 'zzcv-handposted@example.invalid', password: 'GateGarage!2026',
         heardAbout: 'MY OWN STRING', heardAboutOther: 'and some prose', utm: { source: 'x'.repeat(400) },
+        // REQUIRED SINCE 2026-11-01. Without it this POST is refused at 400 and the clause below
+        // would be asserting about a garage that was never created — which is what it did when the
+        // field changed and this line was not yet here.
+        mobile: '07700900124',
       }),
     });
     return { status: r.status, body: await r.json().catch(() => ({})) };

@@ -21,6 +21,10 @@ import {
   HEARD_ABOUT_OPTIONS, HEARD_ABOUT_OTHER, HEARD_ABOUT_OTHER_MAX,
   readUtmFromQuery, hasUtm, normaliseHeardAbout, UTM_EMPTY, type UtmParts,
 } from '@/lib/signup-source';
+// THE SAME RULE THE ENDPOINT APPLIES, from the one leaf that holds it. This side is convenience —
+// the server refuses again — but the SENTENCE has to be the same one, or a person corrects the
+// field until the page is happy and is then refused by the route in different words.
+import { refuseSignupMobile } from '@/lib/phone-format';
 
 /* ─────────────────────  SAFE JSON PATCH (browser + dev only)  ───────────────────── */
 
@@ -161,6 +165,14 @@ export default function RegisterPage() {
       setLoading(false);
       return;
     }
+    // THE MOBILE IS REQUIRED FROM 2026-11-01 (owner). Checked here as well as in the browser's own
+    // `required`, because `required` only knows whether the field is empty.
+    const mobileRefusal = refuseSignupMobile(mobile);
+    if (mobileRefusal) {
+      setError(mobileRefusal);
+      setLoading(false);
+      return;
+    }
 
     const url = '/api/auth/register-garage';
 
@@ -182,9 +194,9 @@ export default function RegisterPage() {
           name: nameTrim, email: emailNorm, password: pass, ref: sanitiseRef(refCode) || null,
           heardAbout: normaliseHeardAbout(heardAbout),
           heardAboutOther: heardAbout === HEARD_ABOUT_OTHER ? heardAboutOther.trim() || null : null,
-          // BLANK IS NULL, never ''. An empty string in a nullable column is a third state nobody
-          // meant: it reads as "they answered, with nothing".
-          mobile: mobile.trim() || null,
+          // TRIMMED AND SENT AS TYPED. It is no longer nullable from here — the refusal above has
+          // already passed — and the server normalises it into the comms spine's own shape.
+          mobile: mobile.trim(),
           utm,
         }),
       });
@@ -238,9 +250,10 @@ export default function RegisterPage() {
             Start your trial
           </h1>
 
-        {/* Error Message */}
+        {/* Error Message — testid so a gate can assert the SENTENCE a person reads, not the state
+            behind it. The mobile refusal is the first message here that a correction depends on. */}
         {error && (
-          <div className="bg-danger-soft border border-danger text-danger p-3 rounded-lg text-center mb-4">
+          <div data-testid="signup-error" className="bg-danger-soft border border-danger text-danger p-3 rounded-lg text-center mb-4">
             <p className="font-semibold">Registration Failed</p>
             <p className="text-sm">{error}</p>
             {process.env.NODE_ENV !== 'production' && debug && (
@@ -289,11 +302,15 @@ export default function RegisterPage() {
             />
           </div>
 
-          {/* ── OPTIONAL, AND SAID SO TWICE: in the label and in the reason. A number asked for
-              without a reason reads as a marketing capture and gets a fake one typed into it. ── */}
+          {/* ── REQUIRED FROM 2026-11-01, AND THE REASON IS STILL UNDER IT ────────────────────
+              It was optional, with "(optional)" in the label and the reason beneath. The reason
+              stays and the second sentence is new: a number asked for without a reason reads as a
+              marketing capture and gets a fake one typed into it, and making it mandatory makes
+              that more likely rather than less. So the promise not to market to them is on the
+              page, beside the field, where somebody decides whether to type the real one. ── */}
           <div>
             <label htmlFor="mobile" className="block text-sm font-medium text-muted mb-1">
-              Mobile <span className="font-normal">(optional)</span>
+              Mobile
             </label>
             <input
               id="mobile"
@@ -301,12 +318,13 @@ export default function RegisterPage() {
               type="tel"
               value={mobile}
               onChange={(e) => setMobile(e.target.value)}
+              required
               autoComplete="tel"
               inputMode="tel"
               className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-accent"
             />
             <p className="mt-1 text-xs text-muted" data-testid="signup-mobile-why">
-              So we can help you get set up.
+              So we can help you get set up. We won’t use it for marketing.
             </p>
           </div>
 

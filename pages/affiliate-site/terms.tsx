@@ -26,6 +26,12 @@ import Seo from '@/components/marketing/Seo';
 import AffiliateSiteChrome from '@/components/affiliate-site/AffiliateSiteChrome';
 import PublicDocument from '@/components/content/PublicDocument';
 import { COMPANY, AFFILIATE_SITE_URL, absoluteAffiliateSiteUrl } from '@/lib/company-info';
+/**
+ * THE SUMMARY IS SHARED WITH THE PORTAL'S OWN TERMS SCREEN (owner, 2026-11-01). It used to be a
+ * literal array in this file, which was right while one page showed it; two pages stating the same
+ * agreement is one of them being out of date. The figures are still resolved here and passed in.
+ */
+import { termsSummary, TERMS_SUMMARY_COMING, TERMS_SUMMARY_NOTE } from '@/lib/affiliate-terms-summary';
 
 /**
  * THE OG IMAGE IS THE BRAND FILE, not a designed card — and it is this exact path because that is
@@ -51,26 +57,7 @@ type Props = {
 };
 
 export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, garage, doc }: Props) {
-  // SETTLED and UNSETTLED kept visibly apart, so nobody reads a placeholder as a promise.
-  const settled: { heading: string; body: string }[] = [
-    { heading: 'What you earn', body: rewardSentence },
-    { heading: 'On a yearly payment', body: `If the garage pays for a year up front, the whole ${totalLabel} is earned once that invoice is paid.` },
-    { heading: 'What the garage gets', body: `${garage.monthsGiven} months for the price of ${garage.monthsPaid} on their first year — ${garage.offerLabel} instead of ${garage.renewalLabel} — frozen at the day they sign up, whatever we change later.` },
-    { heading: 'When it becomes payable', body: `${holdDays} days after the garage's payment clears. Payment is by bank transfer and we need your bank details before anything can be sent; what you have earned waits until they are there.` },
-    // IT DOES NOT SAY "we do not ask for money back", WHICH IT DID UNTIL 2026-10-31. Terms 6.5 and
-    // 6.6 deduct a cancelled reward from the next payout, and section 7 recovers one earned on a
-    // garage you could not earn on. A summary that reassures where the agreement does not is the
-    // sentence somebody quotes back on the one day it matters.
-    { heading: 'Refunds and chargebacks', body: 'If we refund a garage’s payment in full, or its bank reverses it, the reward that payment earned is cancelled; if we have already paid you, it comes off your next payout. A partial refund, such as a goodwill gesture, leaves the reward alone.' },
-    { heading: 'Garages you own or work for', body: 'You cannot earn on a garage you own, work for, or are part of. This is checked when you sign up and again when a reward would be earned, and a reward found to have been earned this way is cancelled and recovered.' },
-    { heading: 'Changes to the programme', body: 'We will give you 30 days’ notice before changing what the programme pays. A garage already referred keeps the terms it was referred under.' },
-    { heading: 'Labelling your content', body: 'UK advertising rules require affiliate content to be labelled as an ad — “#ad” at the start of the post or the description — and we ask everyone to do it. It applies wherever you post: video, text, social or email.' },
-    { heading: 'Tax', body: 'What you earn is yours to declare. We deduct nothing from it and we are not able to advise you about it.' },
-  ];
-  const coming: string[] = [
-    'The full agreement — the definitions, what each side undertakes, liability, data protection and how either side ends it.',
-    'What happens to referrals already made if you stop being an affiliate.',
-  ];
+  const settled = termsSummary({ rewardSentence, totalLabel, holdDays, garage });
 
   /**
    * THE PUBLISHED DOCUMENT WINS OUTRIGHT. Not merged with the summary, and not shown above it: two
@@ -112,10 +99,7 @@ export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, g
       <AffiliateSiteChrome>
         <section className="max-w-3xl mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-12">
           <h1 className="text-3xl sm:text-4xl font-extrabold text-ink tracking-tight">Affiliate terms</h1>
-          <p className="mt-4 text-sm text-warn" data-testid="terms-draft-note">
-            This page states the terms that are settled. The complete agreement is being finalised and
-            will be published here before the programme opens.
-          </p>
+          <p className="mt-4 text-sm text-warn" data-testid="terms-draft-note">{TERMS_SUMMARY_NOTE}</p>
 
           <div className="mt-8 space-y-6">
             {settled.map((s) => (
@@ -129,7 +113,7 @@ export default function AffiliateTerms({ rewardSentence, totalLabel, holdDays, g
           <div className="mt-10 border-t border-line pt-6">
             <h2 className="text-base font-semibold text-ink">Still to come</h2>
             <ul className="mt-2 space-y-2 text-sm text-muted list-disc pl-5">
-              {coming.map((c) => <li key={c}>{c}</li>)}
+              {TERMS_SUMMARY_COMING.map((c) => <li key={c}>{c}</li>)}
             </ul>
           </div>
 

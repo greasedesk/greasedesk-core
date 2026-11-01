@@ -47,6 +47,41 @@ export function formatSortCode(sortCode: string): string {
 }
 
 /**
+ * ── THE FIELD, AS SOMEBODY TYPES IT (owner, 2026-11-01) ─────────────────────────────────────────
+ * `11-03-00` appears as the sixth digit lands, and a paste of '11 03 00', '110300' or '11-03-00'
+ * all settle to the same thing. What is SENT is still the six digits — normaliseSortCode — so the
+ * grouping never reaches the database and the route's refusal is unchanged.
+ *
+ * formatSortCode above groups a COMPLETE code for display and deliberately hands back a partial one
+ * untouched; a field needs the opposite, because a person types one digit at a time. Two functions
+ * rather than a flag, because a reader of either should not have to work out which half it is doing.
+ *
+ * ── DELETING A SEPARATOR DELETES THE DIGIT IN FRONT OF IT ───────────────────────────────────────
+ * Without that, the field cannot be edited from the right: backspace over the '-' in '11-03' leaves
+ * the six digits unchanged, the grouping puts the dash straight back, and the key appears to do
+ * nothing at all. `previous` is what the field held before this keystroke, which is the only way to
+ * tell "they removed a separator" from "they removed a digit" — the digits alone cannot say.
+ */
+export function sortCodeAsTyped(raw: string | null | undefined, previous: string | null | undefined = ''): string {
+  const now = String(raw ?? '');
+  const was = String(previous ?? '');
+  let d = digits(now).slice(0, SORT_CODE_DIGITS);
+
+  if (now.length < was.length && digits(now) === digits(was)) {
+    // WHERE the separator was removed, so the digit that goes with it is the one in FRONT of it and
+    // not simply the last one typed. Deleting the dash in '11-03-00' is meant to take the 3.
+    let at = 0;
+    while (at < now.length && now[at] === was[at]) at += 1;
+    const before = digits(was.slice(0, at)).slice(0, -1);
+    d = `${before}${digits(was.slice(at))}`.slice(0, SORT_CODE_DIGITS);
+  }
+
+  // A DASH AFTER EVERY PAIR THAT HAS A DIGIT AFTER IT — so '11' shows as '11' and not '11-', and a
+  // trailing dash is never something the person has to delete to carry on typing.
+  return d.replace(/(\d{2})(?=\d)/g, '$1-');
+}
+
+/**
  * ── TWO MASKS, FROM ONE STORED VALUE, ANSWERING TWO DIFFERENT QUESTIONS ─────────────────────────
  * The affiliate's question is "did my details arrive" — two digits settle that and reveal least.
  * The owner's question is "is this the account I am about to pay" — four digits is what makes a

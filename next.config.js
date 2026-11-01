@@ -51,9 +51,15 @@ const nextConfig = {
   // file-tracer can't see, so on Vercel the files are missing from the serverless function and
   // every t() falls back to the raw key. Force-trace public/locales/** into every function.
   // (Next 14.2: lives under `experimental`; moves top-level in Next 15.)
+  //
+  // content/** rides along for the same reason and by the same mechanism: lib/content-seed reads a
+  // document's first draft from the repository at runtime (process.cwd() + a relative path), so an
+  // untraced file would simply be absent in production and the draft would never appear. Traced for
+  // every function rather than for one route, because the tracer keys on the ROUTE and an api path
+  // is easy to spell wrong in a way nothing fails on until it is deployed.
   experimental: {
     outputFileTracingIncludes: {
-      '/**': ['./public/locales/**'],
+      '/**': ['./public/locales/**', './content/**'],
     },
   },
   // lib/db is reachable from a page's import graph (pages/c/[token] → lib/magic-link → lib/db), so

@@ -62,3 +62,53 @@ export function normaliseSignupMobile(raw: unknown): string | null {
   if ((cleaned.match(/\d/g) ?? []).length < 7) return null;
   return cleaned;
 }
+
+/**
+ * ── IS IT PLAUSIBLY A UK MOBILE? (owner, 2026-11-01: the field is now REQUIRED) ─────────────────
+ * The number stopped being optional, which changes what a wrong one costs. An optional field left
+ * blank was an absence and said so; a required field holding '12345678' is an ANSWER, and the
+ * onboarding step that offers the number back, and anybody who later rings it, both read it as one.
+ *
+ * PLAUSIBLE IS THE WHOLE CLAIM, AND THE NAME SAYS SO. This is the shape of a UK mobile: 07 and nine
+ * more digits, or the same number written internationally. It is NOT evidence that the number
+ * exists, belongs to them, or can receive a message — the SMS step still proves that, and nothing
+ * here writes phone_verified_at. A shape check that called itself validation would be a plausible
+ * wrong name for a weaker fact.
+ *
+ * WHAT IT REFUSES, and why each is refused rather than reshaped:
+ *   • blank — the field is required, and "they left it empty" is the one case with a different
+ *     sentence, because the fix is different: type something, rather than correct something.
+ *   • a landline (01…, 02…, 03…) — a mobile is asked for because we send a code to it. A landline
+ *     is a real number that cannot do the one thing this field is for, so accepting it would mean
+ *     the garage stalls at a step it can never pass.
+ *   • 07 with the wrong number of digits, and anything non-GB. We admit GB only (one allow-list in
+ *     the single country writer), so a +353 number is a number we cannot act on today.
+ *
+ * It returns the SENTENCE, not a boolean, so the page and the route say the same words — the form
+ * shows this and the endpoint repeats it, and neither owns a second copy of the rule.
+ */
+/** One sentence, two refusals: a number that is the wrong shape gets the same help either way. */
+export const UK_MOBILE_REFUSAL = 'Enter a UK mobile number, starting 07 — for example 07700 900123.';
+
+export function refuseSignupMobile(raw: unknown): string | null {
+  const cleaned = normaliseSignupMobile(raw);
+  // BLANK IS ITS OWN SENTENCE. normaliseSignupMobile also returns null for 1-6 digits, which is why
+  // the emptiness is tested on the INPUT rather than inferred from its null.
+  if (typeof raw !== 'string' || raw.trim() === '') return 'Enter your mobile number so we can help you get set up.';
+  if (cleaned === null) return UK_MOBILE_REFUSAL;
+  return plausibleUkMobile(cleaned) ? null : UK_MOBILE_REFUSAL;
+}
+
+/**
+ * THE SHAPE, as a predicate, so a gate can walk a table of numbers without a page.
+ * `07700900123`, `+44 7700 900123`, `447700900123`, `0044 7700 900123` are the same number.
+ */
+export function plausibleUkMobile(raw: string | null | undefined): boolean {
+  const trimmed = String(raw ?? '').trim();
+  if (trimmed === '') return false;
+  let d = trimmed.replace(/\D/g, '');
+  // 00 is the international prefix written out; a leading + is already gone with the non-digits.
+  if (d.startsWith('00')) d = d.slice(2);
+  if (/^07\d{9}$/.test(d)) return true;         // national form
+  return /^447\d{9}$/.test(d);                  // +44 / 44, with the trunk 0 dropped
+}

@@ -184,6 +184,9 @@ try {
   await page.fill('input[autocomplete="name"]', `${PREFIX} signup`);
   await page.fill('input[type="email"]', addr);
   await page.fill('input[type="password"]', PASS);
+  // REQUIRED FROM 2026-11-01 — without it the form does not submit and the alert this section is
+  // about is never written. Ofcom's reserved drama range, so it is nobody's number.
+  await page.fill('[data-testid="signup-mobile"]', '07700900123');
   await page.selectOption('[data-testid="heard-about"]', 'youtube');
   await page.click('button[type="submit"]');
   await page.waitForURL(/check-email/, { timeout: 25000 });

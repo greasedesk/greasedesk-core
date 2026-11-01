@@ -238,6 +238,10 @@ try {
     await page.fill('input[autocomplete="name"]', `${PREFIX} garage ${n}`);
     await page.fill('input[type="email"]', addr);
     await page.fill('input[type="password"]', PASS);
+    // THE MOBILE IS REQUIRED FROM 2026-11-01, so the form will not submit without one and every
+    // clause below it would wait 15s for a page that never arrives. 07700 900xxx is Ofcom's
+    // reserved drama range — allocated to nobody, so a gate's garages carry no real phone number.
+    await page.fill('[data-testid="signup-mobile"]', '07700900123');
     await page.click('button[type="submit"]');
     await page.waitForURL(/check-email/, { timeout: 15000 });
     const cookiesAfter = await ctx.cookies();

@@ -63,6 +63,7 @@ const ADMIN = await import('../lib/affiliate-admin.ts');
 const TERMS = await import('../lib/affiliate-terms.ts');
 const PUB = await import('../lib/content-publish.ts');
 const CONTENT = await import('../lib/content.ts');
+const SEED = await import('../lib/content-seed.ts');
 const RM = await import('../lib/rep-magic-link.ts');
 
 const out = [];
@@ -80,6 +81,8 @@ const RESOLVER = [
 ];
 
 const MARK = '@zz-affiliate-portal.invalid';
+/** The slug prefix section 10c seeds under — swept by prefix, never the real affiliate-terms slug. */
+const SEED_MARK = 'zzapseed';
 const PREFIX = `ZZAP${randomUUID().slice(0, 6).toUpperCase()}`;
 const GATE_IP = '203.0.113.11';
 /**
@@ -200,6 +203,16 @@ const sweep = async () => {
    * this one made.
    */
   await prisma.authRateLimit.deleteMany({ where: { key: { startsWith: 'repauth:ip:203.0.113.' } } }).catch(() => {});
+  /**
+   * AND THE SEEDED FIXTURE DOCUMENTS, WITH THEIR SEED-AUDIT ROWS. The audit row is the guard that
+   * makes the seed fire once, so leaving one behind would make the next run's first clause report
+   * 'already_seeded' — a gate that passes on its second run and never again. Both go, by prefix,
+   * for the reason the draft sweep above goes by prefix: a crashed run leaves its own.
+   */
+  await prisma.document.deleteMany({ where: { slug: { startsWith: SEED_MARK } } }).catch(() => {});
+  await prisma.superAdminAudit.deleteMany({
+    where: { action: SEED.SEED_AUDIT_ACTION, target_name_snapshot: { startsWith: SEED_MARK } },
+  }).catch(() => {});
   return ids.length;
 };
 
@@ -449,6 +462,17 @@ try {
     (await page.locator('[data-testid="portal-link-terms"]').count()) === 1
     && (await page.locator('[data-testid="portal-signout"]').count()) === 1
     && NAV.PORTAL_SECTIONS.every((sec) => sec.key !== 'terms'));
+  /**
+   * ── AND TERMS LEADS INSIDE THE PORTAL, NOT OUT TO THE PUBLIC PAGE (owner, 2026-11-01) ────────
+   * It pointed at /terms, so a signed-in affiliate clicking their own menu lost the menu and landed
+   * on the page written for somebody deciding whether to join. The ATTRIBUTE is asserted, and so is
+   * the fact that it is not the public address — a clause that only checked "it has an href" would
+   * have passed on the defect it was written for. Section 10b walks it.
+   */
+  check('    …and Terms goes to the portal’s own page rather than the public one',
+    (await page.locator('[data-testid="portal-link-terms"]').getAttribute('href')) === NAV.PORTAL_TERMS_PATH
+    && NAV.PORTAL_TERMS_PATH !== '/terms',
+    `${await page.locator('[data-testid="portal-link-terms"]').getAttribute('href')} — the public page is /terms`);
 
   const visibleKeys = async () => {
     const vis = [];
@@ -635,6 +659,79 @@ try {
       && !stored.sort_code_enc.includes('200000'), stored?.sort_code_enc.slice(0, 18));
   }
 
+  // ── 4d. THE SORT CODE FIELD, AS SOMEBODY TYPES IT ────────────────────────────────────────────
+  /**
+   * The owner asked for the field to show 11-03-00 as it is typed and on paste, and to store six
+   * digits only. Both halves are asserted, and the second one is asserted ON THE WIRE: the stored
+   * value is encrypted, so "it sent the digits" cannot be read back out of the row.
+   *
+   * THE REQUEST IS INTERCEPTED AND ANSWERED HERE, not allowed through. Submitting for real would
+   * supersede the pending RepPayeeRequest that section 4c created and that the Engine Room clauses
+   * below still read — a gate's own side effects breaking its later clauses is the shape of defect
+   * that cost three red-proofs in this file a day ago.
+   */
+  console.log('\n— and the sort code groups itself without changing what is sent —');
+  check('the rule on its own, over every shape a field can be in',
+    [['110300', '', '11-03-00'], ['11 03 00', '', '11-03-00'], ['11-03-00', '', '11-03-00'],
+      ['1', '', '1'], ['11', '', '11'], ['110', '', '11-0'],
+      ['11030099', '', '11-03-00'], ['abc11x03', '', '11-03'],
+      // THE SEPARATOR CASE: deleting the dash takes the digit in FRONT of it, or the field cannot
+      // be edited from the right at all — the grouping puts the dash straight back.
+      ['11-0300', '11-03-00', '11-00-0'], ['1103-00', '11-03-00', '10-30-0'],
+      ['11-0', '11-03', '11-0']]
+      .every(([raw, prev, want]) => PAYEE.sortCodeAsTyped(raw, prev) === want),
+    [['110300', ''], ['11 03 00', ''], ['110', ''], ['11-0300', '11-03-00']]
+      .map(([r, p2]) => `${JSON.stringify(r)}→${PAYEE.sortCodeAsTyped(r, p2)}`).join(' '));
+  check('  …and what it produces still normalises to the six digits that are stored',
+    PAYEE.normaliseSortCode(PAYEE.sortCodeAsTyped('110300', '')) === '110300'
+    && PAYEE.normaliseSortCode(PAYEE.sortCodeAsTyped('11 03 00', '')) === '110300');
+
+  await navOf('payment-details').click();
+  await page.waitForFunction(() => !document.querySelector('[data-testid="portal-section-payment-details"]').hasAttribute('hidden'),
+    null, { timeout: 4000 }).catch(() => {});
+  const sortField = page.locator('[data-testid="payee-sort"]');
+  await sortField.fill('');
+  // ONE KEY AT A TIME, which is what "as you type" means. fill() would set the whole string in one
+  // event and prove the paste path twice over.
+  await sortField.pressSequentially('110');
+  check('three digits in, the field shows the group it has',
+    (await sortField.inputValue()) === '11-0', await sortField.inputValue());
+  await sortField.pressSequentially('300');
+  check('  …and six show as 11-03-00', (await sortField.inputValue()) === '11-03-00', await sortField.inputValue());
+  await sortField.fill('');
+  // A PASTE ARRIVES AS ONE EVENT, with whatever separators the person copied.
+  await sortField.fill('11 03 00');
+  check('a pasted code with spaces settles to the same thing',
+    (await sortField.inputValue()) === '11-03-00', await sortField.inputValue());
+  await sortField.fill('');
+  await sortField.pressSequentially('11030099');
+  check('  …and it cannot be made longer than a sort code',
+    (await sortField.inputValue()) === '11-03-00', await sortField.inputValue());
+
+  let postedBody = null;
+  await page.route('**/api/affiliate-portal/payee', async (route) => {
+    postedBody = route.request().postData();
+    // ANSWERED AS A SUCCESS so the form behaves as it would, and NOTHING reaches the database.
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, masked: 'ending ••21' }) });
+  });
+  await page.locator('[data-testid="payee-name"]').fill('A Typed Payee');
+  await page.locator('[data-testid="payee-account"]').fill('87654321');
+  await page.locator('[data-testid="payee-submit"]').click();
+  await page.waitForFunction(() => !!document.querySelector('[data-testid="payee-message"]'), null, { timeout: 6000 }).catch(() => {});
+  await page.unroute('**/api/affiliate-portal/payee');
+  const posted = (() => { try { return JSON.parse(postedBody ?? '{}'); } catch { return {}; } })();
+  check('what the form SENDS is the six digits, with no separators in them',
+    posted.sortCode === '110300', `sortCode=${JSON.stringify(posted.sortCode)} (the field showed 11-03-00)`);
+  check('  …and the request really was the one the form made',
+    posted.accountName === 'A Typed Payee' && posted.accountNumber === '87654321',
+    'a null body would have made the clause above pass for the wrong reason');
+  // NOTHING WAS WRITTEN — the interception has to be real, or the clauses below read a row this
+  // section created rather than the one section 4c made.
+  check('  …and the intercepted submit stored nothing',
+    (await prisma.repPayeeRequest.count({ where: { rep_id: affiliate.id, account_name: 'A Typed Payee' } })) === 0);
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
+
   // ── 5. WHAT THE SERVED HTML MUST NOT CARRY ───────────────────────────────────────────────────
   console.log('\n— and the page withholds what it was never given —');
   /**
@@ -727,10 +824,18 @@ try {
     /guarantee/i,
   ];
   const termsPage = await ask(AFF_HOST, '/terms');
+  /**
+   * THE PORTAL'S OWN TERMS PAGE IS A FOURTH SURFACE, and it joined this sweep the day it was
+   * written. A new page carrying the same settled summary is exactly where the promise would come
+   * back — the three the owner found were in three different files.
+   */
+  const myTermsPage = await ask(AFF_HOST, NAV.PORTAL_TERMS_PATH, { cookie: jarEarly });
+  check('the portal’s own terms page is served to the affiliate', myTermsPage.status === 200, `${myTermsPage.status}`);
   const SURFACES = [
     ['the dashboard, every section of it', servedEarly.body],
     ['the printable poster', poster.body],
     ['the public terms page', termsPage.body],
+    ['the portal’s own terms page', myTermsPage.body],
   ];
   for (const [what, body] of SURFACES) {
     // THE TEXT, NOT THE MARKUP: a class name or a chunk URL is not something anybody reads, and
@@ -753,6 +858,28 @@ try {
   check('  …and the public summary now states the deduction and the recovery',
     /comes off your next payout/.test(termsPage.body) && /cancelled and recovered/.test(termsPage.body),
     'terms 6.5, 6.6 and 7, in the summary that stands until the solicitor’s version is published');
+  /**
+   * ── ONE SOURCE FOR THE SUMMARY, READ BY BOTH SCREENS (owner, 2026-11-01) ─────────────────────
+   * The settled summary used to be a literal array inside the public page. The portal now has its
+   * own terms screen, and two statements of one agreement is one of them being out of date — which
+   * is precisely how the refund promise came to be wrong in three places at once.
+   *
+   * ASSERTED FROM BOTH DIRECTIONS: the words are on both RENDERED pages, and neither page FILE
+   * contains them — so they cannot have come from anywhere but the shared leaf. The third clause
+   * keeps the scan honest: a term that is in no file at all would satisfy the second by itself.
+   */
+  const SUMMARY_MARK = 'Refunds and chargebacks';
+  check('the settled summary has one source, rendered on both terms pages',
+    termsPage.body.includes(SUMMARY_MARK) && myTermsPage.body.includes(SUMMARY_MARK),
+    `public ${termsPage.body.includes(SUMMARY_MARK) ? 'yes' : 'NO'} · portal ${myTermsPage.body.includes(SUMMARY_MARK) ? 'yes' : 'NO'}`);
+  check('  …and neither page carries a copy of it',
+    !src('pages/affiliate-site/terms.tsx').includes(SUMMARY_MARK)
+    && !src('pages/affiliate-portal/terms.tsx').includes(SUMMARY_MARK),
+    'a literal in either file is the second source this consolidation removed');
+  check('    …because it lives in the leaf they both read',
+    src('lib/affiliate-terms-summary.ts').includes(SUMMARY_MARK)
+    && /comes off your next payout/.test(src('lib/affiliate-terms-summary.ts')),
+    'a word that is in no file would make the clause above pass over nothing');
 
   // ── 7. WHO WE MAY BE ASKED TO PAY ────────────────────────────────────────────────────────────
   console.log('\n— the refusals on a proposed payee —');
@@ -1052,6 +1179,259 @@ try {
   check('  …and its baked text carries the figures a reader checks',
     srcBaked.body.includes('£120') && srcBaked.body.includes('12 months for the price of 8')
     && srcBaked.body.includes('£600 instead of £750'), 'section 3 and section 4, from settings');
+
+  // ── 10b. THE PORTAL'S OWN TERMS PAGE, AND WHAT *THEY* ACCEPTED ───────────────────────────────
+  /**
+   * Here rather than beside the menu clauses, because it needs what section 10 has just built: two
+   * PUBLISHED versions of the real slug, with different bodies. "It shows the version they accepted
+   * rather than the newest one" cannot be asserted where only one version exists.
+   *
+   * THE THREE STATES ARE DRIVEN, not reasoned about. The middle one is every affiliate who joined
+   * before publication, and the third is a record we do not have — three sentences, because the
+   * actions they ask for are different.
+   */
+  console.log('\n— and the agreement opens inside the portal, saying what THEY accepted —');
+  const anonTerms = await ask(AFF_HOST, NAV.PORTAL_TERMS_PATH);
+  check('the portal’s terms page is refused to a visitor with no session', anonTerms.status === 307,
+    `${anonTerms.status} — it carries a date against a person, which the public page cannot know`);
+  check('  …and it 404s on the apex and on the rep host, like every other portal page',
+    (await ask(APEX_HOST, NAV.PORTAL_TERMS_PATH)).status === 404
+    && (await ask(REP_HOST, NAV.PORTAL_TERMS_PATH)).status === 404,
+    'the bare address is rewritten on ONE host; nothing rewrites it anywhere else');
+
+  /**
+   * STATE (a): THEY ACCEPTED THE FIRST VERSION, AND A SECOND IS NOW PUBLISHED.
+   * The two acceptance rows section 10 appended are replaced by exactly ONE with a known date, so
+   * "the latest acceptance" is a fact and not a race between two rows written milliseconds apart.
+   */
+  await prisma.repTermsAcceptance.deleteMany({ where: { rep_id: affiliate.id } });
+  await prisma.repTermsAcceptance.create({
+    // A DATE THAT IS NOT THE VERSION STAMP. Version 1 is stamped from its effective date
+    // (2026-10-31), so accepting ON that day would make "it names the date" pass on the string the
+    // version clause already matched — one value standing in for two facts.
+    data: { rep_id: affiliate.id, version: stored1.version, document_id: draft.id, accepted_at: new Date('2026-10-20T09:15:00Z') },
+  });
+  const tA = await ask(AFF_HOST, NAV.PORTAL_TERMS_PATH, { cookie: jarEarly });
+  check('it names the version they accepted, and the day',
+    tA.status === 200 && tA.body.includes(stored1.version) && tA.body.includes('2026-10-20')
+    && stored1.version !== '2026-10-20',
+    `${tA.status} · version ${stored1.version} accepted 2026-10-20`);
+  /**
+   * AND IT SHOWS THAT VERSION'S WORDS. The two published bodies differ in ONE sentence — version 1
+   * carries the minimum-payout sentence and version 2 omits it, because the setting moved between
+   * them — so that sentence is the only honest discriminator. The version stamp PublicDocument
+   * prints is asserted beside it: a page showing version 1's stamp over version 2's body would
+   * satisfy either clause alone.
+   */
+  check('  …and renders THAT version, not whatever is published today',
+    tA.body.includes(`>${stored1.version}<`) && /The minimum payout is £100;/.test(tA.body),
+    'the sentence is in version 1 and absent from version 2 — see section 10');
+  check('  …and tells them a newer one exists rather than quietly swapping it in',
+    /data-testid="portal-terms-newer"/.test(tA.body) && tA.body.includes(stored3.version),
+    `the current published version is ${stored3.version}`);
+  check('  …with no settled summary on the page, because there is a document',
+    !/data-testid="portal-terms-summary"/.test(tA.body) && /data-testid="portal-terms-document"/.test(tA.body));
+
+  /**
+   * STATE (b): A DATE AND NO VERSION — accepted the summary, before anything was published. This is
+   * the state the owner's own affiliate row is in, which is why it is written for rather than
+   * treated as a gap.
+   */
+  await prisma.repTermsAcceptance.deleteMany({ where: { rep_id: affiliate.id } });
+  const tB = await ask(AFF_HOST, NAV.PORTAL_TERMS_PATH, { cookie: jarEarly });
+  check('an affiliate who accepted before publication is told so, in those words',
+    tB.status === 200 && /carried no version number then/.test(tB.body),
+    'inventing a stamp would reference words that never existed under that name');
+  check('  …and is shown the summary they actually accepted',
+    /data-testid="portal-terms-summary"/.test(tB.body) && !/data-testid="portal-terms-document"/.test(tB.body),
+    'the published document is not what they agreed to');
+  check('  …with the date from the rep row, which is the only record there is',
+    tB.body.includes('2026-01-01'), 'Rep.terms_accepted_at — the fixture signed up on that day');
+
+  /** STATE (c): NEITHER. Said plainly, with a way to put it right, and never filled in with today. */
+  const acceptedAtWas = (await prisma.rep.findUnique({ where: { id: affiliate.id }, select: { terms_accepted_at: true } })).terms_accepted_at;
+  await prisma.rep.update({ where: { id: affiliate.id }, data: { terms_accepted_at: null } });
+  const tC = await ask(AFF_HOST, NAV.PORTAL_TERMS_PATH, { cookie: jarEarly });
+  /**
+   * THE FIRST VERSION OF THIS SWEPT THE WHOLE PAGE FOR TODAY'S DATE and went red on correct code:
+   * version 2 was published with an effective date of today, so the "a newer version exists" notice
+   * names it legitimately. The claim is about the ACCEPTANCE SENTENCE, so that is what is asserted —
+   * a term has to be unique to its subject.
+   */
+  check('with no record at all it says so, and does not invent an acceptance',
+    /no record of when you accepted/.test(tC.body) && !/You accepted/.test(tC.body),
+    'today’s date in that sentence would be a claim about somebody’s agreement that nobody made');
+  await prisma.rep.update({ where: { id: affiliate.id }, data: { terms_accepted_at: acceptedAtWas } });
+
+  /**
+   * AND THE WAY IN IS THE MENU ITEM, walked. The clause in section 4a asserts where it POINTS; this
+   * one asserts that following it keeps you in the portal, with the rail, with the item marked —
+   * and that it is a PAGE rather than a seventh pane, which is what the nav table says it is.
+   */
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
+  await page.locator('[data-testid="portal-link-terms"]').click();
+  // CAUGHT, so a menu item pointing somewhere else is a RED rather than a timeout that kills the
+  // run and takes the forty clauses after it. The red-proof of this clause did exactly that.
+  await page.waitForSelector('[data-testid="portal-terms-heading"]', { timeout: 15000 }).catch(() => {});
+  check('clicking Terms in the menu stays inside the portal, with the menu',
+    (await page.locator('[data-testid="portal-terms-heading"]').count()) === 1
+    && new URL(page.url()).pathname === NAV.PORTAL_TERMS_PATH
+    && await page.locator('[data-testid="portal-rail"]').isVisible()
+    && (await page.locator('[data-testid="portal-link-terms"]').getAttribute('aria-current')) === 'page',
+    `${new URL(page.url()).pathname} · aria-current=${await page.locator('[data-testid="portal-link-terms"]').getAttribute('aria-current')}`);
+  check('  …and it is a page of its own rather than a seventh section of the dashboard',
+    (await page.locator('[data-testid="portal-section-overview"]').count()) === 0
+    && (await page.locator('[data-testid="portal-terms-accepted"]').isVisible()),
+    'the dashboard’s panes are not here, and the acceptance line is');
+  await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-home"]');
+  check('  …and the dashboard’s footer points at it rather than at the public page',
+    (await page.locator('[data-testid="affiliate-terms-footer-link"]').getAttribute('href')) === NAV.PORTAL_TERMS_PATH
+    && (await page.locator('[data-testid="affiliate-terms-accepted"]').count()) === 0,
+    'the acceptance line moved to the page that answers it in all three states');
+
+  // ── 10c. A DOCUMENT WHOSE FIRST DRAFT SHIPS IN THE REPOSITORY ────────────────────────────────
+  /**
+   * The owner asked for his v1 terms text to be in Engine Room → Content as an UNPUBLISHED draft,
+   * on production, so he can see and edit it there — with publishing still a separate step after
+   * the solicitor.
+   *
+   * DRIVEN WITH A FIXTURE SLUG AND AN INJECTED READER, not against the real affiliate-terms row:
+   * section 10 above is still using that slug, and a seed firing into it mid-gate would be this
+   * gate's own side effects breaking its own later clauses. The injected reader is also how the
+   * 'no file' outcome is reached without deleting a file from the repository.
+   *
+   * THE REAL REGISTRY IS ASSERTED SEPARATELY, from disk, at the end — the mechanism being right is
+   * no use if the path it is pointed at does not exist in production.
+   */
+  console.log('\n— and a document whose first draft ships in the repository arrives once, as a draft —');
+  const seedSlug = `${SEED_MARK}-${randomUUID().slice(0, 8)}`;
+  const seedReg = [{ slug: seedSlug, country: 'GB', type: 'legal', file: 'fixture.md', fallbackTitle: 'A FALLBACK NAME' }];
+  const SEED_BODY = '# A Seeded Document\n\nIt still says {{totalReward}}, because a draft holds placeholders.\n';
+  const seedRows = () => prisma.document.findMany({ where: { slug: seedSlug }, orderBy: { created_at: 'asc' } });
+
+  const first = await SEED.seedContentDrafts(prisma, () => SEED_BODY, seedReg);
+  const afterFirst = await seedRows();
+  check('the first look puts the draft in', first[0]?.result === 'seeded' && afterFirst.length === 1,
+    `${first[0]?.result} · ${afterFirst.length} row(s)`);
+  check('  …as a DRAFT, unpublished, with no date on it',
+    afterFirst[0]?.status === 'draft' && afterFirst[0]?.version === CONTENT.DRAFT
+    && afterFirst[0]?.published_at === null && afterFirst[0]?.effective_from === null,
+    `${afterFirst[0]?.status}/${afterFirst[0]?.version} published_at=${afterFirst[0]?.published_at}`);
+  check('  …named from the file’s own heading rather than the fallback',
+    afterFirst[0]?.title === 'A Seeded Document',
+    `${afterFirst[0]?.title} — the fallback is "${seedReg[0].fallbackTitle}"`);
+  check('  …holding the placeholders, because publishing is what bakes them',
+    TERMS.hasPlaceholder(afterFirst[0]?.body ?? ''),
+    'baking it now would mean the owner’s next edit started from substituted text');
+  check('  …and attributed to nobody, because no operator did it',
+    afterFirst[0]?.created_by === null,
+    'a sentinel actor id would be a lie in the one table whose job is saying who did what');
+  const seedAudit = await prisma.superAdminAudit.findMany({
+    where: { action: SEED.SEED_AUDIT_ACTION, target_name_snapshot: SEED.seedTarget(seedSlug, 'GB') },
+  });
+  check('  …with an audit row whose actor is the platform',
+    seedAudit.length === 1 && seedAudit[0].operator_user_id === null && seedAudit[0].actor_rep_id === null,
+    `${seedAudit.length} row(s)`);
+
+  const second = await SEED.seedContentDrafts(prisma, () => SEED_BODY, seedReg);
+  check('the second look does nothing at all',
+    second[0]?.result === 'exists' && (await seedRows()).length === 1, `${second[0]?.result}`);
+
+  /**
+   * ── AND A DISCARD STAYS DISCARDED, which is the guard the row count cannot provide ───────────
+   * Deleting the draft is what the Engine Room's own "discard" does. Without the audit guard the
+   * seed would put it straight back on the next page load, for ever — the owner would be unable to
+   * get rid of a document we decided to give him.
+   */
+  await prisma.document.deleteMany({ where: { slug: seedSlug } });
+  const third = await SEED.seedContentDrafts(prisma, () => SEED_BODY, seedReg);
+  check('a discarded draft is NOT seeded again',
+    third[0]?.result === 'already_seeded' && (await seedRows()).length === 0,
+    `${third[0]?.result} · ${(await seedRows()).length} row(s) — the audit row outlives its subject`);
+
+  /** AN ALREADY-PUBLISHED DOCUMENT IS LEFT ALONE, and is a different outcome from having been seeded. */
+  const otherSlug = `${SEED_MARK}-${randomUUID().slice(0, 8)}`;
+  await prisma.document.create({
+    data: {
+      slug: otherSlug, title: 'Published already', type: 'legal', country_code: 'GB',
+      body: 'Live words.', version: '2026-01-01', status: 'published', published_at: new Date(), effective_from: new Date(),
+    },
+  });
+  const onPublished = await SEED.seedContentDrafts(prisma, () => SEED_BODY, [{ ...seedReg[0], slug: otherSlug }]);
+  check('a document that already has a published version is left alone',
+    onPublished[0]?.result === 'exists'
+    && (await prisma.document.count({ where: { slug: otherSlug } })) === 1,
+    `${onPublished[0]?.result} — seeding a draft beside it would be the editor’s job, not ours`);
+
+  /** NO FILE IS AN OUTCOME, NOT A THROW: this runs inside the page that LISTS documents. */
+  const missingSlug = `${SEED_MARK}-${randomUUID().slice(0, 8)}`;
+  const onMissing = await SEED.seedContentDrafts(prisma, () => null, [{ ...seedReg[0], slug: missingSlug }]);
+  check('a missing file is reported and writes nothing — not a draft, not an audit row',
+    onMissing[0]?.result === 'no_file'
+    && (await prisma.document.count({ where: { slug: missingSlug } })) === 0
+    && (await prisma.superAdminAudit.count({ where: { action: SEED.SEED_AUDIT_ACTION, target_name_snapshot: SEED.seedTarget(missingSlug, 'GB') } })) === 0,
+    `${onMissing[0]?.result} — an audit row here would stop the real file ever being seeded`);
+  const noHeadingSlug = `${SEED_MARK}-${randomUUID().slice(0, 8)}`;
+  await SEED.seedContentDrafts(prisma, () => 'No heading in this one.', [{ ...seedReg[0], slug: noHeadingSlug }]);
+  check('  …and a file with no heading takes the fallback name rather than an empty title',
+    (await prisma.document.findFirst({ where: { slug: noHeadingSlug }, select: { title: true } }))?.title === 'A FALLBACK NAME');
+
+  /**
+   * ── THE REAL REGISTRY: THE RIGHT SLUG, AND A FILE THAT IS ACTUALLY THERE ─────────────────────
+   * The mechanism above is proved with a fixture. This is the part that is wrong in production if
+   * it is wrong: the slug the public page and the signup's acceptance row resolve, and a path that
+   * exists on disk and gives the document its name.
+   */
+  const realEntry = SEED.SEEDABLE_DRAFTS.find((d) => d.slug === TERMS.AFFILIATE_TERMS_SLUG);
+  check('the registry seeds the affiliate terms, as a GB legal document',
+    !!realEntry && realEntry.type === 'legal' && realEntry.country === 'GB',
+    SEED.SEEDABLE_DRAFTS.map((d) => `${d.slug}/${d.country}`).join(', '));
+  const realFile = src(realEntry?.file ?? '');
+  check('  …from a file that is in the repository, at that exact path',
+    realFile.length > 4000, `${realEntry?.file} — ${realFile.length} characters`);
+  /**
+   * ── AGAINST THE FILE'S FIRST LINE, NOT AGAINST THE REGISTRY'S FALLBACK ───────────────────────
+   * This read `title !== fallbackTitle` and went red: the file's heading and the fallback I had
+   * written are the same words, so one string was standing in for two different facts and the
+   * clause could not tell "the heading won" from "the fallback was used". The oracle is now the
+   * file's own first line, parsed a different way from the function under test.
+   */
+  const realHeading = realFile.split('\n')[0].replace(/^#\s*/, '').trim();
+  check('  …whose own heading is what the draft would be called',
+    realHeading.length > 5 && SEED.titleFromMarkdown(realFile, 'A FALLBACK NOBODY WOULD WANT') === realHeading,
+    `${realHeading} — read from the file, not from the registry`);
+  /**
+   * ── AND THE REAL ENTRY, DRIVEN THROUGH THE REAL FILE ─────────────────────────────────────────
+   * Everything above proves the mechanism with an injected reader. This runs the REGISTERED entry —
+   * its own `file`, read off the disk — so the path, the parse and the shape of the row are proved
+   * together. Only the SLUG is a fixture one: the real slug is taken by section 10's documents, and
+   * one draft per slug means seeding into it would make this gate's own later clauses fail.
+   */
+  const realSlugged = `${SEED_MARK}-${randomUUID().slice(0, 8)}`;
+  const viaRealFile = await SEED.seedContentDrafts(prisma, (rel) => src(rel) || null, [{ ...realEntry, slug: realSlugged }]);
+  const realDraft = await prisma.document.findFirst({ where: { slug: realSlugged } });
+  check('the registered file itself produces a draft, titled from its own heading',
+    viaRealFile[0]?.result === 'seeded' && realDraft?.title === realHeading
+    && realDraft?.status === 'draft' && realDraft?.version === CONTENT.DRAFT,
+    `${viaRealFile[0]?.result} · ${JSON.stringify(realDraft?.title)}`);
+  check('  …carrying the whole document, unbaked, ready to be edited and then published',
+    (realDraft?.body?.length ?? 0) === realFile.length && TERMS.hasPlaceholder(realDraft?.body ?? ''),
+    `${realDraft?.body?.length} characters of ${realFile.length}, placeholders intact`);
+
+  /**
+   * AND THE TWO THINGS THAT ARE ONLY WRONG IN PRODUCTION. The Content screen has to CALL it, and
+   * the file has to be traced into the serverless function — an untraced file is simply absent
+   * there, the seed reports 'no_file' for ever, and nothing fails anywhere a gate can see it.
+   * Asserted by reading the source, which is the only way to assert a build-time include.
+   */
+  check('  …the Content screen is what calls it',
+    /seedContentDrafts\(/.test(src('pages/api/superadmin/content.ts')),
+    'the draft appears when the owner opens Engine Room → Content, which is where he asked to see it');
+  check('  …and content/** is traced into the deployed function',
+    /outputFileTracingIncludes/.test(src('next.config.js')) && /'\.\/content\/\*\*'/.test(src('next.config.js')),
+    'the tracer cannot see a path built from process.cwd() at runtime — the locale files learnt this first');
 
   // ── 11. THE OTHER PARTY'S DOOR IS SHUT, WITH A REAL SESSION ──────────────────────────────────
   console.log('\n— and an affiliate session reaches nothing of the rep’s —');

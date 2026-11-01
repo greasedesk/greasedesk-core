@@ -34,6 +34,9 @@
  */
 import { NextResponse } from 'next/server';
 import { portalSignInPath, portalHomePath } from '@/lib/party-portal';
+// THE PORTAL'S TERMS ADDRESS, from the table the menu itself reads. A leaf with no imports, like
+// party-portal, so routing and the rail cannot disagree about where that item points.
+import { PORTAL_TERMS_PATH } from '@/lib/affiliate-portal-nav';
 import type { NextRequest } from 'next/server';
 import { underPath } from '@/lib/anchored-match';
 
@@ -88,6 +91,12 @@ const AFFILIATE_PORTAL = {
   signIn: portalSignInPath('affiliate'),
   home: portalHomePath('affiliate'),
   poster: '/poster',
+  /**
+   * THE SIGNED-IN TERMS PAGE (owner, 2026-11-01) — deliberately NOT /terms, which is the public
+   * page on this same host. One address serving two audiences would mean deciding who is asking
+   * from a cookie, here, on every request; two addresses need no decision at all.
+   */
+  terms: PORTAL_TERMS_PATH,
   enterPrefix: '/enter',
 };
 /** The portal's own endpoints. A separate prefix from /api/affiliate-site, which is public. */
@@ -121,8 +130,11 @@ const BRAND_ASSET = '/greasedesk-Logo.png';
  * marketing site already serves to anyone, they carry no tenant data and no behaviour, and a prefix
  * or wildcard here would re-open /public. Case is part of the match.
  *
- * NOT YET OPENED ON er. OR reps. Both carry the identical gap and neither was asked for; adding
- * those hosts is one word each, deliberately left for the owner rather than taken.
+ * NOT OPENED ON er. OR reps., AND THAT IS NOW A DECISION RATHER THAN AN OMISSION (owner,
+ * 2026-11-01). Both hosts answer /favicon.ico, which is what their tabs show; the blank tab that
+ * started this was a browser cache, measured by the owner across all four hosts. So the sized PNGs
+ * stay shut there: this set exists for the host whose tab was genuinely blank, and a door opened
+ * because it was easy is a door nobody later remembers deciding to open.
  */
 const ICON_ASSETS = new Set([
   '/favicon.ico',
@@ -248,6 +260,7 @@ export function middleware(req: NextRequest) {
     if (pathname === AFFILIATE_PORTAL.signIn) return NextResponse.rewrite(new URL('/affiliate-portal/signin', req.url));
     if (pathname === AFFILIATE_PORTAL.home) return NextResponse.rewrite(new URL('/affiliate-portal/dashboard', req.url));
     if (pathname === AFFILIATE_PORTAL.poster) return NextResponse.rewrite(new URL('/affiliate-portal/poster', req.url));
+    if (pathname === AFFILIATE_PORTAL.terms) return NextResponse.rewrite(new URL('/affiliate-portal/terms', req.url));
     if (underPath(pathname, AFFILIATE_PORTAL.enterPrefix)) {
       return NextResponse.rewrite(new URL(`/affiliate-portal${pathname}`, req.url));
     }

@@ -22,6 +22,7 @@ import { requireOperatorApi } from '@/lib/operator-auth';
 // lib/content-publish; resolvePublished stays because the LIST still reads it.
 import { DRAFT, canEditType, isDocType, sanitiseSlug, resolvePublished } from '@/lib/content';
 import { publishDraft } from '@/lib/content-publish';
+import { seedContentDrafts } from '@/lib/content-seed';
 
 function audit(actorId: string, action: string, slug: string, country: string, detail: any) {
   return prisma.superAdminAudit.create({ data: {
@@ -50,6 +51,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const draft = rows.find((r: any) => r.status === 'draft') ?? null;
       const published = rows.filter((r: any) => r.status === 'published').sort((a: any, b: any) => (b.published_at?.getTime() ?? 0) - (a.published_at?.getTime() ?? 0));
       return res.status(200).json({ draft, published });
+    }
+    /**
+     * ── THE FIRST DRAFT OF A DOCUMENT THAT SHIPS IN THE REPOSITORY (owner, 2026-11-01) ─────────
+     * lib/content-seed carries the whole reasoning: why this is here and not in the build, how it
+     * fires once, and why a discarded draft stays discarded.
+     *
+     * OWNER ONLY, because the one registered document is `legal` and canEditType says a Country
+     * Manager may not edit one — seeding a row for somebody who cannot touch it is a row nobody
+     * asked for. BEST-EFFORT, because this handler's job is to list documents: a seed that throws
+     * must not blank the Content screen, which is how a diagnostic becomes a broken feature.
+     */
+    if (actor.role === 'owner') {
+      try {
+        const { readFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const outcomes = await seedContentDrafts(prisma, (rel) => {
+          // process.cwd() AND A TRACED FILE — the same arrangement next-i18next's locale JSON uses
+          // (next.config.js's outputFileTracingIncludes), because the tracer cannot see a path
+          // built at runtime and the file would otherwise be absent from the deployed function.
+          try { return readFileSync(join(process.cwd(), rel), 'utf8'); } catch { return null; }
+        });
+        for (const o of outcomes) {
+          if (o.result === 'seeded') console.log('[superadmin/content] seeded the first draft of', `${o.slug}/${o.country}`);
+          // SAID OUT LOUD, because "the draft is not there and nothing is wrong" is the one outcome
+          // somebody would otherwise spend an afternoon on.
+          if (o.result === 'no_file') console.error('[superadmin/content] no file to seed', `${o.slug}/${o.country}`);
+        }
+      } catch (e) {
+        console.error('[superadmin/content] seeding the first drafts failed — the list is unaffected', e);
+      }
     }
     const all = await prisma.document.findMany({ where: regionWhere, orderBy: [{ slug: 'asc' }, { country_code: 'asc' }] });
     const keys = new Map<string, any>();
