@@ -31,7 +31,7 @@
  * asserted field by field in teardown.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin, ZZ_RESTING_INTERNAL } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
 const { readFileSync } = await import('node:fs');
@@ -79,6 +79,17 @@ try {
   const before = await prisma.group.findUnique({ where: { id: ZZ },
     select: { is_demo: true, is_internal: true, free_since: true, free_reason: true } });
   fix = { before };
+  /**
+   * THE PREMISE OF THE CAPTURE, CHECKED (2026-11-01). This gate clears `is_internal` as a fixture
+   * and restores it in a `finally`. It was killed mid-run once, never reached the finally, and left
+   * ZZ holding `null` — which locks ZZ's dashboard through the onboarding gate and times out every
+   * gate that needs a job card. Every run after it captured the `null` and restored it faithfully.
+   * Asserted against the DECLARED resting state, so the next kill is one red line rather than a day.
+   */
+  check('ZZ starts internal, as the rest of the suite needs it',
+    before?.is_internal === ZZ_RESTING_INTERNAL,
+    `is_internal=${before?.is_internal} — if this is null a previous run was killed before its teardown; `
+    + 'the teardown below now writes the declared value, so this run repairs it');
 
   const ready = await serverReady();
   check('the dev server serves pages before we drive it', ready.ok, `HTTP ${ready.status} after ${ready.attempts} attempt(s)`);
@@ -168,14 +179,16 @@ try {
     // RESTORED FIELD BY FIELD, and asserted. This gate moves flags on a standing tenant; leaving
     // one moved would change what ZZ counts towards without anybody noticing.
     try {
+      // is_internal GOES BACK TO THE DECLARED VALUE, not to what this run found. A capture can only
+      // preserve what the last run left; one killed run made `null` the thing being preserved.
       await prisma.group.update({ where: { id: ZZ }, data: {
-        is_demo: fix.before.is_demo, is_internal: fix.before.is_internal,
+        is_demo: fix.before.is_demo, is_internal: ZZ_RESTING_INTERNAL,
         free_since: fix.before.free_since, free_reason: fix.before.free_reason } });
     } catch (e) { console.log(`  teardown zz flags: ${describeError(e).slice(0, 90)}`); }
     const now = await prisma.group.findUnique({ where: { id: ZZ },
       select: { is_demo: true, is_internal: true, free_since: true, free_reason: true } });
     check('teardown restored every ZZ flag',
-      now?.is_demo === fix.before.is_demo && now?.is_internal === fix.before.is_internal
+      now?.is_demo === fix.before.is_demo && now?.is_internal === ZZ_RESTING_INTERNAL
       && String(now?.free_since) === String(fix.before.free_since)
       && now?.free_reason === fix.before.free_reason,
       `${JSON.stringify(now)} vs ${JSON.stringify(fix.before)}`);

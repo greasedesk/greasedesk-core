@@ -35,7 +35,7 @@
  * never deleted (standing rule). This gate therefore adds a few rows to ZZ's ledger on every run.
  */
 import './_gate-preflight.mjs';
-const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin } = await import('./_gate-preflight.mjs');
+const { gatePrisma, explainIfClientStale, serverReady, describeError, gateOrigin, ZZ_RESTING_INTERNAL } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { pathRegex } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_modules/playwright-core/index.mjs');
@@ -72,6 +72,12 @@ try {
   const beforeFeatures = await prisma.groupFeature.findMany({ where: { group_id: ZZ },
     select: { feature_key: true, enabled: true, source: true } });
   fix = { beforeGroup, beforeBilling, beforeFeatures };
+  // THE PREMISE OF THE CAPTURE, CHECKED — see free-tenant-gate and the note beside
+  // ZZ_RESTING_INTERNAL. This gate clears is_internal three times as fixture state; a run killed
+  // between a clear and its teardown leaves ZZ locked out of its own dashboard.
+  check('ZZ starts internal, as the rest of the suite needs it',
+    beforeGroup?.is_internal === ZZ_RESTING_INTERNAL,
+    `is_internal=${beforeGroup?.is_internal} — null means a previous run died before its teardown`);
 
   // ── 1. THE THREE POPULATIONS GET THREE SENTENCES ─────────────────────────────────────────────
   console.log('\n— one refusal served three populations and described one —');
@@ -200,7 +206,8 @@ try {
   if (fix) {
     try {
       await prisma.group.update({ where: { id: ZZ }, data: {
-        is_demo: fix.beforeGroup.is_demo, is_internal: fix.beforeGroup.is_internal,
+        // DECLARED, not captured — one killed run otherwise makes `null` the restored value forever.
+        is_demo: fix.beforeGroup.is_demo, is_internal: ZZ_RESTING_INTERNAL,
         free_since: fix.beforeGroup.free_since, free_reason: fix.beforeGroup.free_reason,
         trial_ends_at: fix.beforeGroup.trial_ends_at } });
       if (fix.beforeBilling) {
@@ -222,7 +229,11 @@ try {
     const fts = await prisma.groupFeature.findMany({ where: { group_id: ZZ },
       select: { feature_key: true, enabled: true, source: true }, orderBy: { feature_key: 'asc' } });
     const norm = (o) => JSON.stringify(o);
-    check('teardown restored every ZZ group flag', norm(g) === norm(fix.beforeGroup), `${norm(g)} vs ${norm(fix.beforeGroup)}`);
+    // COMPARED AGAINST WHAT IT MEANT TO LEAVE, which is the capture with is_internal DECLARED. A
+    // run that started on a corrupted `null` repairs it, and that must read as restored, not as a
+    // teardown that failed — otherwise the fix shows up as a red and gets undone.
+    const intended = { ...fix.beforeGroup, is_internal: ZZ_RESTING_INTERNAL };
+    check('teardown restored every ZZ group flag', norm(g) === norm(intended), `${norm(g)} vs ${norm(intended)}`);
     check('teardown restored the whole billing row',
       norm({ ...b, updated_at: null }) === norm({ ...fix.beforeBilling, updated_at: null }),
       `${norm(b)} vs ${norm(fix.beforeBilling)}`);

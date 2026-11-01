@@ -455,6 +455,34 @@ export async function explainIfClientStale(_base = gateOrigin()) {
 export const ZZ_GROUP = 'c75ac44e-250a-4c90-98ba-a8326e98dad5';
 
 /**
+ * ZZ'S RESTING STATE FOR `is_internal`, AND WHY IT IS A FACT AND NOT A CAPTURE (2026-11-01).
+ *
+ * ── WHAT HAPPENED ──────────────────────────────────────────────────────────────────────────────
+ * free-tenant-gate clears `is_internal` ON PURPOSE, as a fixture, to prove that the free decision
+ * alone silences the subscription banner. It restores it in a `finally`. On 2026-11-01 that gate
+ * HUNG and was killed after 300s — and a killed process never reaches its `finally`, so ZZ was
+ * left holding the fixture value, `null`.
+ *
+ * That alone would be an afternoon's confusion. What made it a day's was the shape of the restore:
+ * both free-* gates captured `is_internal` at the START of the run and put THAT value back. So
+ * every run after the kill captured `null`, restored `null` faithfully, and asserted — correctly —
+ * that teardown had restored every flag. The corruption became self-perpetuating and the teardown
+ * clause that should have caught it agreed with it.
+ *
+ * ── WHY IT LOCKED EVERYTHING ───────────────────────────────────────────────────────────────────
+ * lib/onboarding returns early for a tenant that will never subscribe, and `is_internal` is how ZZ
+ * qualifies. Without it ZZ walks the real onboarding and stops on the phone step it has no record
+ * for, so its DASHBOARD IS LOCKED — and every gate that needs a job card or a dashboard times out
+ * on a selector that will never appear. core went 16 RED → 28 and slow 13 → 24 for this one column.
+ *
+ * ── SO IT IS DECLARED HERE ─────────────────────────────────────────────────────────────────────
+ * A gate that clears this flag restores it to THIS value, not to what it found, and asserts the
+ * resting state when it starts. A capture-and-restore teardown can only preserve what the previous
+ * run left; a declared value is the only thing that can correct it.
+ */
+export const ZZ_RESTING_INTERNAL = true;
+
+/**
  * When this process began. The discriminator between a live fixture and a leak — see zzSite.
  * Captured at module load, which for every gate is its first import.
  */

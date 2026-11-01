@@ -25,6 +25,11 @@ import {
 // the server refuses again — but the SENTENCE has to be the same one, or a person corrects the
 // field until the page is happy and is then refused by the route in different words.
 import { refuseSignupMobile } from '@/lib/phone-format';
+// THE SENTENCE FOR "WE DO NOT KNOW WHAT WENT WRONG", from the same leaf the endpoint reads. This
+// page has its own failure modes — a body that will not parse, a fetch that never arrived — and
+// they must not be answered in words this page invented. (The leaf imports no Prisma, deliberately;
+// see its header.)
+import { SIGNUP_GENERIC } from '@/lib/signup-refusals';
 
 /* ─────────────────────  SAFE JSON PATCH (browser + dev only)  ───────────────────── */
 
@@ -219,18 +224,31 @@ export default function RegisterPage() {
       }
 
       const okFlag = payload?.ok ?? res.ok;
-      const where = payload?.where ? ` [${payload.where}]` : '';
-      const msg =
-        (payload && (payload.message || payload.error)) ||
-        raw ||
-        (res.ok ? 'Success' : `Registration failed (HTTP ${status}).`);
+      /**
+       * ── ONLY WHAT THE SERVER MEANT FOR A PERSON TO READ (owner, 2026-11-01) ──────────────────
+       * This used to be `${msg}${where}`, falling back to the RAW body — which is how
+       * "Database error: P2002. Check your schema constraints. [catch]" came to be in the box a
+       * customer reads. `where` is a stage marker for a log; `raw` is whatever came back, which on
+       * a bad day is an HTML error page or a proxy's notice.
+       *
+       * Both are still in the dev debug block above and in DevTools, which is where somebody
+       * debugging looks. What reaches the screen is the endpoint's own sentence, or — if there
+       * isn't one, because nothing parsed or nothing arrived — the one generic sentence, which
+       * names the number.
+       */
+      const msg = (payload && typeof payload.message === 'string' && payload.message) || SIGNUP_GENERIC;
 
       if (!okFlag) {
-        throw new Error(`${msg}${where}`);
+        throw new Error(msg);
       }
 
-      // Success: redirect to "Check Your Email"
-      router.push(`/onboarding/check-email?email=${encodeURIComponent(emailNorm)}`);
+      // Success: redirect to "Check Your Email" — and TELL IT whether the email went, because its
+      // text is one long claim that it did. `verifySent` is only ever false after a committed
+      // signup whose verification send failed; the account exists either way.
+      const sent = payload?.verifySent !== false;
+      router.push(
+        `/onboarding/check-email?email=${encodeURIComponent(emailNorm)}${sent ? '' : '&verify=0'}`
+      );
     } catch (err: any) {
       setError(err?.message || 'Registration failed. Please try again.');
     } finally {

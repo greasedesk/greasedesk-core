@@ -1194,3 +1194,126 @@ template on the tenant one. The same clause caught it at once. Fixed by line num
 diff. The lesson is dull and absolute: copy the file before a proof, and restore from the copy —
 never from a pattern that is not unique to its subject.
 
+
+---
+
+## 2026-11-01 — "Database error: P2002. Check your schema constraints. [catch]"
+
+A real signup, through the owner's own affiliate link, answered with that on the screen. Three
+faults in one sentence: an internal error code, an instruction for the READER to check a schema they
+have never seen, and no way forward. Underneath it the fact was ordinary and sayable.
+
+### The cause was two columns and one check
+
+`register-garage` pre-checked **`User.email`**. The first statement in its transaction writes
+**`Group.billing_email`**, which carries its own `@unique`. So an address held by a GARAGE with no
+account on it passed the check and collided inside the transaction.
+
+Read-only against production first, before anything was changed: zero `User` rows for that address,
+one `Group` — GB-GD1967, whose billing email it is. **No partial rows anywhere**: 0 groups created
+in 36 hours, 0 TwoFactorSecret rows on that mobile, 0 verification tokens, 0 attributions. The
+P2002 hit the first statement, so the rollback had nothing to undo — luck of ordering, not a
+property, which is why the counts are now a clause.
+
+### The mobile was never involved, and stays non-unique
+
+There is no unique index on `phone_e164` at all. The owner decided the same day that there should
+not be: a couple running a garage share a number, and the field exists to help us set them up, not
+to identify anybody. The *sentence* for a mobile clash is registered in the mapping anyway so it
+never has to be invented under pressure, and **both halves are asserted** — that the registry
+answers it plainly, and that nothing can raise it. Add a unique index and that clause goes red
+naming the decision. A registered message for an impossible conflict is a blindfold unless the
+impossibility is asserted beside it.
+
+### The second branch of that catch was worse than the sentence
+
+    } else if (typeof err?.message === 'string') { clientMessage = err.message; }
+
+Any internal error's text, straight to the browser. That is a disclosure path, not a wording
+problem, and the clause for it posts an error carrying a host, a user and a password and asserts
+none of it survives. (Written as fields rather than as a database URI because gitleaks blocks one in
+this public repo, and the remedy for a false positive is not a per-line exception to that rule.) The page had the same shape: it concatenated `payload.where` (hence
+`[catch]`) and fell back to the RAW body, which on a bad day is an HTML error page.
+
+### What shipped
+
+`lib/signup-refusals.ts` holds every word this endpoint may say about a failure — one leaf, read by
+the route AND by /register, because a sentence written twice drifts and the drift shows up as a
+person being told two different things about one problem. It imports **no Prisma**: /register
+imports it, so a `Prisma` at module scope would ship the client to the browser. A P2002 is
+recognised by its shape instead.
+
+**Three outcomes, not two.** A conflict we can name; a conflict we cannot name (409 with the generic
+sentence — the status can be honest even when the words cannot be); and not a conflict at all (500).
+
+**The registry's order is load-bearing**: `billing_email` contains `email`, so the billing row must
+be tested first or every garage-level clash is answered with "reset your password" — advice that
+leads nowhere, because there is no account to reset. The two email cases are different situations
+and get different advice; a clause asserts the two sentences are not the same string.
+
+**The pre-check now reads both columns**, so the refusal costs nothing: no bcrypt hash, no
+transaction, no group `ref` burned out of the sequence by an insert that rolls back. The mapping
+stays as the net for the race no pre-check can close. The clause that tells the two apart is the
+endpoint's own stage marker (`where: 'unique'` vs `'conflict'`), and that is stated rather than
+dressed up as something stronger.
+
+**And the number in a refusal is the number on the site.** `COMPANY.phone`, never a literal — the
+clause reads the one `tel:` link off the rendered /register page and asserts the message carries
+that same string.
+
+### Item (c): nothing after the commit may report a failure
+
+The verification token and the email sat in the same `try` as the transaction. A throw there
+answered **500 for a signup that had succeeded** — the person tries again and is told the address is
+taken, by their own account, created seconds earlier.
+
+The tail is now wrapped in a catch that logs and changes nothing but `verifySent`, and the structural
+rule is asserted: **between the commit and the 201 there is not one `return res`**, while the
+commit's own catch must return. One must, the other must not.
+
+`/onboarding/check-email` was one long claim that a link had been sent. It reads the endpoint's
+answer now, and when the send failed it says the account exists, gives the number, and drops "try
+registering again" — which is a refusal now, by their own address.
+
+**What is driven and what is not, plainly.** The failed-send arm is real in the gate: no provider is
+configured and the Environment marker refuses real sends, so every signup there exercises it and the
+NotificationLog row proves it. A *throw* in that tail is not driven — nothing reachable from a
+signup can be made to throw there without putting a test hook in the route — so that half rests on
+the structural clause.
+
+### And the day the suite's own numbers lied — one column on ZZ
+
+Running the three tiers for this slice gave **core 28 RED against a baseline of 16**, and **slow 24
+against 13**. None of it was the slice: stashing all six files and re-running slow gave the same
+24, gate for gate.
+
+The cause was one column. **`ZZ Gate Garage.is_internal` was `null`, not `true`.** `lib/onboarding`
+returns early only for a tenant that will never subscribe, and `is_internal` is how ZZ qualifies;
+without it ZZ walks the real onboarding, stops on the phone step it has no record for, and **its
+dashboard is locked**. Every gate needing a job card or a dashboard then times out on a selector
+that will never appear. `getOnboardingState(ZZ)` said it in one line:
+`{ onboarded: false, firstIncompleteStep: 'phone' }`.
+
+**How it got there, and why it stuck.** `free-tenant-gate` clears `is_internal` deliberately, as a
+fixture, to prove the free decision alone silences the subscription banner — and restores it in a
+`finally`. It **hung and was killed after 300s**, and a killed process never reaches its `finally`.
+That alone is an afternoon. What made it a day is the shape of the restore: both free-* gates
+captured `is_internal` at the start of the run and put *that* value back, so every run afterwards
+captured the `null`, restored it faithfully, and asserted — correctly — that teardown had restored
+every flag. **The corruption became self-perpetuating, and the clause that should have caught it
+agreed with it.** A capture-and-restore teardown can only preserve what the previous run left.
+
+So the resting state is now DECLARED, as `ZZ_RESTING_INTERNAL` beside `ZZ_GROUP` in the preflight.
+Both gates restore that value rather than what they found, and both assert ZZ starts internal — the
+next killed run costs one red line. `free-reconcile`'s teardown compares against the capture with
+`is_internal` declared, so a run that repairs the corruption reads as restored rather than as a
+failed teardown, which is what would otherwise have undone the fix.
+
+The owner authorised the one-column repair (`GB-GD2141`, `is_internal → true`); the script checked
+the ref AND the group name and refused anything else. Core went straight back to **99 green / 16 RED**.
+
+**And one of mine, found on the way.** `came-via-gate` had
+`subject_id: skipped.user?.id` on a `twoFactorSecret.deleteMany`. In Prisma an `undefined` in a
+where clause is an OMITTED FILTER, not a match on nothing — so a fixture that failed to sign up
+would have turned that line into "delete every tenant's mobile record in the database", which is
+exactly the state that locks ZZ. It never fired. It was one failed fixture away.

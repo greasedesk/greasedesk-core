@@ -18,6 +18,9 @@ import { normaliseHeardAbout, normaliseHeardAboutOther, normaliseUtm } from '@/l
 import { normaliseSignupMobile, refuseSignupMobile } from '@/lib/phone-format';
 import { toE164Digits } from '@/lib/contact-routes';
 import { alertGarageRegistered } from '@/lib/operator-alerts';
+// THE SENTENCES. One leaf holds every word this endpoint may say about a failure, and /register
+// reads the same one — see its header for the 2026-11-01 incident that put it there.
+import { signupRefusal, conflictMessage, signupCreatedMessage } from '@/lib/signup-refusals';
 
 type Payload = {
   name: string; email: string; password: string; ref?: string;
@@ -107,11 +110,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ ok: false, where: 'validate', message: 'We could not read that mobile number.' });
     }
 
-    const existing = await prisma.user.findUnique({ where: { email: emailNorm } });
+    /**
+     * ── BOTH COLUMNS, BECAUSE THE CHECK AND THE CONSTRAINT WERE ON DIFFERENT ONES ───────────────
+     * This read `User.email` alone for a year. The FIRST statement in the transaction below writes
+     * `Group.billing_email`, which carries its own `@unique` — so an address held by a garage with
+     * no user account on it passed this check and then collided inside the transaction. On
+     * 2026-11-01 that is exactly what happened to the owner's own signup: zero User rows for the
+     * address, one Group holding it as its billing email, and a raw P2002 on the screen.
+     *
+     * Checked HERE rather than left to the mapped catch so the refusal costs nothing: no bcrypt
+     * hash, no transaction, and no group `ref` burned out of the sequence by a rolled-back insert.
+     * The mapping in the catch stays as the net for the race — two simultaneous signups on one
+     * address, which no pre-check can close.
+     *
+     * TWO SITUATIONS, TWO SENTENCES. An account they can sign into is not the same as a garage
+     * holding the address with no account on it, and "reset your password" is a dead end in the
+     * second case. Both sentences come from the registry, so the pre-check and the catch cannot
+     * tell one person two different things about one problem.
+     */
+    const [existing, existingGroup] = await Promise.all([
+      prisma.user.findUnique({ where: { email: emailNorm }, select: { id: true } }),
+      prisma.group.findUnique({ where: { billing_email: emailNorm }, select: { id: true } }),
+    ]);
     if (existing) {
       return res
         .status(409)
-        .json({ ok: false, where: 'unique', message: 'An account with this email already exists.' });
+        .json({ ok: false, where: 'unique', message: conflictMessage('user_email') });
+    }
+    if (existingGroup) {
+      return res
+        .status(409)
+        .json({ ok: false, where: 'unique', message: conflictMessage('billing_email') });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -129,7 +158,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     // ... (Prisma transaction logic remains unchanged) ...
-    const { user, group, attribution } = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    /**
+     * ── THE COMMIT, AND THE ONLY PLACE A FAILURE MAY STILL BE REPORTED ──────────────────────────
+     * Its own try, for a reason that is the whole of item (c): once this resolves, the garage
+     * EXISTS, and nothing after it is allowed to tell the person it did not. Everything below the
+     * transaction therefore runs under a catch that logs and changes nothing.
+     */
+    const commitSignup = () => prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const group = await tx.group.create({
         // ref is auto-assigned by the DB sequence default; status defaults to 'trial'.
         // group_name is a NEUTRAL placeholder, never the person's name — the onboarding site step
@@ -207,7 +242,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return { user, group, attribution };
     });
+    // INFERRED, NOT ANNOTATED. Hoisting the call into a named closure is what lets the result keep
+    // the type Prisma gave it across the try boundary — an annotation written by hand here would be
+    // the one place in this file where `group.trial_ends_at` stopped being checked.
+    let committed: Awaited<ReturnType<typeof commitSignup>>;
+    try {
+      committed = await commitSignup();
+    } catch (txErr: any) {
+      // THE DATABASE'S WORDS STOP HERE. A known conflict becomes the sentence for that conflict; a
+      // unique index nobody mapped becomes a 409 with the generic sentence, because the status can
+      // be honest even when we cannot say which field clashed; anything else is a 500. The full
+      // error — code, meta, stack — goes to the server log, which is where it is of any use.
+      const refusal = signupRefusal(txErr);
+      console.error(`register-garage refused at the commit [${refusal.code}]:`, txErr);
+      return res.status(refusal.status).json({ ok: false, where: 'conflict', message: refusal.message });
+    }
+    const { user, group, attribution } = committed;
 
+    /**
+     * ── FROM HERE DOWN, NOTHING MAY REPORT A FAILURE (owner, 2026-11-01, item c) ─────────────────
+     * The garage is committed. The referral, the prospect record, the owner's alert, the
+     * verification token and the email are all AFTER it, and until now they sat in the same try as
+     * the transaction: a throw on the token insert returned a 500 for a signup that had succeeded.
+     * The person would have seen "Registration failed", tried again, and been told the address was
+     * taken — by their own account, created seconds earlier.
+     *
+     * So the whole tail is wrapped. Each step keeps its own narrower catch where it had one (those
+     * say which step failed); this one is the floor under all of them. The only thing it changes is
+     * `verifySent`, and that only changes which TRUE sentence the person is given.
+     */
+    let verifySent = false;
+    try {
     // ATTRIBUTION, SECOND CHANCE. The transaction above has already attributed every signup whose
     // code resolved, so this runs only when it did not — the lookup threw, or no party held that
     // code yet. It is idempotent (attributeGroup refuses a duplicate), so the cost of it running
@@ -288,11 +353,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
     if (!notified.ok) console.warn('[register] verification email not sent:', notified.status, notified.reason, verificationLink);
+    verifySent = !!notified.ok;
+    } catch (afterErr) {
+      // A COMMITTED GARAGE AND A BROKEN TAIL. Logged in full and answered 201, because the account
+      // is real: the person must not be told otherwise, and the verification sentence below already
+      // says what to do when the email did not go.
+      console.error('register-garage: the garage was created, but a step after the commit failed:', afterErr);
+    }
 
     return res.status(201).json({
       ok: true,
       where: 'success',
-      message: 'Account created. Please check your email to verify.',
+      message: signupCreatedMessage(verifySent),
+      // WHETHER THE EMAIL ACTUALLY WENT, said rather than assumed. The page redirects to
+      // /onboarding/check-email, whose whole text is "we've sent a verification link to …" — a
+      // claim it cannot make when the send failed. It carries this through as `verify=0`.
+      verifySent,
       user,
       // The signup SUCCEEDED either way; this says what became of the referral code, if there was
       // one. Null message = nothing to report. The page shows it rather than swallowing it, so a
@@ -300,17 +376,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       attribution: { ok: attribution.attributed, reason: attribution.reason, message: attribution.message },
     });
   } catch (err: any) {
-    // ENHANCED LOGGING: Now includes Prisma and generic errors
-    console.error('register-garage FATAL ERROR:', err);
-    
-    let clientMessage = 'Registration failed due to a server error (check console).';
-
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-        clientMessage = `Database error: ${err.code}. Check your schema constraints.`;
-    } else if (typeof err?.message === 'string') {
-        clientMessage = err.message;
-    }
-    
-    return res.status(500).json({ ok: false, where: 'catch', message: clientMessage });
+    /**
+     * ── EVERYTHING BEFORE THE COMMIT, AND NOT ONE WORD OF IT FROM THE DATABASE ──────────────────
+     * What was here until 2026-11-01: the Prisma code and the instruction "Check your schema
+     * constraints" rendered to a customer, and below it `err.message` for anything else — any
+     * internal message, straight to the browser. Both are gone. The error is logged in full,
+     * server-side, which is the only place it does any good, and the person gets one of the
+     * registry's sentences.
+     *
+     * The commit has its own catch above, so what reaches here is a failure BEFORE any row existed
+     * — a conflict found by the race, a hash that threw, a lookup that died. Nothing was created.
+     */
+    const refusal = signupRefusal(err);
+    console.error(`register-garage FATAL ERROR [${refusal.code}]:`, err);
+    return res.status(refusal.status).json({ ok: false, where: 'catch', message: refusal.message });
   }
 }

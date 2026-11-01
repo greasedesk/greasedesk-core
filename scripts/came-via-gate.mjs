@@ -45,6 +45,8 @@ const CR = await import('../lib/contact-routes.ts');
 const SS = await import('../lib/signup-source.ts');
 const CV = await import('../lib/came-via.ts');
 const AF = await import('../lib/affiliate.ts');
+const SR = await import('../lib/signup-refusals.ts');
+const CI = await import('../lib/company-info.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -71,8 +73,18 @@ const sweep = async () => {
   const named = (await prisma.group.findMany({ where: { group_name: { startsWith: PREFIX } }, select: { id: true } })).map((g) => g.id);
   // AND THE GARAGES THE ENDPOINT NAMED ITSELF: register-garage writes the neutral 'New garage', so
   // a sweep matching only the prefix would leave behind every garage created through the real path.
-  const viaUsers = (await prisma.user.findMany({ where: { email: { startsWith: `${LOW}-` } }, select: { group_id: true } })).map((u) => u.group_id);
+  const mine = await prisma.user.findMany({ where: { email: { startsWith: `${LOW}-` } }, select: { id: true, group_id: true } });
+  const viaUsers = mine.map((u) => u.group_id);
   const all = [...new Set([...named, ...viaUsers])].filter(Boolean);
+  // THE PERSON'S MOBILE, WHICH HANGS OFF NO GROUP. TwoFactorSecret is keyed on (subject_type,
+  // subject_id) with no relation to User, so deleting the user leaves the row — and since the
+  // mobile became required (2026-11-01) EVERY signup here writes one. Captured BEFORE the users
+  // go, or there is nothing left to key the delete on.
+  if (mine.length) {
+    await prisma.twoFactorSecret.deleteMany({
+      where: { subject_type: 'tenant', subject_id: { in: mine.map((u) => u.id) } },
+    }).catch(() => {});
+  }
   if (all.length) {
     await prisma.superAdminAudit.deleteMany({ where: { target_group_id: { in: all } } }).catch(() => {});
     for (const t of ['tenantAffiliateTerms', 'tenantAttribution', 'commissionEntry', 'tenantPlanTerms', 'notificationLog', 'auditLog', 'groupBilling', 'user']) {
@@ -288,7 +300,19 @@ try {
    * exactly this state. So the row is removed from one fixture to put it in that state, rather than
    * the clause being deleted along with the state it was about.
    */
-  await prisma.twoFactorSecret.deleteMany({ where: { subject_type: 'tenant', subject_id: skipped.user?.id } });
+  /**
+   * SCOPED, AND REFUSED RATHER THAN WIDENED. This read `subject_id: skipped.user?.id`, and in
+   * Prisma an `undefined` in a where clause is an OMITTED FILTER, not a match on nothing — so a
+   * fixture that failed to sign up would have turned this into "delete every tenant's mobile
+   * record in the database", including the gate tenant's, which locks ZZ out of its own dashboard
+   * through the onboarding gate. It did not fire; it was one failed fixture away from firing.
+   */
+  check('the fixture whose mobile is about to be removed was actually created',
+    typeof skipped.user?.id === 'string' && skipped.user.id.length > 0,
+    'without this the delete below has no WHERE and takes every tenant row');
+  if (skipped.user?.id) {
+    await prisma.twoFactorSecret.deleteMany({ where: { subject_type: 'tenant', subject_id: skipped.user.id } });
+  }
   const stateWith = await OB.getOnboardingState(rang.group?.id, { userId: rang.user?.id, isAdmin: true });
   check('the onboarding phone step still stands, with the number already on file',
     stateWith.firstIncompleteStep === 'phone' && stateWith.onboarded === false,
@@ -404,6 +428,241 @@ try {
   check('  …caps the length rather than storing a paste',
     PF.normaliseSignupMobile('0'.repeat(500))?.length === PF.SIGNUP_MOBILE_MAX,
     `capped at ${PF.SIGNUP_MOBILE_MAX}`);
+
+  /**
+   * ── 2b. A CONFLICT IS SAID IN WORDS, AND THE DATABASE NEVER SPEAKS TO A CUSTOMER ─────────────
+   * THE INCIDENT (owner, 2026-11-01). A real signup through a real affiliate link answered, in the
+   * box on the page: "Database error: P2002. Check your schema constraints. [catch]".
+   *
+   * The cause was two columns and one check. The endpoint read `User.email` and the transaction
+   * wrote `Group.billing_email`, which carries its own @unique — so an address held by a GARAGE
+   * with no account on it passed the check and collided inside the transaction. That is the exact
+   * situation planted below: a group holding the address, and zero users on it.
+   *
+   * THE SENTENCES ARE DRIVEN THROUGH THE SCREEN, because the defect was a sentence on a screen.
+   */
+  console.log('\n— a conflict is said in words, and the database never speaks —');
+  const heldAddr = `${LOW}-held@example.invalid`;
+  const heldGroup = await prisma.group.create({
+    data: { group_name: `${PREFIX} holds the address`, billing_email: heldAddr, trial_ends_at: new Date(Date.now() + 86400000) },
+    select: { id: true },
+  });
+  check('the premise: a garage holds the address and there is NO account on it',
+    (await prisma.user.count({ where: { email: heldAddr } })) === 0
+    && (await prisma.group.count({ where: { billing_email: heldAddr } })) === 1,
+    'this is the owner\'s own case — 0 User rows, 1 Group. Without it the clauses below test a different conflict');
+
+  /** A mobile used by NOTHING ELSE in this gate, so "no row was written" can be counted exactly. */
+  const HELD_MOBILE = '07700900199';
+  const confPage = await (await browser.newContext()).newPage();
+  await confPage.goto(`${gateOrigin()}/register`, { waitUntil: 'domcontentloaded' });
+  await confPage.waitForSelector('[data-testid="signup-mobile"]');
+  /**
+   * THE SITE'S OWN NUMBER, READ OFF THE PAGE — not from company-info, and not typed here. The
+   * owner's instruction was that the number in a refusal is the number on the site, so the oracle
+   * has to be the site. COUNTED FIRST: one tel: link on this page, so the string below belongs to
+   * the subject it is named after rather than to whichever link came first.
+   */
+  const telCount = await confPage.locator('a[href^="tel:"]').count();
+  const siteNumber = (await confPage.locator('a[href^="tel:"]').first().innerText().catch(() => '')).trim();
+  check('the page states the site\'s number exactly once, which is what the clauses below compare against',
+    telCount === 1 && /\d/.test(siteNumber), `${telCount} tel: link(s), "${siteNumber}"`);
+  await confPage.fill('input[autocomplete="name"]', `${PREFIX} held`);
+  await confPage.fill('input[type="email"]', heldAddr);
+  await confPage.fill('input[type="password"]', PASS);
+  await confPage.fill('[data-testid="signup-mobile"]', HELD_MOBILE);
+  await confPage.click('button[type="submit"]');
+  await confPage.waitForSelector('[data-testid="signup-error"]', { timeout: 15000 }).catch(() => {});
+  const conf = (await confPage.locator('[data-testid="signup-error"]').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+  check('an address a garage already holds is refused in a sentence about garages',
+    /already in use for an existing GreaseDesk garage/i.test(conf),
+    conf.slice(0, 160) || 'no error was shown');
+  check('  …and does NOT send them to reset a password for an account that does not exist',
+    conf.length > 0 && !/reset your password/i.test(conf),
+    'the old advice would have been a dead end: there is no account on this address to reset');
+  check('  …and the database says nothing: no code, no "schema constraints", no stage marker',
+    conf.length > 0 && !/P2002/.test(conf) && !/schema constraint/i.test(conf) && !/\[(catch|conflict|unique|validate)\]/.test(conf),
+    conf.slice(0, 160));
+  check('  …and the number it offers is the number the site states',
+    siteNumber.length > 0 && conf.includes(siteNumber),
+    `message ${conf.includes(siteNumber) ? 'carries' : 'does NOT carry'} "${siteNumber}"`);
+
+  /**
+   * ── AND NOTHING WAS LEFT BEHIND (item c) ─────────────────────────────────────────────────────
+   * Counted on the address and on a mobile nothing else in this gate uses. The P2002 fired on the
+   * FIRST statement in the transaction, so a rollback happened to be clean — that is luck, not a
+   * property, and these are the counts that would have shown it otherwise.
+   */
+  check('the refused attempt left no account, no second garage, no mobile and no token',
+    (await prisma.user.count({ where: { email: heldAddr } })) === 0
+    && (await prisma.group.count({ where: { billing_email: heldAddr } })) === 1
+    && (await prisma.twoFactorSecret.count({ where: { phone_e164: CR.toE164Digits(HELD_MOBILE) } })) === 0
+    && (await prisma.verificationToken.count({ where: { identifier: heldAddr } })) === 0,
+    'all-or-nothing, counted rather than assumed');
+
+  /**
+   * REFUSED BEFORE ANYTHING IS ATTEMPTED, which is the half a sentence cannot show. `where` is the
+   * endpoint's own stage marker: 'unique' is the pre-flight check, 'conflict' is the mapped P2002
+   * from inside the transaction. Both say the same true thing to the person; only the first costs
+   * nothing — no bcrypt hash, no transaction, and no group ref burned out of the sequence by an
+   * insert that rolls back. Delete the billing_email pre-check and this clause goes red while the
+   * sentence clauses above stay green, which is exactly the distinction being drawn.
+   */
+  const rawPost = async (body) => confPage.evaluate(async ([origin, b]) => {
+    const r = await fetch(`${origin}/api/auth/register-garage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b),
+    });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  }, [gateOrigin(), body]);
+  const heldPost = await rawPost({ name: 'ZZCV held raw', email: heldAddr, password: PASS, mobile: HELD_MOBILE });
+  check('the endpoint refuses it at 409, at the pre-flight check rather than inside the transaction',
+    heldPost.status === 409 && heldPost.body?.where === 'unique'
+    && /existing GreaseDesk garage/i.test(String(heldPost.body?.message)),
+    `${heldPost.status} where=${heldPost.body?.where}`);
+  /** THE OTHER EMAIL CASE: an address somebody can actually sign in with gets the other advice. */
+  const dupPost = await rawPost({ name: 'ZZCV dup raw', email: `${LOW}-raw-ok@example.invalid`, password: PASS, mobile: HELD_MOBILE });
+  check('an address with a REAL account on it is told to sign in or reset — the other situation, the other advice',
+    dupPost.status === 409 && /Sign in instead/i.test(String(dupPost.body?.message))
+    && /reset your password/i.test(String(dupPost.body?.message)),
+    `${dupPost.status} ${String(dupPost.body?.message).slice(0, 90)}`);
+  check('  …and the two email conflicts are not answered with one sentence',
+    String(heldPost.body?.message) !== String(dupPost.body?.message),
+    'one of them has no account to sign into; collapsing them is how the dead-end advice got shipped');
+
+  /**
+   * AN ERROR NOBODY MAPPED, DRIVEN RATHER THAN SIMULATED. A NUL byte makes the pre-flight lookup
+   * genuinely throw (Postgres refuses it, 22021) — the same honest technique sign-in-failure-gate
+   * uses. What reaches the person must be the one generic sentence, and nothing of the error.
+   * The address is never printed into this log: a NUL in the output corrupts the whole file.
+   */
+  const nulPost = await rawPost({ name: 'ZZCV nul', email: `${LOW}-nul\u0000bad@example.invalid`, password: PASS, mobile: HELD_MOBILE });
+  const nulMsg = String(nulPost.body?.message ?? '');
+  check('an error nobody mapped is answered with the one generic sentence, at 500',
+    nulPost.status === 500 && nulMsg === SR.SIGNUP_GENERIC,
+    `${nulPost.status} ${JSON.stringify(nulMsg).replace(/\u0000/g, '')}`);
+  check('  …which names the site\'s number, and carries nothing of the error',
+    nulMsg.includes(siteNumber) && !/22021|unicode|postgres|prisma|invalid byte/i.test(nulMsg),
+    'the old code put err.message on the screen for anything that was not a Prisma error');
+
+  /**
+   * ── THE PURE RULE, OVER THE SHAPES A CONNECTOR ACTUALLY SENDS ────────────────────────────────
+   * P2002 arrives carrying either a constraint NAME or a column LIST depending on the connector, so
+   * both are exercised. The first clause is the ORDERING clause: 'billing_email' contains 'email',
+   * so a registry in the wrong order answers every garage-level clash with "reset your password".
+   */
+  check('a billing_email clash is recognised as a garage, in both shapes a connector sends',
+    SR.signupRefusal({ code: 'P2002', meta: { target: 'Group_billing_email_key' } }).code === 'billing_email'
+    && SR.signupRefusal({ code: 'P2002', meta: { target: ['billing_email'] } }).code === 'billing_email',
+    'put the user_email row first and this goes red: the substring matches both');
+  check('  …and a User.email clash as an account, in both shapes',
+    SR.signupRefusal({ code: 'P2002', meta: { target: 'User_email_key' } }).code === 'user_email'
+    && SR.signupRefusal({ code: 'P2002', meta: { target: ['email'] } }).code === 'user_email');
+  check('a conflict we cannot NAME is still a conflict — 409, and no guess about which field',
+    SR.signupRefusal({ code: 'P2002', meta: {} }).status === 409
+    && SR.signupRefusal({ code: 'P2002', meta: {} }).code === 'conflict_unknown'
+    && SR.signupRefusal({ code: 'P2002', meta: {} }).message === SR.SIGNUP_GENERIC,
+    'three outcomes, not two: named, unnamed, and not a conflict at all');
+  check('anything else is a 500 with the generic sentence, and the error\'s own words are NOT in it',
+    SR.signupRefusal(new Error('boom')).status === 500
+    && SR.signupRefusal(new Error('boom')).message === SR.SIGNUP_GENERIC
+    && !/boom/.test(SR.signupRefusal(new Error('boom')).message));
+  /**
+   * AN ERROR CARRYING CREDENTIALS. Written as host/user/password fields rather than as a
+   * `scheme://user:pass@host` URI ON PURPOSE: gitleaks blocks a database URI in this repo, and it
+   * is right to — the repo is public and has carried a live Neon string before. A fabricated one is
+   * a false positive, and the remedy for a false positive is not to teach the scanner to ignore
+   * that rule on this line; the assertion needs an error with secrets in it, not a URI.
+   */
+  const leaky = new Error('connect ECONNREFUSED db.invalid:5432 user=gd password=hunter2');
+  check('  …including an error carrying credentials, which used to go straight to the browser',
+    !/hunter2|db\.invalid|ECONNREFUSED|password=/.test(SR.signupRefusal(leaky).message),
+    'this is a disclosure path, not a wording problem');
+  check('every sentence a person can read names the site\'s number or says what to do, and none names a code',
+    [SR.SIGNUP_GENERIC, SR.conflictMessage('user_email'), SR.conflictMessage('billing_email'), SR.conflictMessage('mobile')]
+      .every((m) => m.length > 20 && !/P\d{4}|constraint|schema|prisma/i.test(m))
+    && SR.SIGNUP_GENERIC.includes(CI.COMPANY.phone) && SR.conflictMessage('billing_email').includes(CI.COMPANY.phone),
+    'and the number is company-info\'s, which is the one the page prints');
+
+  /**
+   * ── THE MOBILE: A SENTENCE EXISTS, AND NOTHING CAN PRODUCE IT ────────────────────────────────
+   * The owner decided on 2026-11-01 that a mobile stays NON-UNIQUE — a couple running a garage
+   * share one, and the field is there to help us set them up, not to identify anybody. The sentence
+   * is registered so it never has to be invented under pressure; BOTH halves are asserted, because
+   * a registered message for an impossible conflict is a blindfold unless the impossibility is
+   * asserted too. Add a unique index on phone_e164 and this goes red naming that decision.
+   */
+  const schemaSrc = readFileSync(`${R}/prisma/schema.prisma`, 'utf8');
+  const tfsAt = schemaSrc.indexOf('model TwoFactorSecret');
+  const tfsBlock = tfsAt < 0 ? '' : schemaSrc.slice(tfsAt, schemaSrc.indexOf('\n}', tfsAt));
+  check('the registry answers a mobile clash plainly, naming no field and no code',
+    /already in use/i.test(SR.conflictMessage('mobile')) && !/P2002|phone_e164/.test(SR.conflictMessage('mobile')),
+    JSON.stringify(SR.conflictMessage('mobile')));
+  check('  …and NOTHING can raise it: no unique index makes a mobile an identifier',
+    tfsBlock.includes('phone_e164')
+    && !/phone_e164[^\n]*@unique/.test(tfsBlock)
+    && !/@@unique\(\[[^\]]*phone_e164/.test(tfsBlock),
+    tfsBlock.includes('phone_e164') ? 'the owner\'s 2026-11-01 decision, asserted' : 'the scan never reached TwoFactorSecret');
+
+  /**
+   * ── (c) NOTHING AFTER THE COMMIT MAY REPORT A FAILURE ────────────────────────────────────────
+   * The garage is committed before the verification token is inserted or the email attempted. Those
+   * sat in the same try as the transaction, so a throw there answered 500 for a signup that had
+   * SUCCEEDED — the person would try again and be told the address was taken, by their own account.
+   *
+   * DRIVEN WHERE IT CAN BE: in this environment the send is genuinely refused (no provider, and the
+   * environment marker refuses real sends from a gate), so every signup here exercises the
+   * failed-send arm for real. What is NOT driven is a THROW in that tail: nothing reachable from a
+   * signup can be made to throw there without putting a test hook in the route, so the structural
+   * rule is asserted instead — no `return res` exists between the commit and the 201.
+   */
+  const tailAddr = `${LOW}-tail@example.invalid`;
+  const tailPost = await rawPost({ name: 'ZZCV tail', email: tailAddr, password: PASS, mobile: '07700900198' });
+  const tailUser = await prisma.user.findUnique({ where: { email: tailAddr }, select: { id: true, group_id: true } });
+  const tailLog = tailUser && await prisma.notificationLog.findFirst({
+    where: { group_id: tailUser.group_id, template: 'signup_verify' }, select: { status: true },
+  });
+  check('a verification email that did not go does NOT fail the signup',
+    tailPost.status === 201 && !!tailUser && tailLog?.status !== 'sent',
+    `201=${tailPost.status === 201} garage=${!!tailUser} send=${tailLog?.status ?? 'no row'}`);
+  check('  …and the endpoint SAYS the email did not go, rather than letting the next page claim it did',
+    tailPost.body?.verifySent === false && /could not send your verification email/i.test(String(tailPost.body?.message)),
+    `verifySent=${JSON.stringify(tailPost.body?.verifySent)}`);
+  const route = readFileSync(`${R}/pages/api/auth/register-garage.ts`, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const commitAt = route.indexOf('} catch (txErr');
+  const afterAt = route.indexOf('= committed;');
+  const okAt = route.indexOf('return res.status(201)');
+  const commitCatch = commitAt < 0 ? '' : route.slice(commitAt, afterAt);
+  const tail = afterAt < 0 || okAt < 0 ? '' : route.slice(afterAt, okAt);
+  check('the commit\'s own catch RETURNS — a conflict is answered there and nowhere else',
+    commitAt >= 0 && commitAt < afterAt && /return res\.status\(refusal\.status\)/.test(commitCatch),
+    `${commitCatch.length} chars`);
+  check('  …and between the commit and the 201 there is not one `return res`',
+    tail.length > 500 && !/return\s+res\./.test(tail),
+    tail.length > 500 ? `${tail.length} chars of tail, none of it able to answer a failure` : 'the slice collapsed — this clause proved nothing');
+
+  /**
+   * AND THE PAGE THAT SAYS SO. /onboarding/check-email was one long claim that a link had been
+   * sent; it now reads the endpoint's answer. Both states are driven, because the one that matters
+   * is the one nobody sees until a provider is down.
+   */
+  const okPage = await (await browser.newContext()).newPage();
+  await okPage.goto(`${gateOrigin()}/onboarding/check-email?email=${encodeURIComponent(tailAddr)}`, { waitUntil: 'domcontentloaded' });
+  check('check-email claims a link was sent when one was',
+    (await okPage.locator('[data-testid="check-email-sent"]').count()) === 1
+    && (await okPage.locator('[data-testid="check-email-not-sent"]').count()) === 0);
+  await okPage.goto(`${gateOrigin()}/onboarding/check-email?email=${encodeURIComponent(tailAddr)}&verify=0`, { waitUntil: 'domcontentloaded' });
+  const notSent = (await okPage.locator('[data-testid="check-email-not-sent"]').innerText().catch(() => '')).replace(/\s+/g, ' ');
+  check('  …and when it was not, it says the account exists, gives the number, and does not claim a link',
+    (await okPage.locator('[data-testid="check-email-sent"]').count()) === 0
+    && /account is set up/i.test(notSent) && notSent.includes(CI.COMPANY.phone)
+    && !/sent a verification link/i.test(notSent),
+    notSent.slice(0, 140) || 'nothing rendered');
+  check('  …and does not tell them to register again, which is now a refusal',
+    notSent.length > 0 && !/register(ing)? again/i.test(notSent),
+    'the address is taken now — by them');
+  await okPage.context().close();
+  await confPage.context().close();
 
   // A CLIENT THAT NEVER WENT NEAR THE FORM. This is the shape the missing CHECK constraint would
   // have caught in the database, so it is asserted at the only place that can refuse it.
