@@ -26,6 +26,9 @@ import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
 import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/operator-auth';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
+// THE SAME FORMATTER THE OWNER'S ALERTS USE. +44 7397 387332 rather than 447397387332 — a number
+// you have to transcribe by eye before you can dial it, on the screen where you decide to ring.
+import { formatPhone } from '@/lib/phone-format';
 
 type Garage = { groupId: string; ref: string | null; name: string; status: string; referredAt: string; everPaid: boolean };
 type Row = {
@@ -33,7 +36,7 @@ type Row = {
   mobile: string | null; mobileVerifiedAt: string | null; emailVerifiedAt: string | null;
   termsAcceptedAt: string | null; suspendedAt: string | null; socialHandle: string | null;
   garages: Garage[]; earnedPennies: number; payablePennies: number; heldPennies: number;
-  bankMasked: string | null;
+  bankMasked: string | null; bankAccountName: string | null;
 };
 type Entry = { id: string; email: string; audience: string | null; created_at: string };
 type ReferredPerson = { name: string | null; email: string; garage: string };
@@ -94,6 +97,34 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
       && !window.confirm('Show these bank details? The look is recorded against your operator account.')) return;
     const d = await payeeAction({ action: 'reveal', affiliateId }, `reveal:${affiliateId}`);
     if (d?.value) setRevealed((prev) => ({ ...prev, [affiliateId]: d.value }));
+  }
+
+  /**
+   * CORRECT THE ACCOUNT NAME — the name only, on a pending request or on what we hold.
+   *
+   * The current name is the prompt's default, so this is a CORRECTION and not a retype: the common
+   * case is one character. The sentence says what will happen to the affiliate, because it is their
+   * record and they are about to get an email about it.
+   */
+  async function correctName(args: { requestId?: string; affiliateId?: string }, current: string | null, who: string) {
+    if (typeof window === 'undefined') return;
+    const next = window.prompt(
+      `Correct the account name for ${who}. The sort code and account number are not touched, and `
+      + 'they will be emailed to say we corrected it.',
+      current ?? '',
+    );
+    if (next === null) return; // cancelled, which is not an empty name
+    const key = `name:${args.requestId ?? args.affiliateId}`;
+    const d = await payeeAction({ action: 'correct_name', newName: next, ...args }, key);
+    if (!d?.ok) return;
+    // WHAT HAPPENED TO THE EMAIL, said on the screen. "Not told" is the case that needs a phone
+    // call, and a silent success would leave the owner believing they had been.
+    setMsg(d.emailed === 'sent'
+      ? 'Name corrected, and they have been emailed about it.'
+      : `Name corrected, but they were NOT emailed${d.emailNote ? ` — ${d.emailNote}` : ''}. Tell them another way.`);
+    if (args.affiliateId) {
+      setRows((prev) => prev.map((r) => (r.id === args.affiliateId ? { ...r, bankAccountName: String(next).trim() } : r)));
+    }
   }
 
   async function toggle(row: Row) {
@@ -194,6 +225,16 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
                         className="block w-full text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
                         Apply
                       </button>
+                      {/* CORRECT THE NAME BEFORE APPLYING IT, which is the cheaper order: applying a
+                          name a bank will not match means a bounced payment and a second request
+                          from the affiliate. The digits are untouched either way. */}
+                      {role === 'owner' && (
+                        <button onClick={() => correctName({ requestId: q.id }, q.accountName, q.affiliateName)}
+                          disabled={busy === `name:${q.id}`} data-testid="payee-request-edit-name"
+                          className="block w-full text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
+                          Edit name
+                        </button>
+                      )}
                       <button onClick={() => {
                         const reason = typeof window === 'undefined' ? '' : (window.prompt('Why are you rejecting it?') ?? '');
                         if (!reason.trim()) return;
@@ -239,7 +280,7 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
                     <p className="text-xs text-muted">{a.email}{a.socialHandle ? ` · ${a.socialHandle}` : ''}</p>
                     <p className="mt-1 text-xs text-muted">
                       Code <span className="text-ink font-mono">{a.refCode}</span> · joined {when(a.joinedAt)}
-                      {a.mobile ? ` · ${a.mobile}` : ' · no mobile'}
+                      {a.mobile ? ` · ${formatPhone(a.mobile)}` : ' · no mobile'}
                     </p>
                     <p className="mt-1 text-xs flex flex-wrap gap-x-4">
                       <Verified at={a.mobileVerifiedAt} what="SMS" />
@@ -261,14 +302,31 @@ export default function AffiliatesScreen({ role, affiliates, entries, joiningOpe
                         </p>
                       ) : (
                         <>
+                          {/* THE NAME BESIDE THE DIGITS. Not a reveal: the name is stored readable
+                              because it has to be printed on a payment, and "••••6635" alone cannot
+                              answer the question somebody is asking at a payment run. A name we do
+                              not hold is said in words rather than left blank. */}
                           <p className="mt-2 text-xs text-muted" data-testid="payee-held">
                             Bank <span className="font-mono">{a.bankMasked}</span>
+                          </p>
+                          <p className="text-xs text-ink" data-testid="payee-held-name">
+                            {a.bankAccountName || <span className="text-muted">no account name on file</span>}
                           </p>
                           <button onClick={() => reveal(a.id)} disabled={busy === `reveal:${a.id}`}
                             data-testid="payee-reveal"
                             className="mt-1 text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
                             Show bank details
                           </button>
+                          {/* OWNER ONLY, on the screen as well as in the endpoint. The endpoint is
+                              the guard — a button nobody else can see is not one — and this is so a
+                              country manager is not shown a control that 404s. */}
+                          {role === 'owner' && (
+                            <button onClick={() => correctName({ affiliateId: a.id }, a.bankAccountName, a.name)}
+                              disabled={busy === `name:${a.id}`} data-testid="payee-edit-name"
+                              className="mt-1 ml-1 text-xs border border-line rounded-lg px-3 py-1.5 text-ink hover:bg-surface-muted disabled:opacity-50">
+                              Edit name
+                            </button>
+                          )}
                         </>
                       )
                     ) : (

@@ -529,6 +529,12 @@ try {
     // of your garage" would be a claim about a relationship they do not have. This clause is what
     // made the choice explicit rather than inherited — it went red the moment the template existed.
     'rep_sign_in', 'affiliate_welcome', 'affiliate_sign_in',
+    // AND THE NAME-CORRECTION NOTICE (2026-11-01). It is GreaseDesk telling an affiliate that WE
+    // changed their own payment record; "on behalf of your garage" would name a garage they have
+    // nothing to do with. Declared here because this clause went red the moment the template
+    // existed and would not let it be added without the choice being made — which is the whole
+    // reason the set is a list and not a name pattern.
+    'affiliate_payee_name_corrected',
     'alert_affiliate_joined', 'alert_garage_registered', 'alert_garage_no_checkout', 'alert_first_payment',
     // And cold outreach, which cannot say "on behalf of your garage" either: a prospect is not a
     // customer and has no garage on our books. Found because a bad key regex in the footer change

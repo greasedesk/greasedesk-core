@@ -64,6 +64,17 @@ export type AffiliateRow = {
    * that showing "we hold an account ending 1234" costs no key and writes no audit row.
    */
   bankMasked: string | null;
+  /**
+   * WHOSE ACCOUNT IT IS (owner, 2026-11-01). The card showed ••••6635 and nothing else, so the one
+   * question the owner is actually asking at a payment run — "is this the person I think I am
+   * paying?" — could only be answered by revealing the digits, which writes an audit row for a look
+   * nobody needed.
+   *
+   * NOT A REVEAL EITHER. Rep.bank_account_name is stored READABLE, unlike the sort code and the
+   * account number beside it, precisely because it has to be printed on a payment. Showing it costs
+   * no key — and the whole control on this field is a person reading it next to the digits.
+   */
+  bankAccountName: string | null;
 };
 
 /**
@@ -78,9 +89,10 @@ export async function listAffiliates(db: Db = defaultDb, now: Date = new Date())
     select: {
       id: true, name: true, email: true, ref_code: true, created_at: true,
       email_verified_at: true, terms_accepted_at: true, suspended_at: true, social_handle: true,
-      // NOT bank_sort_code and NOT bank_account_number. Four digits answer "do we hold an account
-      // and is it the one I expect"; the rest is a reveal, and a reveal has its own endpoint.
-      bank_account_last4: true,
+      // NOT bank_sort_code and NOT bank_account_number. Four digits and the NAME answer "do we hold
+      // an account, and is it the person I think I am paying"; the rest is a reveal, and a reveal
+      // has its own endpoint. The name is plaintext by design — see bankAccountName above.
+      bank_account_last4: true, bank_account_name: true,
     },
   });
   if (reps.length === 0) return [];
@@ -146,6 +158,9 @@ export async function listAffiliates(db: Db = defaultDb, now: Date = new Date())
       socialHandle: r.social_handle,
       garages,
       bankMasked: r.bank_account_last4 ? maskedForOwner(r.bank_account_last4) : null,
+      // PAIRED WITH THE MASK, not reported on its own: Rep_bank_chk means the name is null exactly
+      // when the digits are, so a name with no account is a state this cannot produce.
+      bankAccountName: r.bank_account_last4 ? r.bank_account_name : null,
       earnedPennies: sums.earnedPennies,
       payablePennies: sums.payablePennies,
       heldPennies: sums.heldPennies,

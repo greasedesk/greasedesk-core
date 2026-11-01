@@ -1124,3 +1124,73 @@ owner's bug back verbatim, six times: `/my-terms#earnings · visible: none`.
 menu asserted only from its first home is asserted on one of its mountings. The second page to mount
 it is where the assumption shows.
 
+---
+
+## THE PAYEE TIDY-UP (owner, 2026-11-01)
+
+Four small things on the payee screens, no migration. The premise of the first one was checked
+before it was acted on: `Rep.bank_account_name` is a plain `String?` — the sort code and account
+number beside it are ciphertext — and `listAffiliates` simply never selected it. So it was a display
+gap, as reported, and the data was never lost.
+
+### The name beside the digits
+
+The Engine Room card showed `••••6635` and nothing else, so the question somebody is actually asking
+at a payment run — *is this the person I think I am paying?* — could only be answered by REVEALING
+the digits, which writes an audit row for a look nobody needed. The name is readable precisely
+because it has to be printed on a payment, so showing it costs no key and writes no row; the clause
+asserts both halves, including that no reveal was recorded.
+
+**The affiliate's own screen already showed it.** `payee-masked` has rendered "Name — ending ••21"
+since the portal shipped. Left alone, and a clause put on it instead — the owner asked for the
+behaviour, and the way to keep behaviour is to assert it, not to rewrite it.
+
+### Correcting a name, and nothing else
+
+`correctPayeeName` in lib/payee-admin. It names ONE column, so there is no sort code in the
+argument for a caller to pass and no later edit of a shared object can smuggle one through. It never
+decrypts: correcting a name is not a reveal and must not write one. The gate reads the ciphertext
+back byte-for-byte after a correction, and the red-proof — making it also write `bank_sort_code` —
+reddens exactly that clause.
+
+**Two subjects, said rather than guessed:** the name on the Rep row (what a payment run would
+print), or the name on a PENDING request (corrected before it is applied). An APPLIED request is
+deliberately not editable — that row is the record of what was asked for, and rewriting it would
+edit history to fix the present. The endpoint refuses a body naming both rather than resolving it.
+
+**A no-op is refused, not audited.** A row saying a name changed from X to X is a record of an act
+that did not happen. And the audit row carries BOTH values, because "the name was corrected" without
+the old one cannot answer the question somebody will ask.
+
+**The affiliate is told, and the write does not wait on the telling.** Money first, then the
+secondary guard: the correction commits, then the email, and a failed send does not undo it. What
+happened to the send is reported back in three states, and the screen prints it — "they were NOT
+emailed" is the case that needs a phone call, and a silent success would leave the owner believing
+they had been. On the gate database every send is refused by the Environment marker, so that is the
+branch the clause asserts, through the NotificationLog row that proves it went through the chokepoint
+rather than around it.
+
+### Two one-liners
+
+The mobile is formatted with the alerts' own formatter — `+44 7700 900333`, not `447700900333`, on
+the screen where you decide to ring. The clause asserts the RAW form is ABSENT as well as the pretty
+one present: a clause that only looked for the formatted version would pass on a row printing both.
+
+And the waiting sentence stopped promising an account to people who have not given us one. It said
+"We will pay the account we already hold until then" to everybody with a request in flight.
+`holdsAccount` is its own fact on the payee props because nothing else could tell the two cases
+apart — the state is 'pending' in both, and the mask shown while pending is the NEW account's.
+
+### What the gates caught in this batch
+
+**One template added without declaring its audience.** operator-alerts-gate enumerates the WHOLE
+registry against a declared platform/tenant set, so a new template cannot be added without the
+choice being made — and it went red naming mine the first time the core tier ran. Declared, and
+red-proved by giving it the tenant shell.
+
+**And then a careless restore made it worse.** Undoing that red-proof by replacing the first
+`html: shell(` in the file turned the MOT REMINDER into a platform-footer email and left the new
+template on the tenant one. The same clause caught it at once. Fixed by line number and verified by
+diff. The lesson is dull and absolute: copy the file before a proof, and restore from the copy —
+never from a pattern that is not unique to its subject.
+

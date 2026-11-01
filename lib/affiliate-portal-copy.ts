@@ -156,10 +156,24 @@ export const PAYOUT_CADENCE = 'Paid monthly by bank transfer on the Friday neare
  * "you have asked us to change them" and "these are the ones we will pay" are three different
  * situations and only one of them needs anything doing about it.
  */
+/**
+ * ── THE WAITING SENTENCE DEPENDS ON WHETHER WE HOLD ANYTHING (owner, 2026-11-01) ────────────────
+ * It said "We will pay the account we already hold until then" to everybody with a request in
+ * flight — including an affiliate who has never given us an account, where it names a thing that
+ * does not exist and reads as money sitting somewhere else.
+ *
+ * Two sentences, chosen by a fact the page is given rather than by one it infers from a mask: the
+ * dashboard's payee state is 'pending' in both cases, and the mask shown while pending is the NEW
+ * account's, so neither could have told them apart.
+ */
 export const PAYEE_COPY = {
   none: 'We do not have your bank details yet. We need them before we can send you anything.',
-  pending: 'Your details are with us and will be checked before the next payment run. '
+  /** A request in flight and an account already on file. */
+  pendingWithHeld: 'Your details are with us and will be checked before the next payment run. '
     + 'We will pay the account we already hold until then.',
+  /** A request in flight and nothing on file — the first set. */
+  pending: 'Your details are with us and will be checked before the next payment run. '
+    + 'We’ll use these once they’ve been checked.',
   held: 'These are the details we will pay.',
   /** Said on the form itself, because the delay is deliberate and reads as a fault if unexplained. */
   whyChecked: 'Bank details are checked by a person before we use them. Your sign-in is an email link, '

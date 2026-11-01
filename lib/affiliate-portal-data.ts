@@ -76,7 +76,13 @@ export type PortalData = {
   holdDays: number;
   howItWorks: HowStep[];
   posts: SocialPost[];
-  payee: { state: PayeeState; masked: string | null; accountName: string | null };
+  /**
+   * `holdsAccount` is NOT derivable from the other three (owner, 2026-11-01): while a request is in
+   * flight the state is 'pending' and the mask shown is the NEW account's, so neither says whether
+   * there is an account on file to be paid in the meantime. The waiting sentence turns on exactly
+   * that, so it is a fact of its own.
+   */
+  payee: { state: PayeeState; masked: string | null; accountName: string | null; holdsAccount: boolean };
   videos: PortalVideo[];
 };
 
@@ -192,6 +198,7 @@ export async function affiliatePortalData(repId: string, db: Db = defaultDb as D
         ? maskedForAffiliate(pending.account_last4)
         : (rep.bank_account_last4 ? maskedForAffiliate(rep.bank_account_last4) : null),
       accountName: pending?.account_name ?? rep.bank_account_name ?? null,
+      holdsAccount: !!rep.bank_account_last4,
     },
     videos: videoDoc ? parseVideoList(videoDoc.body) : [],
   };

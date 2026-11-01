@@ -19,7 +19,14 @@ import type { PrismaClient } from '@prisma/client';
 import { prisma as defaultDb } from '@/lib/db';
 import { decryptPayee, payeeDigits, PayeeCipherError, PayeeKeyError } from '@/lib/payee-crypto';
 import { payeeKeyRefusal } from '@/lib/payee-key-check';
-import { formatSortCode, maskedForOwner } from '@/lib/payee';
+import { formatSortCode, maskedForOwner, refuseAccountName } from '@/lib/payee';
+/**
+ * STATICALLY, like every other caller of it. A dynamic `await import('@/lib/notify')` lost
+ * PLATFORM_SEND's identity — it typed as a plain `symbol` against a `unique symbol` parameter and
+ * would not compile, which is the type system saying what the sentinel is FOR: a declared platform
+ * scope that cannot be reached by accident. No cycle: notify does not reach this file.
+ */
+import { sendNotification, PLATFORM_SEND } from '@/lib/notify';
 
 type Db = PrismaClient;
 
@@ -146,6 +153,142 @@ export async function applyPayeeRequest(
     detail: { request_id: req.id, payee_kind: req.payee_kind, last4: req.account_last4 },
   });
   return { ok: true };
+}
+
+/**
+ * ── CORRECT THE ACCOUNT NAME, AND NOTHING ELSE (owner, 2026-11-01) ──────────────────────────────
+ * A name can be typed wrong — a middle initial, a trading name, an "and" where the bank holds "&" —
+ * and a transfer bounces on it. Today the only way to fix one is to make the affiliate submit their
+ * whole payee again, which asks them to retype two credential-grade numbers to correct a word.
+ *
+ * ── IT CANNOT REACH THE DIGITS, BY CONSTRUCTION ─────────────────────────────────────────────────
+ * The update names ONE column. There is no sort code or account number in the argument, so no
+ * caller can pass one, and no later edit of a shared object can smuggle one through — which is why
+ * this does not take a partial payee and route it through applyPayeeRequest's writer. The gate reads
+ * the ciphertext back byte-for-byte after a correction.
+ *
+ * It also never decrypts. Correcting a name is not a reveal and must not write one.
+ *
+ * ── TWO SUBJECTS, SAID RATHER THAN GUESSED ──────────────────────────────────────────────────────
+ * `held` is the name on the Rep row — what a payment run would print. `request` is the name on a
+ * PENDING request, corrected before it is applied. They are different facts about different rows,
+ * and an owner looking at the screen is looking at one or the other, so the caller names which.
+ *
+ * An APPLIED request is deliberately not correctable: that row is the record of what was asked for,
+ * and rewriting it would edit history to fix the present. The held name is the present.
+ *
+ * ── THE AFFILIATE IS TOLD, AND THE WRITE DOES NOT WAIT ON THE TELLING ───────────────────────────
+ * Somebody else changing where their money goes is exactly what they should hear about — and the
+ * one-line defence against this being the attack it looks like. But the correction is committed
+ * BEFORE the send, and a send that fails does not undo it: the standing rule here is the money
+ * first, then the secondary guard. What happened to the email is REPORTED back, in the three states
+ * a send has, because "we told them" and "we could not" are different things for the owner to know.
+ */
+export type NameCorrection = Decision & { emailed?: 'sent' | 'not_sent'; emailNote?: string };
+
+export async function correctPayeeName(
+  db: Db,
+  args: {
+    subject: { kind: 'held'; repId: string } | { kind: 'request'; requestId: string };
+    newName: string;
+    operatorUserId: string;
+  },
+): Promise<NameCorrection> {
+  const refusal = refuseAccountName(args.newName);
+  if (refusal) return { ok: false, code: 'bad_name', message: refusal };
+  const newName = String(args.newName).trim();
+
+  /** The row, its current name, and who it belongs to — resolved for either subject. */
+  let repId: string;
+  let before: string | null;
+  let last4: string | null;
+  if (args.subject.kind === 'request') {
+    const req = await db.repPayeeRequest.findUnique({
+      where: { id: args.subject.requestId },
+      select: { id: true, rep_id: true, status: true, account_name: true, account_last4: true },
+    });
+    if (!req) return { ok: false, code: 'not_found', message: 'That request no longer exists.' };
+    if (req.status !== 'pending') {
+      return {
+        ok: false,
+        code: 'not_pending',
+        message: `That request is ${req.status}. An applied request is the record of what was asked for — `
+          + 'correct the name we hold instead.',
+      };
+    }
+    repId = req.rep_id; before = req.account_name; last4 = req.account_last4;
+  } else {
+    const rep = await db.rep.findUnique({
+      where: { id: args.subject.repId },
+      select: { id: true, party_type: true, bank_account_name: true, bank_account_last4: true },
+    });
+    if (!rep || rep.party_type !== 'affiliate') return { ok: false, code: 'not_found', message: 'No such affiliate.' };
+    // NO HELD DETAILS IS NOT A NAME TO CORRECT. Writing one would leave a name beside no account —
+    // the state Rep_bank_chk exists to make impossible from the other three columns.
+    if (!rep.bank_account_last4) {
+      return { ok: false, code: 'nothing_held', message: 'We hold no bank details for them, so there is no name to correct.' };
+    }
+    repId = rep.id; before = rep.bank_account_name; last4 = rep.bank_account_last4;
+  }
+
+  // A NO-OP IS REFUSED rather than audited. An audit row saying a name was changed from X to X is a
+  // record of an act that did not happen, and the owner reading it later cannot tell.
+  if ((before ?? '').trim() === newName) {
+    return { ok: false, code: 'unchanged', message: 'That is the name we already hold.' };
+  }
+
+  if (args.subject.kind === 'request') {
+    await db.repPayeeRequest.update({ where: { id: args.subject.requestId }, data: { account_name: newName } });
+  } else {
+    // ONE COLUMN. Named here, where a reader can see that the digits are not in it.
+    await db.rep.update({ where: { id: repId }, data: { bank_account_name: newName } });
+  }
+
+  // BOTH VALUES, which is the whole point of the row: "the name was corrected" without the old one
+  // cannot answer the question somebody will actually ask, which is what it used to say.
+  await auditRep(db, {
+    operatorUserId: args.operatorUserId,
+    repId,
+    action: 'rep.payee_name_corrected',
+    nameSnapshot: newName,
+    refSnapshot: `name corrected · account ending ${last4 ?? '????'}`,
+    detail: { subject: args.subject.kind, from: before, to: newName, last4 },
+  });
+
+  const told = await tellAffiliateTheNameChanged(db, { repId, newName });
+  return { ok: true, ...told };
+}
+
+/**
+ * THE EMAIL. Its own function so the failure modes are visible: no address on the row, the send
+ * refused by policy, and the provider rejecting it are three different outcomes, and the owner's
+ * screen says which — an affiliate who was NOT told is the case that needs a phone call.
+ */
+async function tellAffiliateTheNameChanged(
+  db: Db,
+  args: { repId: string; newName: string },
+): Promise<{ emailed: 'sent' | 'not_sent'; emailNote?: string }> {
+  try {
+    const rep = await db.rep.findUnique({ where: { id: args.repId }, select: { email: true, name: true } });
+    if (!rep?.email) return { emailed: 'not_sent', emailNote: 'we hold no email address for them' };
+    const sent = await sendNotification({
+      recipient: rep.email,
+      template: 'affiliate_payee_name_corrected',
+      channel: 'email',
+      // GREASEDESK WRITING TO SOMEBODY WHO IS NOT A CUSTOMER — stated, never inferred from an absent
+      // tenant, which would silently disable the demo block and the opt-out check.
+      groupId: PLATFORM_SEND,
+      subject: { type: 'rep', id: args.repId },
+      data: { accountName: args.newName, name: rep.name },
+    });
+    if (sent.ok) return { emailed: 'sent' };
+    return { emailed: 'not_sent', emailNote: sent.reason ?? sent.status };
+  } catch (e) {
+    // THE CORRECTION STANDS. The send is the secondary act and a throw here must not look like a
+    // failed correction — it is logged loudly and reported as "not sent", which is the truth.
+    console.error('[payee-admin] name corrected but the affiliate could not be told for', args.repId, e);
+    return { emailed: 'not_sent', emailNote: 'the message could not be sent' };
+  }
 }
 
 /** REJECT. A reason is required: a refusal somebody cannot explain is one they will be asked about. */

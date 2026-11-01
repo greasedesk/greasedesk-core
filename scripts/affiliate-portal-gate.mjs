@@ -732,6 +732,79 @@ try {
   await page.goto(`${AFF}${PORTAL.portalHomePath('affiliate')}`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="affiliate-home"]');
 
+  // ── 4e. WHAT THE AFFILIATE IS TOLD WHILE A REQUEST IS WAITING ────────────────────────────────
+  /**
+   * The owner's report (2026-11-01): the waiting sentence said "We will pay the account we already
+   * hold until then" to EVERYBODY with a request in flight — including somebody who has never given
+   * us an account, where it names a thing that does not exist and reads as money sitting somewhere
+   * else.
+   *
+   * THE STATE CANNOT TELL THEM APART, which is why `holdsAccount` is its own fact: the payee state
+   * is 'pending' in both cases, and the mask shown while pending is the NEW account's. Both sides
+   * are driven here — the fixture affiliate has a pending request from section 4c and NO held
+   * details, so the first reading is the one that was wrong.
+   */
+  console.log('\n— and the waiting sentence only promises an account when we hold one —');
+  const pendingOnly = await ask(AFF_HOST, PORTAL.portalHomePath('affiliate'), { cookie: jarEarly });
+  const stateText = (body) => (body.match(/data-testid="payee-state"[^>]*>([^<]*)</) ?? [])[1] ?? '';
+  check('with a request in flight and nothing on file, it does not promise an account',
+    stateText(pendingOnly.body).includes('once they') && !/account we already hold/.test(pendingOnly.body),
+    stateText(pendingOnly.body) || 'no payee-state on the page');
+  await prisma.rep.update({
+    where: { id: affiliate.id },
+    data: {
+      bank_account_name: 'ZZAP Held Payee', bank_account_last4: '4321',
+      // Rep_bank_chk is all three or none. Nothing on this path decrypts them — see the clause
+      // below, which reads them back untouched — so a v1-shaped string is what the state needs.
+      bank_sort_code: 'v1:zzapiv:zzaptag:zzapsort', bank_account_number: 'v1:zzapiv:zzaptag:zzapacct',
+    },
+  });
+  const pendingWithHeld = await ask(AFF_HOST, PORTAL.portalHomePath('affiliate'), { cookie: jarEarly });
+  check('  …and with one on file it says we will pay that until this is checked',
+    /account we already hold/.test(pendingWithHeld.body)
+    && stateText(pendingWithHeld.body) !== stateText(pendingOnly.body),
+    stateText(pendingWithHeld.body));
+  check('    …which are two different sentences from the one copy module',
+    COPY.PAYEE_COPY.pending !== COPY.PAYEE_COPY.pendingWithHeld
+    && /once they/.test(COPY.PAYEE_COPY.pending) && !/already hold/.test(COPY.PAYEE_COPY.pending)
+    && /already hold/.test(COPY.PAYEE_COPY.pendingWithHeld),
+    'the sentence is chosen by a fact the page is GIVEN, not inferred from a mask');
+  /**
+   * AND THE AFFILIATE SEES WHOSE ACCOUNT IT IS TOO — already true before this batch, so it is
+   * ASSERTED rather than changed. The owner asked for the name beside the digits on both screens;
+   * on this one it was there, and a clause is what keeps it there.
+   */
+  /**
+   * THE NAME IS READ FROM THE ROW, not written out here. A literal of my own would be the same
+   * string the gate typed into the POST in section 4c, and a clause comparing a page against the
+   * value that produced it agrees with itself — the page's precedence (the pending request's name
+   * over the held one) is the thing being asserted, so the pending row is the oracle.
+   */
+  const pendingName = (await prisma.repPayeeRequest.findFirst({
+    where: { rep_id: affiliate.id, status: 'pending' },
+    orderBy: { requested_at: 'desc' }, select: { account_name: true },
+  }))?.account_name ?? null;
+  const maskedLine = (pendingWithHeld.body.match(/data-testid="payee-masked"[^>]*>([\s\S]{0,120}?)<\/p>/) ?? [])[1]
+    ?.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() ?? '';
+  check('the affiliate\u2019s own screen names the account beside the mask',
+    !!pendingName && pendingName.length > 3 && maskedLine.includes(pendingName) && /ending/.test(maskedLine),
+    `${maskedLine || 'no payee-masked line'} — the row says ${JSON.stringify(pendingName)}`);
+  // AND THE DIGITS WERE NEVER OPENED to say any of it: the page reads last4 and the name, both clear.
+  const stillSealed = await prisma.rep.findUnique({
+    where: { id: affiliate.id }, select: { bank_sort_code: true, bank_account_number: true },
+  });
+  check('  …without the portal ever decrypting anything',
+    stillSealed?.bank_sort_code === 'v1:zzapiv:zzaptag:zzapsort'
+    && stillSealed?.bank_account_number === 'v1:zzapiv:zzaptag:zzapacct'
+    && (await prisma.superAdminAudit.count({ where: { action: 'rep.payee_revealed', target_rep_id: affiliate.id } })) === 0,
+    'an affiliate looking at their own dashboard is not a reveal and must not write one');
+  // PUT BACK, because section 4c's clauses are about an affiliate with a PENDING request and no
+  // held account, and the sections after this one read the same fixture.
+  await prisma.rep.update({
+    where: { id: affiliate.id },
+    data: { bank_account_name: null, bank_sort_code: null, bank_account_number: null, bank_account_last4: null },
+  });
+
   // ── 5. WHAT THE SERVED HTML MUST NOT CARRY ───────────────────────────────────────────────────
   console.log('\n— and the page withholds what it was never given —');
   /**

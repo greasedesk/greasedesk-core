@@ -676,6 +676,37 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">It lasts ${esc(d.expiryMinutes ?? 30)} minutes and works once. If you didn't ask for it, you can ignore this email.</p>`),
     }),
   },
+  /**
+   * ── WE CORRECTED THE NAME ON YOUR PAYMENT DETAILS (owner, 2026-11-01) ───────────────────────
+   * Sent when an operator fixes the account NAME on an affiliate's payee — a middle initial, an "&"
+   * where they typed "and", a trading name a bank will not match.
+   *
+   * IT IS NOT A SECURITY MESSAGE, and the distinction matters. `security: true` exists to exempt a
+   * message from the commercial opt-out, for things somebody cannot be locked out of — their own
+   * sign-in link, their own phone code. This is a notice about a change WE made to their record. It
+   * honours their preferences, and if they have opted out they do not get it: the owner's screen
+   * says so, because "they were not told" is the case that needs a phone call rather than a silence.
+   *
+   * IT NAMES THE NEW NAME AND NO DIGITS. The account number is not in it, not even the last four —
+   * an email is forwarded, quoted and left open, and the name is the only part this change is about.
+   * It says who to contact rather than offering a link to change anything: the one defence against
+   * this being the attack it resembles is that the affiliate reads it and rings us.
+   */
+  affiliate_payee_name_corrected: {
+    label: 'Affiliate — we corrected the account name',
+    email: (d) => ({
+      subject: 'We corrected the account name on your payment details',
+      html: pshell(`
+        <h2 style="margin:0 0 8px">We corrected the account name</h2>
+        <p>We have corrected the account name on your GreaseDesk payment details to
+          <strong>${esc(d.accountName)}</strong>.</p>
+        <p>The account number and sort code we hold for you are unchanged — only the name was
+          corrected, so a payment is not refused by your bank over a spelling.</p>
+        <p style="font-size:13px;color:#475569">If that is not the name on your account, or you did not
+          expect this message, please ring us on ${esc(COMPANY.phone)} and we will put it right before
+          the next payment run.</p>`),
+    }),
+  },
   // ── THE OWNER'S OWN ALERTS (slice G, 2026-10-30) ──────────────────────────────────────────────
   // Four messages from GreaseDesk to GreaseDesk. They are `security: true` for a narrow reason:
   // that flag is what stops a send counting against a garage's SMS allowance and what exempts it

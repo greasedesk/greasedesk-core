@@ -108,13 +108,33 @@ export type PayeeProposal = {
  * THE MESSAGES ARE FOR THE PERSON TYPING. "Enter the eight digits of your account number" is
  * actionable; "invalid account_number" is a developer talking to themselves.
  */
+/**
+ * ── THE NAME ON ITS OWN, because two callers now ask about it (owner, 2026-11-01) ───────────────
+ * The affiliate proposing a payee, and the owner CORRECTING a name that was typed wrong. The second
+ * one may touch the name and nothing else, so it cannot go through refusePayee — which would demand
+ * a sort code and an account number it is deliberately not being given.
+ *
+ * ONE RULE, TWO CALLERS, rather than a second length check written out beside the first: the pair
+ * that drifts is always the one that was copied because the shapes did not quite fit.
+ *
+ * NO FORMAT RULE BEYOND LENGTH, and that is deliberate. A bank account name is whatever the bank
+ * holds — initials, an ampersand, a trading name, an apostrophe, a second language — and a
+ * character class here would refuse a real person's real account. The control on this field is a
+ * person reading it beside the digits, which is why the screen puts them next to each other.
+ */
+export function refuseAccountName(raw: string | null | undefined): string | null {
+  const name = String(raw ?? '').trim();
+  if (name.length < 2) return 'Enter the name on the account, exactly as the bank holds it.';
+  if (name.length > 140) return 'That account name is too long for a bank transfer.';
+  return null;
+}
+
 export function refusePayee(p: PayeeProposal): string | null {
   if (!PAYEE_KINDS.includes(p.payeeKind as PayeeKind)) {
     return 'Choose whether we pay you or someone you nominate.';
   }
-  const name = String(p.accountName ?? '').trim();
-  if (name.length < 2) return 'Enter the name on the account, exactly as the bank holds it.';
-  if (name.length > 140) return 'That account name is too long for a bank transfer.';
+  const nameRefusal = refuseAccountName(p.accountName);
+  if (nameRefusal) return nameRefusal;
 
   const sort = normaliseSortCode(p.sortCode);
   if (sort.length !== SORT_CODE_DIGITS) return `Enter the ${SORT_CODE_DIGITS} digits of the sort code.`;

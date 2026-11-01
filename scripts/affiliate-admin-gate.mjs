@@ -44,6 +44,9 @@ const bcrypt = (await import('/Users/hugh/Developer/greasedesk-core/node_modules
 const { underPath, urlUnder } = await import('../lib/anchored-match.ts');
 const AF = await import('../lib/affiliate.ts');
 const ADMIN = await import('../lib/affiliate-admin.ts');
+const PADMIN = await import('../lib/payee-admin.ts');
+const PAYEE = await import('../lib/payee.ts');
+const PF = await import('../lib/phone-format.ts');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
@@ -62,7 +65,14 @@ const sweep = async () => {
     await prisma.commissionEntry.deleteMany({ where: { party_id: { in: reps } } }).catch(() => {});
     await prisma.tenantAffiliateTerms.deleteMany({ where: { affiliate_id: { in: reps } } }).catch(() => {});
     await prisma.twoFactorSecret.deleteMany({ where: { subject_type: 'rep', subject_id: { in: reps } } }).catch(() => {});
+    // THE PAYEE REQUEST AND THE "we corrected your name" ROW this gate provokes. RepPayeeRequest is
+    // onDelete: Restrict against Rep, so the Rep delete below fails while one exists.
+    await prisma.repPayeeRequest.deleteMany({ where: { rep_id: { in: reps } } }).catch(() => {});
+    await prisma.superAdminAudit.deleteMany({ where: { target_rep_id: { in: reps } } }).catch(() => {});
   }
+  await prisma.notificationLog.deleteMany({
+    where: { template: 'affiliate_payee_name_corrected', recipient: { startsWith: 'zzad-' } },
+  }).catch(() => {});
   if (groups.length) {
     await prisma.commissionEntry.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
     await prisma.tenantAffiliateTerms.deleteMany({ where: { group_id: { in: groups } } }).catch(() => {});
@@ -268,6 +278,171 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-testid="affiliate-suspended-badge"]'), null, { timeout: 30000 }).catch(() => {});
   check('and pressing Unsuspend puts it back',
     (await prisma.rep.findUnique({ where: { id: aff.id }, select: { suspended_at: true } }))?.suspended_at === null);
+
+  // ── THE CARD SAYS WHOSE ACCOUNT IT IS, AND THE NAME CAN BE CORRECTED ───────────────────────
+  /**
+   * The owner's report (2026-11-01): the card showed `••••6635` and nothing else, so the question
+   * somebody is actually asking at a payment run — "is this the person I think I am paying?" —
+   * could only be answered by REVEALING the digits, which writes an audit row for a look nobody
+   * needed. The name is stored readable precisely because it has to be printed on a payment.
+   *
+   * THE PLANTED CIPHERTEXT IS NOT REAL CIPHERTEXT, and that is part of the subject. Nothing on
+   * either path below opens it — correcting a name must never decrypt — so a `v1:` shaped string
+   * is enough, and the clause that reads it back byte-for-byte is what proves the digits were not
+   * touched. A reveal is proved in affiliate-portal-gate, with the real key.
+   */
+  console.log('\n— and the card says whose account it is —');
+  const WRONG_NAME = `${PREFIX} Mistyped Nmae`;
+  const RIGHT_NAME = `${PREFIX} Corrected Name`;
+  const FAKE_SORT = 'v1:zzadiv:zzadtag:zzadsortcipher';
+  const FAKE_ACCT = 'v1:zzadiv:zzadtag:zzadacctcipher';
+  await prisma.rep.update({
+    where: { id: aff.id },
+    data: {
+      bank_account_name: WRONG_NAME, bank_sort_code: FAKE_SORT,
+      bank_account_number: FAKE_ACCT, bank_account_last4: '6635',
+    },
+  });
+  await page.goto(`${ER}/superadmin/affiliates`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-testid="affiliate-list"]', { timeout: 30000 }).catch(() => {});
+  const card = page.locator('[data-testid="affiliate-row"]', { hasText: `${PREFIX} Affiliate` });
+  const heldText = await card.locator('[data-testid="payee-held"]').innerText().catch(() => '');
+  const nameOnCard = await card.locator('[data-testid="payee-held-name"]').innerText().catch(() => '');
+  check('the held account shows its NAME beside the four digits',
+    /6635/.test(heldText) && nameOnCard.trim() === WRONG_NAME,
+    `${heldText.trim()} · ${nameOnCard.trim() || 'NO NAME ON THE CARD'}`);
+  check('  …without revealing anything: no reveal was recorded for showing it',
+    (await prisma.superAdminAudit.count({ where: { action: 'rep.payee_revealed', target_rep_id: aff.id } })) === 0,
+    'the name is plaintext by design; reading it must not write a reveal row');
+  /**
+   * AND THE MOBILE IS DIALABLE. The row carries phone_e164 — 447700900333 — which is a number you
+   * have to transcribe by eye before you can ring it, on the screen where you decide to ring. The
+   * RAW form must be absent, not merely the formatted one present: a clause that only looked for
+   * the pretty version would pass on a row printing both.
+   */
+  const cardText = await card.innerText().catch(() => '');
+  check('the mobile is formatted the way the alerts format it',
+    cardText.includes(PF.formatPhone('447700900333')) && !cardText.includes('447700900333'),
+    `${PF.formatPhone('447700900333')} — raw form ${cardText.includes('447700900333') ? 'STILL THERE' : 'gone'}`);
+
+  console.log('\n— and a mistyped account name can be corrected, without touching the digits —');
+  // THE PROMPT IS ANSWERED, which is how an operator uses it: window.prompt with a value.
+  page.once('dialog', (d) => d.accept(RIGHT_NAME));
+  const nameResponse = page.waitForResponse((r) => urlUnder(r.url(), '/api/superadmin/payee-request'), { timeout: 30000 });
+  await card.locator('[data-testid="payee-edit-name"]').click();
+  const nameBody = await (await nameResponse).json().catch(() => ({}));
+  await page.waitForSelector('[data-testid="affiliate-msg"]', { timeout: 30000 }).catch(() => {});
+  const held = await prisma.rep.findUnique({
+    where: { id: aff.id },
+    select: { bank_account_name: true, bank_sort_code: true, bank_account_number: true, bank_account_last4: true },
+  });
+  check('pressing Edit name corrects the name we hold',
+    nameBody.ok === true && held?.bank_account_name === RIGHT_NAME,
+    `${held?.bank_account_name} — read back from the database, not from the screen that asked`);
+  check('  …and the sort code and account number are byte-for-byte what they were',
+    held?.bank_sort_code === FAKE_SORT && held?.bank_account_number === FAKE_ACCT
+    && held?.bank_account_last4 === '6635',
+    'the update names ONE column; there is no sort code in the argument for a caller to pass');
+  const nameAudit = await prisma.superAdminAudit.findFirst({
+    where: { action: 'rep.payee_name_corrected', target_rep_id: aff.id },
+    orderBy: { created_at: 'desc' },
+  });
+  check('  …audited with BOTH values, by the operator who pressed it',
+    nameAudit?.detail?.from === WRONG_NAME && nameAudit?.detail?.to === RIGHT_NAME
+    && nameAudit?.operator_user_id === op.id,
+    `from ${JSON.stringify(nameAudit?.detail?.from)} to ${JSON.stringify(nameAudit?.detail?.to)}`);
+  check('    …and the old value is the one thing an audit row of this kind cannot do without',
+    !!nameAudit && nameAudit.detail?.from !== nameAudit.detail?.to,
+    '"the name was corrected" without the old name cannot answer the question somebody will ask');
+  /**
+   * THE AFFILIATE IS TOLD — through the ONE chokepoint, which is what the NotificationLog row
+   * proves. On the gate database the Environment marker REFUSES every send, so the row is `skipped`
+   * and the screen says they were NOT emailed. That is the case worth asserting: a send that did
+   * not happen must reach the owner as a sentence, because it is the one that needs a phone call.
+   */
+  const told = await prisma.notificationLog.findFirst({
+    where: { template: 'affiliate_payee_name_corrected', recipient: 'zzad-aff@example.invalid' },
+    orderBy: { created_at: 'desc' },
+    select: { status: true, error: true, scope: true },
+  });
+  check('  …and the affiliate is told through sendNotification, not around it',
+    !!told && told.scope === 'platform',
+    told ? `${told.status}${told.error ? ` — ${told.error}` : ''}` : 'NO NotificationLog row: the send never went through the chokepoint');
+  const screenMsg = await page.locator('[data-testid="affiliate-msg"]').innerText().catch(() => '');
+  check('  …and the screen says which of the two happened',
+    told?.status === 'skipped'
+      ? /NOT emailed/.test(screenMsg) && nameBody.emailed === 'not_sent'
+      : /emailed about it/.test(screenMsg) && nameBody.emailed === 'sent',
+    `${screenMsg.trim()} · emailed=${nameBody.emailed} · row=${told?.status}`);
+
+  /** THE REFUSALS, driven through the function so every branch is reached without a browser. */
+  const asOwner = { operatorUserId: op.id };
+  const tooShort = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'held', repId: aff.id }, newName: 'A', ...asOwner });
+  check('a name of one character is refused',
+    tooShort.ok === false && tooShort.code === 'bad_name', JSON.stringify(tooShort).slice(0, 90));
+  check('  …by the SAME rule the affiliate\u2019s own form applies',
+    PAYEE.refuseAccountName('A') === tooShort.message
+    && PAYEE.refusePayee({ payeeKind: 'self', accountName: 'A', sortCode: '110300', accountNumber: '87654321' }) === tooShort.message,
+    'one rule, two callers — the copy that drifts is the one made because the shapes did not fit');
+  const sameAgain = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'held', repId: aff.id }, newName: ` ${RIGHT_NAME} `, ...asOwner });
+  check('  …and the name it already holds is refused rather than audited',
+    sameAgain.ok === false && sameAgain.code === 'unchanged'
+    && (await prisma.superAdminAudit.count({ where: { action: 'rep.payee_name_corrected', target_rep_id: aff.id } })) === 1,
+    'a row saying a name changed from X to X is a record of an act that did not happen');
+  /**
+   * TWO REFUSALS, NOT ONE WITH TWO ACCEPTABLE CODES. "We hold nothing for this affiliate" and "this
+   * is not an affiliate" are different facts, and a clause that took either code for either case
+   * would pass while the function answered the wrong one.
+   */
+  const bankless = await prisma.rep.create({
+    data: { party_type: 'affiliate', email: 'zzad-nobank@example.invalid', name: `${PREFIX} No Bank`, ref_code: `${PREFIX}CODE2` },
+    select: { id: true },
+  });
+  const noDetails = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'held', repId: bankless.id }, newName: 'Somebody Else', ...asOwner });
+  check('  …and an affiliate we hold nothing for has no name to correct',
+    noDetails.ok === false && noDetails.code === 'nothing_held'
+    && (await prisma.rep.findUnique({ where: { id: bankless.id }, select: { bank_account_name: true } }))?.bank_account_name === null,
+    `${noDetails.code} — a name beside no account is the state Rep_bank_chk exists to prevent`);
+  const notAffiliate = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'held', repId: rep.id }, newName: 'Somebody Else', ...asOwner });
+  check('  …and a RESELLER is not an affiliate, which is a different refusal',
+    notAffiliate.ok === false && notAffiliate.code === 'not_found',
+    `${notAffiliate.code} — both parties are the same table, so party_type is the only thing telling them apart`);
+
+  /** A PENDING REQUEST is the other subject, and it is corrected in its own row. */
+  const pendingReq = await prisma.repPayeeRequest.create({
+    data: {
+      rep_id: aff.id, payee_kind: 'self', account_name: `${PREFIX} Request Nmae`,
+      sort_code_enc: FAKE_SORT, account_number_enc: FAKE_ACCT, account_last4: '7788', status: 'pending',
+    },
+    select: { id: true },
+  });
+  const fixedReq = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'request', requestId: pendingReq.id }, newName: `${PREFIX} Request Name`, ...asOwner });
+  const reqAfter = await prisma.repPayeeRequest.findUnique({
+    where: { id: pendingReq.id },
+    select: { account_name: true, sort_code_enc: true, account_number_enc: true, status: true },
+  });
+  check('a pending request\u2019s name is corrected in its own row, digits untouched',
+    fixedReq.ok === true && reqAfter?.account_name === `${PREFIX} Request Name`
+    && reqAfter?.sort_code_enc === FAKE_SORT && reqAfter?.account_number_enc === FAKE_ACCT
+    && reqAfter?.status === 'pending',
+    `${reqAfter?.account_name} · still ${reqAfter?.status}`);
+  await prisma.repPayeeRequest.update({ where: { id: pendingReq.id }, data: { status: 'applied', decided_at: new Date() } });
+  const appliedReq = await PADMIN.correctPayeeName(prisma, { subject: { kind: 'request', requestId: pendingReq.id }, newName: 'Too Late', ...asOwner });
+  check('  …and an APPLIED request is not editable: that row is the record of what was asked for',
+    appliedReq.ok === false && appliedReq.code === 'not_pending' && /correct the name we hold/.test(appliedReq.message),
+    `${appliedReq.code} — and it says where to go instead`);
+
+  /** AND THE ENDPOINT WILL NOT GUESS WHICH SUBJECT IT WAS GIVEN. */
+  const ambiguous = await page.evaluate(async ([a, r]) => {
+    const res = await fetch('/api/superadmin/payee-request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'correct_name', newName: 'Either One', affiliateId: a, requestId: r }),
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }, [aff.id, pendingReq.id]);
+  check('naming both a request and an affiliate is refused rather than resolved',
+    ambiguous.status === 400 && /one subject/i.test(String(ambiguous.body?.message)),
+    `${ambiguous.status} ${JSON.stringify(ambiguous.body?.message)} — guessing would correct the wrong row`);
 
   // AND IT IS OWNER-ONLY. erMinRole falls back to 'support' for an unregistered href, so this is
   // also the clause that proves the nav line exists.

@@ -103,7 +103,7 @@ function Section({ title, children, testId }: { title: string; children: React.R
   );
 }
 
-function PayeeForm({ state, masked, accountName }: PortalData['payee']) {
+function PayeeForm({ state, masked, accountName, holdsAccount }: PortalData['payee']) {
   const [kind, setKind] = useState<string>(PAYEE_KINDS[0]);
   const [accountNameIn, setAccountName] = useState('');
   const [sortCode, setSortCode] = useState('');
@@ -141,8 +141,15 @@ function PayeeForm({ state, masked, accountName }: PortalData['payee']) {
 
   return (
     <>
+      {/* THE WAITING SENTENCE TURNS ON WHETHER WE HOLD AN ACCOUNT, not on the state alone: 'pending'
+          is the same state whether this is their first set or a change, and promising to pay "the
+          account we already hold" to somebody who has never given us one names nothing. */}
       <p className="mt-2 text-sm text-muted" data-testid="payee-state">
-        {state === 'none' ? PAYEE_COPY.none : state === 'pending' ? PAYEE_COPY.pending : PAYEE_COPY.held}
+        {state === 'none'
+          ? PAYEE_COPY.none
+          : state === 'pending'
+            ? (holdsAccount ? PAYEE_COPY.pendingWithHeld : PAYEE_COPY.pending)
+            : PAYEE_COPY.held}
       </p>
       {masked && (
         <p className="mt-2 text-sm text-ink" data-testid="payee-masked">
