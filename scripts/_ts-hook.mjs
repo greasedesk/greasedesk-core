@@ -38,3 +38,42 @@ export async function resolve(spec, ctx, next) {
 
   return next(spec, ctx);
 }
+
+/**
+ * ── AND LOAD .tsx, WHICH NODE CANNOT ────────────────────────────────────────────────────────────
+ * `node --experimental-strip-types` removes TYPE ANNOTATIONS. JSX is not an annotation, it is
+ * syntax with a runtime meaning, so a `.tsx` file fails with
+ *
+ *   TypeError: Unknown file extension ".tsx"
+ *
+ * `.tsx` has been in the EXTS list above since this hook was written, so the resolver would hand a
+ * gate a component and the loader would then refuse it. The consequence was quiet: a component's
+ * PRINTED WORDS could only be asserted through a browser, which means a dev server, a tenant and a
+ * fixture — so in practice they were asserted by reading the source and hoping, or not at all.
+ *
+ * Transpiled with the repo's own `typescript`, which is already a dependency of `npm run
+ * type-check`, and with its own tsconfig's JSX setting left alone: this emits the classic
+ * `React.createElement` form, so a gate renders with `react-dom/server` and no build step.
+ *
+ * SCRIPTS ONLY, like the rest of this file. Nothing in the app loads this hook, and a transform
+ * that is wrong here cannot reach a page — Next does its own.
+ */
+export async function load(url, ctx, next) {
+  if (!url.endsWith('.tsx')) return next(url, ctx);
+  const { readFileSync } = await import('node:fs');
+  const ts = (await import('typescript')).default;
+  const source = readFileSync(fileURLToPath(url), 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    fileName: fileURLToPath(url),
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+      jsx: ts.JsxEmit.React,
+      // Erased, never emitted: a gate importing a component must not acquire its type-only imports
+      // as runtime ones, which is how a presentational component starts dragging lib/db.
+      verbatimModuleSyntax: false,
+      esModuleInterop: true,
+    },
+  });
+  return { format: 'module', source: outputText, shortCircuit: true };
+}

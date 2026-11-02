@@ -17,6 +17,7 @@
  * REGISTRATION ITSELF CHANGED. State stays with the form; the policy lives here, once.
  */
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
+import type { RefreshOutcome } from '@/lib/mot-refresh';
 import { normalizeReg, sameRegistration } from '@/lib/vehicle-identity';
 
 export type LookupVehicleFields = {
@@ -39,7 +40,10 @@ export type VehicleLookupResult =
        *  Empty array when there are none; absent only from the DVSA branch, which has no cards. */
       openCards?: OpenCardSummary[] | null;
       /** The car's own MOT record — records hits only. DISPLAY ONLY (see StoredMot). */
-      storedMot?: StoredMot | null }
+      storedMot?: StoredMot | null;
+      /** OUR id for this car — records hits only, and a HANDLE rather than a value to display.
+       *  It is what lets a caller ask DVSA about the car it has just found (refreshMotFromDvsa). */
+      vehicleId?: string | null }
   | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
@@ -83,6 +87,9 @@ export async function lookupVehicleByReg(
           // A returning car used to arrive with NOTHING about its MOT, so a booking form could not
           // warn about the very cars it knows best. Display-only; see StoredMot.
           storedMot: (data.storedMot ?? null) as StoredMot | null,
+          // And now it arrives with a HANDLE, so the caller can go and check that record rather
+          // than only display it. See refreshMotFromDvsa below.
+          vehicleId: typeof data.vehicleId === 'string' ? data.vehicleId : null,
         };
       }
     }
@@ -108,6 +115,80 @@ export async function lookupVehicleByReg(
   } catch {
     return { ok: false, reg, reason: 'error' }; // network/parse failure — caller shows "enter manually"
   }
+}
+
+/**
+ * ASK DVSA ABOUT A CAR WE ALREADY HOLD, AND SAY WHAT CAME BACK.
+ *
+ * ── THE DEFECT THIS CLOSES ──────────────────────────────────────────────────────────────────────
+ * lookupVehicleByReg checks OUR RECORDS FIRST and returns the moment they answer — correctly, since
+ * a returning car brings its owner and its whole history with it, and DVSA knows neither. The cost
+ * was that a known car's MOT was whatever we last happened to store. LC09XFU showed a booking form
+ * "MOT expired 2026-07-23" for a car that had been tested since, and pressing Look up again could
+ * not help: the records branch never reaches DVSA, by design.
+ *
+ * So the fix is not to reorder the lookup — that would throw away the owner on every returning car
+ * to re-learn a make and model we already have. It is a SECOND, CONDITIONAL call, made only when
+ * what we hold has stopped being evidence about today (lib/mot-refresh::motCheckReason).
+ *
+ * ── IT GOES THROUGH THE EXISTING ENDPOINT, NOT A NEW ONE ────────────────────────────────────────
+ * /api/mot-refresh already does exactly this and does three things a new path would have had to
+ * re-learn: motFieldsToWrite (refresh-don't-fill, an earlier expiry overwrites, an absence never
+ * erases), the odometer history that the mileage rate depends on, and the rule that a lookup which
+ * failed stamps NOTHING — not the fields and not mot_checked_at. Its reply is already shaped for a
+ * surface to render.
+ *
+ * ── NON-THROWING, AND IT NEVER REPORTS A CHECK IT DID NOT GET ───────────────────────────────────
+ * A thrown fetch comes back as `no_answer` with its own sentence, so the caller has ONE shape to
+ * handle — but `checkedAt` is null for both silences, and a caller that stamps a banner from it
+ * cannot claim a verification that did not happen. The two silences are told apart in the words
+ * because they are fixed differently: DVSA not answering is theirs, a fetch not completing is ours.
+ */
+export type MotRefreshReply = { outcome: RefreshOutcome; checkedAt: string | null };
+
+export async function refreshMotFromDvsa(vehicleId: string): Promise<MotRefreshReply> {
+  const silent = (sentence: string): MotRefreshReply => ({
+    // stillDue:true because nothing was learned, which cannot have moved the band — the same
+    // reading lib/mot-refresh takes for its own no_answer.
+    outcome: { kind: 'no_answer', sentence, expiry: null, stillDue: true },
+    checkedAt: null,
+  });
+  try {
+    const r = await fetch('/api/mot-refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vehicleId }), cache: 'no-store',
+    });
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    if (!j?.outcome) return silent('The check didn’t complete — nothing was learned.');
+    return { outcome: j.outcome as RefreshOutcome, checkedAt: typeof j.checkedAt === 'string' ? j.checkedAt : null };
+  } catch {
+    return silent('The check didn’t complete — nothing was learned.');
+  }
+}
+
+/**
+ * WHAT THE RECORD BECOMES AFTER A CHECK — and it is a function here for the reason the rest of this
+ * module's policy is: state stays with the form, the rule lives in one place.
+ *
+ * Inline in the surface it was three lines of `setState` that no test could reach without a browser,
+ * and the three lines carried the only rule that matters: ONLY AN ANSWER CHANGES ANYTHING. Both
+ * silences — DVSA not answering, and the fetch not completing — carry `checkedAt: null`, and the
+ * record must come back BYTE-IDENTICAL, so the banner above it says exactly what it said before.
+ * Writing a local clock here instead would make the screen claim a verification nobody performed,
+ * on the screen where somebody is deciding whether a car may legally be driven to them.
+ *
+ * `firstRegistered` and `year` are carried through untouched: they came from our own record, the
+ * refresh says nothing about them, and losing them would change the banner's reading of a car with
+ * no MOT (lib/mot-banner tells a probably-new car from an unknown one by exactly those two fields).
+ */
+export function applyMotRefresh(prev: StoredMot | null, reply: MotRefreshReply): StoredMot | null {
+  if (!reply.checkedAt) return prev;
+  return {
+    motExpiry: reply.outcome.expiry,
+    motCheckedAt: reply.checkedAt,
+    firstRegistered: prev?.firstRegistered ?? null,
+    year: prev?.year ?? null,
+  };
 }
 
 // ── THE MERGE POLICY, AND WHEN AN ANSWER STOPS BEING THIS CAR'S ─────────────────────────────────

@@ -214,7 +214,7 @@ const TIERS = {
     // password. Drives a lookup that genuinely throws (a NUL byte Postgres refuses) rather than
     // breaking the database to arrange one.
     'sign-in-failure-gate',
-    'mot-banner-gate',
+    'mot-banner-gate', 'mot-lookup-refresh-gate',
     'mot-urgency-gate',
     'customer-car-gate',
     'sale-invoice-gate',

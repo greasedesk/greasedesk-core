@@ -25,6 +25,64 @@
  * directions: say exactly what is known, and no more.
  */
 
+// ── IS WHAT WE HOLD EVIDENCE ABOUT TODAY? ───────────────────────────────────────────────────────
+/**
+ * A FOURTH WINDOW, ON A DIFFERENT AXIS FROM THE OTHER THREE.
+ *
+ * lib/mot-banner declares three — MOT_SOON_DAYS 28, MOT_URGENT_DAYS 7, WINDOW_DAYS 30 — and says
+ * they live together because all three are statements about how CLOSE an MOT is. This one is not:
+ * it is about how OLD our evidence is. A reader who finds it beside those three and assumes it is a
+ * fourth proximity rule has the wrong idea of it, so it lives here, in the module about refreshing,
+ * with a pointer left there.
+ *
+ * SEVEN DAYS. Any stored MOT date is stale the moment it is stored — the car can be tested anywhere
+ * and we hear about it only when we look (pages/api/mot-refresh says so at the top). So this is not
+ * "how long a date stays true", which is no time at all; it is how long ago a check can have been
+ * and still be worth more than another call to DVSA.
+ *
+ * It is also the ONLY throttle on the diary's lookup. One shared DVSA key serves every tenant with
+ * no cache, no rate limit and no cap of our own, and a 429 comes back indistinguishable from an
+ * unknown registration. A window of a week means pressing Look up on the same car four times in an
+ * afternoon costs one call, not four, and that property is the reason this is a window at all
+ * rather than "refresh on every records hit".
+ */
+export const MOT_CHECK_FRESH_DAYS = 7;
+
+/**
+ * WHY we would ask DVSA about this car — or null, meaning don't.
+ *
+ * THREE STATES AND NOT TWO, because the two reasons are not the same thing to a reader and will not
+ * stay the same thing to a caller. `never_checked` is the row nobody has ever asked about: typed or
+ * imported, and the banner already has its own words and its own button for it. `stale` is a row we
+ * did verify, just not recently enough for it to be evidence about today. A boolean would make the
+ * daily sweep — which wants to treat those two differently, one being a backlog and the other a
+ * rotation — re-derive the distinction from the columns it was handed.
+ *
+ * A LOOKUP THAT FAILED LEAVES mot_checked_at ALONE (lib/dvsa::motClientWrite), so "checked" here
+ * always means DVSA answered, and the age of that stamp is the age of real evidence. That is the
+ * whole reason this can be a one-column rule.
+ */
+export type MotCheckReason = 'never_checked' | 'stale';
+
+export function motCheckReason(
+  v: { motCheckedAt: Date | string | null | undefined },
+  now: Date,
+  freshDays: number = MOT_CHECK_FRESH_DAYS,
+): MotCheckReason | null {
+  const raw = v?.motCheckedAt;
+  if (!raw) return 'never_checked';
+  const d = raw instanceof Date ? raw : new Date(raw);
+  // AN UNREADABLE STAMP IS NOT A FRESH ONE. A column that cannot be parsed tells us nothing about
+  // when we last looked, and the safe reading of "nothing" is that nobody has.
+  if (!Number.isFinite(d.getTime())) return 'never_checked';
+  // Day-grained, like every other day count here (lib/calendar-days), and FUTURE-TOLERANT: a stamp
+  // ahead of now is clock skew, not evidence from tomorrow, and must not read as stale.
+  const age = calendarDayDiff(d, now);
+  return age > freshDays ? 'stale' : null;
+}
+
+import { calendarDayDiff } from '@/lib/calendar-days';
+
 export type RefreshKind = 'changed' | 'unchanged' | 'no_answer';
 
 export type RefreshOutcome = {

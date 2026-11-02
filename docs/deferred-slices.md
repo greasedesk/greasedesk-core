@@ -1589,3 +1589,92 @@ exported `expectedCachePennies` — rather than by repointing a gate at producti
 earlier incidents were — across **2047 invoices · 1123 payment rows · 1 refund**: cache matches
 ledger everywhere, nothing carries a paid figure without a row, and all 188 reconstructed rows are
 labelled and keyed as such, both ways.
+
+## Keeping stored MOTs fresh — PROPOSAL, not built (2026-11-02)
+
+The diary's Look up now refreshes a known car's MOT when what we hold has stopped being evidence
+about today (`lib/mot-refresh::motCheckReason`, 7 days). That fixes the moment a booking is made. It
+does nothing for a car booked three weeks ago whose MOT was done elsewhere last Tuesday, and that is
+the remaining hole: the banner on the day reads against a date nobody has re-asked about.
+
+### What refreshes an MOT today, and what does not
+
+Three paths, all reactive, none scheduled:
+
+- the **marketing list** button, pressed beside a phone number;
+- the **stock page** button, on a car for sale;
+- `refreshMotForMint` at **invoice mint** — with no proximity condition, so every chargeable mint
+  already spends one DVSA call.
+
+There is no cron. `vercel.json` carries six and none of them is an MOT sweep.
+
+### Measured, production, 2026-11-02
+
+| tenant | cars | never checked | check stale (>7d) | fresh |
+|---|---|---|---|---|
+| The Mini & BMW Specialist | 365 | 9 | **327** | 29 |
+| Kingsford (demo) | 619 | 608 | 11 | 0 |
+| Marketbridge (demo) | 624 | 615 | 3 | 6 |
+| ZZ / ZZUS / G-Force | 75 | 72 | 3 | 0 |
+
+`mot_checked_at` across the whole estate spans **2026-08-03 → 2026-11-02**: the bulk were stamped by
+the one-off August sweep and nothing has moved them since. So on the one real garage, **90% of the
+fleet's checks are older than a week** — which is the state that produced LC09XFU.
+
+And the number that decides the design: **cars with a booking ahead AND a check that is not fresh —
+6 within 3 days, 8 within 7, 8 within 14.** Across the entire estate. A booking-driven sweep costs
+roughly **8 calls a day**, because its size is set by bookings and not by fleet size.
+
+### The recommendation
+
+**A daily cron, booking-driven, 7-day horizon.** `/api/cron/mot-freshen`, beside the six already in
+`vercel.json`, early enough to be done before a garage opens.
+
+Each run: for every tenant, the distinct vehicles with a `JobCard.start_at` inside the horizon whose
+`motCheckReason` is non-null, oldest check first, and call the SAME chokepoint `/api/mot-refresh`
+uses — `dvsaLookup` → `motFieldsToWrite` → the `mot_checked_at` stamp → `recordOdometerReadings`.
+Not a fourth copy of the write rule: refresh-don't-fill, an earlier expiry overwrites, an absence
+never erases, and a miss stamps nothing.
+
+Expected volume ~8/day today, and it scales with bookings — a garage doing 40 cars a week asks about
+40 cars a week, at most once each per the freshness window.
+
+**Skip `is_demo` tenants.** Not for the usual reason: `is_demo` gates sends, not lookups, and under
+the 2026-11-02 ruling a demo is a full participant in jobs that act within it. The reason is the
+quota. Kingsford and Marketbridge hold 1,243 cars with invented registrations; every one would 404
+at DVSA, which is ~1,200 calls on a shared key to learn nothing. A 404 is also indistinguishable
+from a rate-limit (see below), so the noise would arrive in the shape of the signal.
+
+### The prerequisite, and it is not optional
+
+**`dvsaLookup` cannot tell a 429 from an unknown registration.** `lib/dvsa.ts:285` logs the status
+and returns `null` for a 404, a 403, a 429, a 5xx, a timeout and a missing credential alike. Every
+caller is correct to treat that as "no news", and the three button paths are fine with it.
+
+A sweep is not. A sweep that hits the rate limit will keep calling, record nothing, and leave every
+affected car looking like an unknown plate — and on the diary banner a rate-limited car reads as a
+car DVSA has never heard of. So before any sweep: `dvsaLookup` returns the REASON alongside the null,
+at least `rate_limited | not_found | auth | timeout | unconfigured`, the sweep stops on
+`rate_limited`, and a stopped run says so. That is also the fix for the standing
+`dvsa-shared-key-exhaustion` thread — one key, all tenants, no cache, no throttle, no cap.
+
+### Three decisions for the owner
+
+1. **The horizon.** 7 days is the recommendation. The diary fix already covers the moment of
+   booking, so the sweep's job is cars booked earlier whose check has since aged; a week ahead means
+   every car gets re-asked as its day approaches, and 3 vs 7 vs 14 days is 6 vs 8 vs 8 cars today.
+2. **The cap, and that a capped run is a different outcome from a finished one.** A per-run ceiling
+   with oldest-check-first draining, round-robin across tenants so one busy garage cannot consume
+   it, and the cap REPORTED. A run that stopped early and a run that had nothing to do must not look
+   alike.
+3. **Whether the 327 stale TMBS cars get a backfill pass.** The sweep only ever touches cars with a
+   booking, so a car that never books is never refreshed — correct for the diary, wrong for the leads
+   board, which is built on stored expiries. Option B, one pass over the 98 cars whose stored expiry
+   falls inside the 30-day leads window, would fix the board. That is a separate slice and should not
+   ride along with the cron.
+
+### Rejected: refresh when a screen renders a stale MOT
+
+A GET that writes, on a page anyone can reload, with volume set by how often people look rather than
+by how many cars there are. The diary fix covers the one moment that matters — somebody is deciding
+whether this car may legally be driven here — and does it behind an explicit button press.

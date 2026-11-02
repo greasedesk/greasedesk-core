@@ -47,6 +47,10 @@ export const MOT_SOON_DAYS = 28;
  *
  * It lives here, beside MOT_SOON_DAYS, because both are statements about how close an MOT is and a
  * reader comparing them must find them in one place.
+ *
+ * A FOURTH constant exists and is deliberately NOT here: MOT_CHECK_FRESH_DAYS in lib/mot-refresh is
+ * about how old our EVIDENCE is, not how close the expiry is. Different axis, different module —
+ * listed here only so a reader who comes looking for it does not conclude there are three.
  */
 export const MOT_URGENT_DAYS = 7;
 

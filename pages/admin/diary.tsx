@@ -58,7 +58,8 @@ import MotBanner from '@/components/MotBanner';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill, type StoredMot } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, refreshMotFromDvsa, applyMotRefresh, applyLookup, staleAgainst, clearStale, type LookupFill, type StoredMot } from '@/lib/vehicle-lookup-client';
+import { motCheckReason } from '@/lib/mot-refresh';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -1705,6 +1706,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
    *  which is DVSA's answer: this is never sent back on save, because writing our own record
    *  back would stamp mot_checked_at and claim a verification nobody performed. Banner only. */
   const [storedMot, setStoredMot] = useState<StoredMot | null>(null);
+  // THE SECOND PHASE OF A LOOKUP, held separately from lookBusy so the form is usable the instant
+  // the records hit lands: the fields are already filled while DVSA is still being asked.
+  const [motBusy, setMotBusy] = useState(false);
+  const [motMsg, setMotMsg] = useState<string | null>(null);
   const [vin, setVin] = useState(''); const [phone, setPhone] = useState(''); const [email, setEmail] = useState('');
   // Vehicle data — make/colour/year/fuel/engine auto-fill from DVLA VES on a new reg; model is manual.
   const [make, setMake] = useState(''); const [model, setModel] = useState(''); const [vColour, setVColour] = useState('');
@@ -1794,6 +1799,36 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     // the MOT record — but no longer thrown away.
     if (r.mot) setMot(r.mot);
     setLookMsg({ text: t(r.source === 'records' ? 'create.lookupRecord' : 'create.lookupDvsa'), ok: true });
+
+    // ── AND IF WHAT WE HOLD IS NOT EVIDENCE ABOUT TODAY, ASK DVSA NOW ──────────────────────────
+    // A records hit returns and never reaches DVSA — right for the owner and the history, wrong for
+    // the MOT, which is the one field on this form that can have changed somewhere else since we
+    // last looked. LC09XFU read "expired 2026-07-23" on a car that had been tested since, and
+    // pressing Look up again could not help.
+    //
+    // The CONDITION is the throttle, and it is the whole reason this is safe to put on a button a
+    // garage presses all day: one shared DVSA key, no cache and no cap of our own, so a window of a
+    // week (lib/mot-refresh::MOT_CHECK_FRESH_DAYS) means the same car four times in an afternoon
+    // costs one call. The DVSA branch above is not included — it has just been to DVSA.
+    if (r.source === 'records' && r.vehicleId) {
+      const why = motCheckReason({ motCheckedAt: r.storedMot?.motCheckedAt ?? null }, new Date());
+      if (why) {
+        setMotBusy(true); setMotMsg(null);
+        try {
+          const reply = await refreshMotFromDvsa(r.vehicleId);
+          setMotMsg(reply.outcome.sentence);
+          // ONLY ON AN ANSWER, AND ONLY FROM THE SERVER'S OWN STAMP — the rule itself is
+          // lib/vehicle-lookup-client::applyMotRefresh, where it can be asserted without a
+          // browser. A silence returns the record unchanged, so the banner keeps saying what it
+          // said; a local `new Date()` here would claim a verification nobody performed.
+          setStoredMot((prev) => applyMotRefresh(prev, reply));
+        } finally {
+          // CLEARED IN A FINALLY, as every busy flag here is: this component is not remounted by a
+          // same-URL refresh, so a flag left set stays set.
+          setMotBusy(false);
+        }
+      }
+    }
   }
   // Start: seeded from the clicked cell, or user-picked (pickWhen). DURATION is what the job
   // create sends — hours × 60, straight through, with no end time in the middle to be re-derived
@@ -1897,9 +1932,18 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                   year: storedMot?.year ?? (year.trim() ? Number(year) : null),
                 }}
                 bookingAt={startAt || null}
-                lookupBusy={lookBusy || busy}
+                lookupBusy={lookBusy || motBusy || busy}
                 onLookup={lookupKeyFor(vehicleLookupProvider) === 'registration' ? lookupVehicle : undefined}
               />
+            )}
+            {/* WHAT THE DVSA CHECK SAID, in its own words — lib/mot-refresh owns the sentence so
+                this surface and the marketing list cannot describe the same outcome differently.
+                Printed even when nothing was learned: silence after a check reads as confirmation.
+                (Not yet translated — the sentence is composed server-side; i18n debt, noted.) */}
+            {!!regCanon && (motBusy || motMsg) && (
+              <div className="text-xs text-muted" data-testid="create-mot-refresh">
+                {motBusy ? 'Checking the MOT with DVSA…' : motMsg}
+              </div>
             )}
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>
@@ -1925,6 +1969,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                     setVColour(values.colour); setFuel(values.fuel); setYear(values.year); setEngineCc(values.engineCc);
                     setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null });
                     setStoredMot(null);
+                    setMotMsg(null);   // another car's check result is not this car's
                     setNoShows(null); setDueItems(null); setOpenCards(null);
                     setFill(null);
                   }}

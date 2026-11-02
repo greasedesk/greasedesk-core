@@ -63,6 +63,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({
     found: true,
+    /**
+     * THE CAR'S ID, AND WHY IT IS OUT HERE RATHER THAN IN `vehicle`.
+     *
+     * `vehicle` is the PREFILL object — every key in it is a form field the client maps into state,
+     * and an id among them would be a field nobody fills. This is a handle, not a value to type.
+     *
+     * It is returned so the surface that has just found a known car can ask DVSA about it:
+     * /api/mot-refresh takes a vehicleId, and until now the one client path had no way to name the
+     * car it had just looked up. That is the whole of the defect LC09XFU showed — a records hit
+     * returned a stored expiry with no means of checking it. Tenant scope is unaffected: the id is
+     * only ever useful against endpoints that scope by group in their own WHERE, as mot-refresh does.
+     */
+    vehicleId: vehicle.id,
     vehicle: {
       registration: vehicle.registration, vin: vehicle.vin ?? '', mileage: vehicle.mileage_at_create ?? null,
       make: vehicle.make ?? '', model: vehicle.model ?? '', colour: vehicle.colour ?? '',
