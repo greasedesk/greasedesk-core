@@ -1732,3 +1732,52 @@ against the TYPE in `lib/dvsa`, not against a list.
 **Correcting wrong values.** Everything here fills blanks and replaces a model that merely repeats
 the make. Neither touches a populated field that is simply incorrect. That is a data-quality pass
 with its own rules and its own audit, and it should not be smuggled in behind a look-up button.
+
+---
+
+## The VIN paths still hand-roll the merge — AFTER THURSDAY
+
+Shipped 2026-11-02: every surface with a **registration** box goes through one function
+(`lib/vehicle-lookup-client::lookupAndFill`) — records first, then DVSA for the gaps, blanks only,
+and always a line about the MOT. Three surfaces, one rule, asserted on all three
+(`mot-lookup-refresh-gate` §9, `lookup-reset-gate` §2).
+
+The **VIN** paths beside them did not come along, and they are the same duplication one key over.
+
+### What is there now
+
+`lookupVehicleByVin` is called by the new-card page and the existing-card details pane, and each one
+merges the answer itself:
+
+```
+setForm((p2) => ({ ...p2, make: p2.make || r.vehicle.make, model: p2.model || r.vehicle.model, … }))
+```
+
+That is `applyLookup`'s blanks-only rule, written out by hand, twice. It is not wrong today. It is
+wrong in the three specific ways the registration paths were wrong before this week:
+
+1. **It does not remember what it filled.** No `LookupFill`, so `clearStale` cannot take it back
+   when the VIN changes — the exact defect that moved the merge into this module the first time.
+2. **A model echoing the make survives it.** `p2.model || r.vehicle.model` keeps "MINI" because the
+   column is not empty, which is the 58-car case `echoedKeys` exists for.
+3. **There is no line, and no diagnosis.** A VIN decode that fails is as silent as a DVSA call that
+   failed used to be, and `lib/vin-decode`'s failures are not named the way `DvsaFailure` now names
+   DVSA's.
+
+### Why it is a separate slice
+
+The VIN decoder is a **different provider on a different key**
+([[vehicle-lookup-providers]] — NHTSA vPIC, keyed on VIN, US) and it returns a different field set:
+no MOT, no colour, no mileage. So "always the MOT line" has no meaning on a VIN hit for a US car,
+and `isThinRecord` would be asking about fields that provider never supplies. The shared function
+would need a notion of **which gaps this provider could even fill**, which is a real design question
+and not a refactor.
+
+### The shape to aim for
+
+One entry point per *question*, not per provider: `lookupAndFill` already takes the caller's own form
+object and returns it filled, so a `byVin` sibling sharing the merge, the fill record and the
+clear-on-change rule is the small version. What must not happen is a third hand-rolled copy.
+
+Related: [[identical-by-construction]] (one side writes the merge, the other repeats it),
+[[completeness-clause-naming-convention]] (enumerate the callers, never a name pattern).
