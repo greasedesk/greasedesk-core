@@ -49,18 +49,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!v) return res.status(404).json({ message: 'Car not found.' });
 
   const before = iso(v.mot_expiry);
-  const data = await dvsaLookup(v.registration);
+  const r = await dvsaLookup(v.registration);
 
-  // ── A LOOKUP THAT FAILED STAMPS NOTHING ───────────────────────────────────────────────────────
-  // Not the fields, and not mot_checked_at. DVSA returns null for a 404, a 403, a 429, a timeout
-  // and an unconfigured credential alike — none of which is news about this car, and all of which
-  // would otherwise leave the row saying it had been checked.
-  if (!data) {
+  // ── A LOOKUP THAT FAILED STAMPS NOTHING, AND NOW SAYS WHY ─────────────────────────────────────
+  // Not the fields, and not mot_checked_at: none of these is news about this car, and all of them
+  // would otherwise leave the row saying it had been checked. What is new is `reason` — the sentence
+  // for a spent rate-limit window is not the sentence for a plate DVSA has never heard of, and this
+  // endpoint is the one a person watches while deciding whether to ring the customer.
+  if (!r.ok) {
     return res.status(200).json({
-      outcome: refreshOutcome({ answered: false, heldBefore: before, heldAfter: before, stillDue: true }),
+      outcome: refreshOutcome({ answered: false, failure: r.reason, heldBefore: before, heldAfter: before, stillDue: true }),
       checkedAt: null,
+      reason: r.reason,
     });
   }
+  const data = r.vehicle;
 
   const write = motFieldsToWrite(
     { mot_expiry: v.mot_expiry, last_mot_mileage: v.last_mot_mileage, last_mot_date: v.last_mot_date },
@@ -80,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // THE BAND RULE IS NOT RE-DERIVED — motBand is the same function the list is built from, so a
   // row cannot disagree with the band it is sitting in about what "due" means.
   const stillDue = motBand(after ? new Date(`${after}T00:00:00.000Z`) : null, new Date()) !== null;
-  const outcome = refreshOutcome({ answered: true, heldBefore: before, heldAfter: after, stillDue });
+  const outcome = refreshOutcome({ answered: true, failure: null, heldBefore: before, heldAfter: after, stillDue });
 
   if (Object.keys(write).length) {
     // ONLY WHEN SOMETHING MOVED. A row per press would be noise in an append-only table, and the
@@ -92,5 +95,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }).catch(() => {});
   }
 
-  return res.status(200).json({ outcome, checkedAt: checkedAt.toISOString() });
+  // ── THE SPEC FIELDS RIDE BACK ON THE SAME ANSWER ──────────────────────────────────────────────
+  // One DVSA call, both uses. This response already cost the quota; the make, model, colour, fuel,
+  // engine and year were parsed out of it and then dropped on the floor, which is why a car with a
+  // fresh MOT and a thin record could be looked up all day and stay thin.
+  //
+  // RETURNED, NOT SAVED. Nothing above writes these columns — the write is a separate decision with
+  // its own provenance question (mot_checked_at means DVSA answered about the MOT, and must never
+  // come to mean "we learned the colour"), proposed separately. For now the FORM fills its blanks
+  // from this and the saved row is unchanged, which is exactly what applyLookup already does with a
+  // DVSA hit on a car we do not hold.
+  return res.status(200).json({
+    outcome,
+    checkedAt: checkedAt.toISOString(),
+    reason: null,
+    vehicle: {
+      make: data.make ?? null, model: data.model ?? null, colour: data.colour ?? null,
+      fuel: data.fuel ?? null, year: data.year ?? null, engineCc: data.engineCc ?? null,
+    },
+  });
 }

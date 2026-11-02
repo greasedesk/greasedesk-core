@@ -38,9 +38,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const reg = normalizeReg(req.query.reg as string);
   if (!reg) return res.status(200).json({ found: false });
 
-  const data = await dvsaLookup(reg); // null on any failure (incl. creds not configured)
-  if (!data || !(data.make || data.model || data.colour || data.fuel || data.engineCc)) {
-    return res.status(200).json({ found: false });
+  const r = await dvsaLookup(reg);
+  // ── FOUND:FALSE WITH A REASON, BECAUSE THE FORM HAS DIFFERENT THINGS TO SAY ──────────────────
+  // This returned a bare { found: false } for a 404, a 429, a bad credential and an empty answer
+  // alike, and the pane said "DVSA has nothing for that registration" to all four. The shape is
+  // unchanged (still `found`, so no caller breaks) with the diagnosis added beside it.
+  if (!r.ok) return res.status(200).json({ found: false, reason: r.reason });
+  const data = r.vehicle;
+  // ANSWERED, BUT ABOUT NOTHING WE CAN USE. Distinct from every failure above: DVSA knows this
+  // plate and told us nothing fillable, so there is nothing to retry and nothing to report.
+  if (!(data.make || data.model || data.colour || data.fuel || data.engineCc)) {
+    return res.status(200).json({ found: false, reason: 'empty_answer' });
   }
 
   // ── KEEP THE HISTORY WE JUST FETCHED, IF IT IS THIS CAR'S ─────────────────────────────────────

@@ -82,11 +82,24 @@ export function motCheckReason(
 }
 
 import { calendarDayDiff } from '@/lib/calendar-days';
+// TYPE-ONLY, AND IT MATTERS. lib/mot-refresh is imported by the diary and by
+// lib/vehicle-lookup-client, both of which run in the browser; lib/dvsa is server-only and reads
+// credentials. A value import here would drag it into the client bundle (see client-bundle-gate).
+import type { DvsaFailure } from '@/lib/dvsa';
 
 export type RefreshKind = 'changed' | 'unchanged' | 'no_answer';
 
 export type RefreshOutcome = {
   kind: RefreshKind;
+  /**
+   * WHICH failure produced a `no_answer` — null on every answer.
+   *
+   * `kind` says whether anything was learned; this says why not. They are separate because a caller
+   * deciding whether to stamp a column wants the first and a person deciding whether to press the
+   * button again wants the second: `rate_limited` means wait, `forbidden` means nobody's lookup will
+   * work until it is fixed, and `not_found` means stop pressing.
+   */
+  failure: DvsaFailure | null;
   /** What the row says. The whole sentence, so no caller assembles a second version of it. */
   sentence: string;
   /** The expiry we now hold, ISO, for the row to render struck-through against the old one. */
@@ -102,25 +115,68 @@ const britishDate = (iso: string): string => {
 };
 
 /**
+ * WHAT TO SAY FOR EACH FAILURE — one sentence each, and each one names the NEXT MOVE.
+ *
+ * All of these used to be the single sentence below ("DVSA didn’t answer"), which was accurate and
+ * useless: it is true of a spent rate-limit window, a plate DVSA has never heard of, and a
+ * credential nobody has set, and those are three different afternoons. The ruling asked for the
+ * reason to travel with the null; this is where the reason becomes something a garage can read.
+ *
+ * EVERY ONE OF THEM SAYS NOTHING WAS LEARNED, except `not_found`, where something WAS: DVSA has no
+ * record of the plate. That one still does not stamp mot_checked_at — the stamp means DVSA answered
+ * about the MOT, and a car it cannot find has no MOT answer to give. Stamping it would flip the
+ * banner to "DVSA says this car has no MOT" off a call that found no car at all.
+ */
+export function failureSentence(reason: DvsaFailure | null | undefined): string {
+  switch (reason) {
+    case 'not_found':
+      return 'DVSA has no MOT record for this registration — check the plate.';
+    case 'rate_limited':
+      // THE ONE THE SHARED KEY MAKES LIKELY. Says "wait", because the next press will fail too.
+      return 'DVSA is rate-limiting us — nothing was learned. Try again in a few minutes.';
+    case 'forbidden':
+      return 'Our DVSA access was refused — nothing was learned. This needs fixing here, not retrying.';
+    case 'timeout':
+      return 'DVSA didn’t answer in time — nothing was learned, so the date below is as old as it was.';
+    case 'unavailable':
+      return 'DVSA is unavailable — nothing was learned, so the date below is as old as it was.';
+    case 'malformed':
+      return 'DVSA answered with something we couldn’t read — nothing was learned.';
+    case 'unconfigured':
+      return 'MOT checks aren’t set up on this system — nothing was learned.';
+    case 'no_registration':
+      return 'No registration to check.';
+    default:
+      // A caller that did not name a reason. Kept word-for-word as it was, so an un-migrated path
+      // reads exactly as it did before rather than inventing a diagnosis it does not have.
+      return 'DVSA didn’t answer — nothing was learned, so the date below is as old as it was.';
+  }
+}
+
+/**
  * @param answered  did DVSA respond at all — NOT whether anything changed
+ * @param failure   which failure, when answered is false; null otherwise
  * @param heldBefore  the expiry we held going in, ISO or null
  * @param heldAfter   the expiry we hold coming out, ISO or null
  * @param stillDue    motBand(after) !== null — computed by the caller from the shared rule
  */
 export function refreshOutcome(args: {
   answered: boolean;
+  failure?: DvsaFailure | null;
   heldBefore: string | null;
   heldAfter: string | null;
   stillDue: boolean;
 }): RefreshOutcome {
-  const { answered, heldBefore, heldAfter, stillDue } = args;
+  const { answered, failure, heldBefore, heldAfter, stillDue } = args;
 
   if (!answered) {
     return {
       kind: 'no_answer',
+      failure: failure ?? null,
       // NAMES THE DATE AS UNCHANGED rather than saying nothing, because silence here reads as
-      // confirmation. The row keeps whatever it had, and says that is what it kept.
-      sentence: 'DVSA didn’t answer — nothing was learned, so the date below is as old as it was.',
+      // confirmation. The row keeps whatever it had, and says that is what it kept. Which sentence
+      // is failureSentence's business, so this surface and the next cannot word it differently.
+      sentence: failureSentence(failure),
       expiry: heldBefore,
       stillDue: true, // unchanged data cannot have changed the band
     };
@@ -129,6 +185,7 @@ export function refreshOutcome(args: {
   if (heldAfter && heldAfter !== heldBefore) {
     return {
       kind: 'changed',
+      failure: null,
       sentence: stillDue
         ? `MOT now expires ${britishDate(heldAfter)} — still due.`
         : `MOT renewed to ${britishDate(heldAfter)} — no longer due.`,
@@ -141,6 +198,7 @@ export function refreshOutcome(args: {
     // SAYS WHAT WAS CHECKED, not merely that something was. A bare "no change" beside a row
     // carrying a date, a mileage and a customer does not say which of them was confirmed.
     kind: 'unchanged',
+    failure: null,
     sentence: 'Checked just now — MOT date unchanged.',
     expiry: heldBefore,
     stillDue,
@@ -163,4 +221,52 @@ export function checkedLabel(checkedAt: Date | string | null, now: Date): string
   return sameDay
     ? `checked ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
     : `checked ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
+}
+
+/**
+ * ── THE ONE LINE A LOOK-UP ALWAYS LEAVES BEHIND ─────────────────────────────────────────────────
+ * LC09XFU is why this exists. Its MOT had been verified at 09:23 and runs to 6 October 2027, and
+ * pressing Look up said NOTHING: the banner is silent by design when an MOT is more than 28 days
+ * out (lib/mot-banner returns `kind:'none'`), and the refresh line only rendered when a refresh had
+ * run — which it correctly had not, the stamp being hours old. Two deliberate silences stacked up
+ * and the screen could not be told apart from a broken feature. It was reported as one.
+ *
+ * So after ANY look-up there is exactly one line, and it answers the two questions a person has:
+ * when was this last checked, and what is it valid to. Success is no longer indistinguishable from
+ * nothing having happened.
+ *
+ * It takes what we HOLD, not what a call returned, which is what lets it speak for the press that
+ * made no call at all. `failure` is set only when a check ran and did not answer, and it wins —
+ * there is no honest way to print a date's age beside "we could not reach DVSA".
+ */
+export function motLookupLine(args: {
+  /** The expiry we now hold, ISO. */
+  expiry: string | null;
+  /** The stamp we now hold — ours or the one this press just wrote. */
+  checkedAt: Date | string | null;
+  /** Set only when a check RAN and did not answer. */
+  failure: DvsaFailure | null;
+  now: Date;
+}): string {
+  const { expiry, checkedAt, failure, now } = args;
+  // A FAILED CHECK OUTRANKS EVERYTHING. The stamp is whatever it was; saying how old it is beside
+  // a failure invites the reading that the failure refreshed it.
+  if (failure) return failureSentence(failure);
+
+  const when = checkedLabel(checkedAt, now);
+  // NEVER CHECKED, AND NO CHECK RAN. Reachable when a car is fresh by a stamp we cannot parse, or
+  // on a DVSA-branch hit for a car we do not hold. Says the state rather than guessing at a date.
+  if (!when) return 'Not checked with DVSA yet.';
+  const cap = when.charAt(0).toUpperCase() + when.slice(1);
+
+  // ANSWERED ABOUT A CAR WITH NO MOT. Distinct from "not checked": we asked, and this is the answer.
+  if (!expiry) return `${cap} — no MOT recorded at DVSA.`;
+
+  // "VALID TO" IS A CLAIM ABOUT THE FUTURE and must not be made about a past date. Compared on the
+  // ISO day string against the same day boundary everything else here uses (lib/calendar-days), so
+  // a date expiring today reads as valid today rather than as expired.
+  const expired = calendarDayDiff(new Date(`${expiry}T00:00:00.000Z`), now) > 0;
+  return expired
+    ? `${cap} — MOT expired ${britishDate(expiry)}.`
+    : `${cap} — MOT valid to ${britishDate(expiry)}.`;
 }

@@ -1,9 +1,10 @@
 /**
  * File: lib/dvsa.ts
  * THE one place the DVSA MOT History API is called — SERVER-SIDE ONLY. OAuth2 client-credentials: the
- * client_id/secret/api-key/token never reach the browser. Best-effort: any failure (creds not set,
- * unknown reg → 404, token/rate-limit/network error, timeout) returns null so the caller falls back to
- * manual entry and NEVER blocks a booking. Richer than DVLA VES — this returns make AND model.
+ * client_id/secret/api-key/token never reach the browser. Best-effort: NO failure throws and none
+ * blocks a booking — but every failure now comes back NAMED (DvsaResult below), because "fall back
+ * to manual entry" is the right move for a 404 and the wrong one for a spent rate-limit window.
+ * Richer than DVLA VES — this returns make AND model.
  *
  * Env: DVSA_MOT_CLIENT_ID, DVSA_MOT_CLIENT_SECRET, DVSA_MOT_API_KEY, DVSA_MOT_SCOPE_URL,
  *      DVSA_MOT_TOKEN_URL, optional DVSA_MOT_API_URL (defaults to the live trade endpoint).
@@ -30,6 +31,68 @@ export type DvsaVehicle = {
    */
   odometerHistory?: Array<{ date: string; miles: number }>;
 };
+
+/**
+ * ── WHY A LOOKUP PRODUCED NOTHING ───────────────────────────────────────────────────────────────
+ * This file's own header used to end the sentence at "returns null so the caller falls back to
+ * manual entry". That is right for a BUTTON, where a person is watching and can press it again.
+ * It is wrong for anything that calls in bulk, and it was wrong on screen: a 429 came back
+ * indistinguishable from "DVSA has no record of this registration", so an exhausted key read as a
+ * fleet of unknown cars. The shared key serves every tenant with no cache and no cap of our own,
+ * which is exactly the condition under which 429 is the likeliest failure, not the rarest.
+ *
+ * Five of these were named in the ruling. Three more exist because the code can actually produce
+ * them and folding them into one of the five would be a lie — a 500 is not a 404, an unreadable
+ * body is not an empty one, and a call with no registration never reached DVSA at all.
+ *
+ * WHAT A CALLER DOES WITH EACH is the reason they are separate, and it differs per caller:
+ *   not_found      DVSA has no record. News about the car. Nothing to retry.
+ *   rate_limited   the window is spent. News about US. A sweep must STOP, not continue.
+ *   forbidden      the credential was rejected. Nobody's lookup will work until it is fixed.
+ *   timeout        we gave up waiting. The car is unchanged; the answer may still be out there.
+ *   unavailable    DVSA is unwell (5xx / transport). Retry later, do not conclude anything.
+ *   malformed      it answered with something we cannot read. A shape change, not an outage.
+ *   unconfigured   this deployment has no credential. Not a failure of the car OR of DVSA.
+ *   no_registration nothing was asked. A caller bug, surfaced rather than swallowed.
+ */
+export type DvsaFailure =
+  | 'not_found'
+  | 'rate_limited'
+  | 'forbidden'
+  | 'timeout'
+  | 'unavailable'
+  | 'malformed'
+  | 'unconfigured'
+  | 'no_registration';
+
+/**
+ * THE RESULT, AND WHY IT IS NOT `DvsaVehicle | null` ANY MORE.
+ *
+ * `vehicle` is null on every failure and `reason` is null on every success, so a caller cannot read
+ * one while meaning the other. The discriminant is `ok`, so narrowing is the compiler's job: this
+ * signature change is what FINDS the four callers rather than trusting a sweep of greps to have.
+ */
+export type DvsaResult =
+  | { ok: true; vehicle: DvsaVehicle; reason: null; status: number | null }
+  | { ok: false; vehicle: null; reason: DvsaFailure; status: number | null };
+
+/**
+ * An HTTP status to a reason. 401 sits with 403 deliberately: both mean the credential did not get
+ * us in, and no caller has a different move for them. Anything else non-ok is `unavailable` —
+ * including a 400, which we cannot distinguish from DVSA disliking a plate it will never like.
+ */
+export function dvsaFailureFromStatus(status: number): DvsaFailure {
+  if (status === 404) return 'not_found';
+  if (status === 429) return 'rate_limited';
+  if (status === 401 || status === 403) return 'forbidden';
+  return 'unavailable';
+}
+
+/** Terse constructors, so no call site assembles a result by hand and gets a field wrong. */
+const dvsaFailed = (reason: DvsaFailure, status: number | null = null): DvsaResult =>
+  ({ ok: false, vehicle: null, reason, status });
+const dvsaAnswered = (vehicle: DvsaVehicle, status: number | null = null): DvsaResult =>
+  ({ ok: true, vehicle, reason: null, status });
 
 const API_BASE = 'https://history.mot.api.gov.uk/v1/trade/vehicles/registration/';
 
@@ -261,16 +324,22 @@ export function vehicleFromPayload(
   };
 }
 
-export async function dvsaLookup(registration: string): Promise<DvsaVehicle | null> {
+export async function dvsaLookup(registration: string): Promise<DvsaResult> {
   const reg = (registration || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   // Env presence — NAMES/booleans only, never values.
   console.log('[dvsa] lookup', reg, 'env:', {
     CLIENT_ID: !!process.env.DVSA_MOT_CLIENT_ID, CLIENT_SECRET: !!process.env.DVSA_MOT_CLIENT_SECRET,
     API_KEY: !!process.env.DVSA_MOT_API_KEY, SCOPE_URL: !!process.env.DVSA_MOT_SCOPE_URL, TOKEN_URL: !!process.env.DVSA_MOT_TOKEN_URL,
   });
-  if (!dvsaConfigured() || !reg) { console.warn('[dvsa] not configured or empty reg → skipping'); return null; }
+  // TWO REFUSALS, NOT ONE. These were a single line returning the same null, which made "this
+  // deployment has no DVSA credential" and "the caller passed an empty string" the same event.
+  // They are different people's problems and only one of them is a bug here.
+  if (!reg) { console.warn('[dvsa] no registration given → not calling'); return dvsaFailed('no_registration'); }
+  if (!dvsaConfigured()) { console.warn('[dvsa] not configured → skipping'); return dvsaFailed('unconfigured'); }
+  // A token we cannot get is a credential that did not get us in — the same move as a 403, and
+  // deliberately not `unavailable`: retrying on a schedule will not mint a token for bad secrets.
   const token = await getToken();
-  if (!token) return null;
+  if (!token) return dvsaFailed('forbidden');
 
   const url = (process.env.DVSA_MOT_API_URL || API_BASE) + encodeURIComponent(reg);
   const ctrl = new AbortController();
@@ -282,8 +351,17 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
       signal: ctrl.signal,
     });
     console.log('[dvsa] MOT API: status', res.status);
-    if (!res.ok) { console.error('[dvsa] MOT API FAILED', res.status, (await res.text()).slice(0, 300)); return null; } // 404 unknown / 403 auth / 429 rate-limited / 5xx → manual
-    const d = (await res.json()) as any;
+    if (!res.ok) {
+      const reason = dvsaFailureFromStatus(res.status);
+      console.error('[dvsa] MOT API FAILED', res.status, reason, (await res.text()).slice(0, 300));
+      return dvsaFailed(reason, res.status);
+    }
+    // A BODY WE CANNOT READ IS NOT AN EMPTY ONE. res.json() throwing used to land in the catch
+    // below and come back as the same null as a timeout, which would have a sweep retrying a
+    // response-shape change for ever.
+    let d: any;
+    try { d = await res.json(); }
+    catch { console.error('[dvsa] MOT API: unreadable body'); return dvsaFailed('malformed', res.status); }
     // motTests are newest-first; take the most recent expiry + odometer + test date where present.
     const tests: any[] = Array.isArray(d.motTests) ? d.motTests : [];
     const withExpiry = tests.find((t) => t?.expiryDate);
@@ -298,10 +376,14 @@ export async function dvsaLookup(registration: string): Promise<DvsaVehicle | nu
       .filter((r): r is { date: string; miles: number } => typeof r.date === 'string' && r.miles != null);
     const out = vehicleFromPayload(d, { withExpiry, withOdo, tests, odometerHistory });
     console.log('[dvsa] parsed:', { make: out.make, model: out.model, colour: out.colour, fuel: out.fuel, engineCc: out.engineCc, year: out.year, firstRegistered: out.firstRegistered, motExpiry: out.motExpiry, lastMotMileage: out.lastMotMileage });
-    return out;
+    return dvsaAnswered(out, res.status);
   } catch (e: any) {
-    console.error('[dvsa] MOT API: exception', e?.name || e?.message);
-    return null;
+    // OUR OWN ABORT IS A TIMEOUT AND NOTHING ELSE IS. The 5s controller above aborts the fetch,
+    // which surfaces here as an AbortError; anything else reaching this point is a transport
+    // failure, which is DVSA or the network being unwell rather than us giving up.
+    const aborted = e?.name === 'AbortError' || ctrl.signal.aborted;
+    console.error('[dvsa] MOT API: exception', e?.name || e?.message, '→', aborted ? 'timeout' : 'unavailable');
+    return dvsaFailed(aborted ? 'timeout' : 'unavailable');
   } finally {
     clearTimeout(timer);
   }

@@ -1678,3 +1678,57 @@ at least `rate_limited | not_found | auth | timeout | unconfigured`, the sweep s
 A GET that writes, on a page anyone can reload, with volume set by how often people look rather than
 by how many cars there are. The diary fix covers the one moment that matters — somebody is deciding
 whether this car may legally be driven here — and does it behind an explicit button press.
+
+---
+
+## Saving the spec fields back to the vehicle — PROPOSAL, after Thursday
+
+Shipped 2026-11-02: Look up calls DVSA when the record is **stale or thin**, one call for both uses,
+and fills the form's blanks through `applyLookup`. What it does **not** do is write those fields to
+the `Vehicle` row. The form is filled, the saved record is unchanged, and the next person to look the
+same car up pays for the same call again.
+
+### Why it was held back rather than built
+
+Three questions, and only the first is about plumbing.
+
+**1. The path.** `/api/vehicle-lookup` is a GET and says so at the top: *read-only; car-first*. The
+write cannot go there. `/api/mot-refresh` is already a POST, already tenant-scoped in its WHERE, and
+is already the call that fetched these fields — so the write belongs there, guarded by a flag the
+caller sets, not bolted onto the read.
+
+**2. Provenance, which is the real one.** `mot_checked_at` means **DVSA answered about the MOT**
+([[mot-verification-provenance]]). It must not come to mean "we learned the colour". A car whose
+colour was filled from a DVSA reply and whose MOT came back absent would, under a single stamp, read
+as MOT-verified. So a spec write needs either its own stamp column or no stamp at all — and "no
+stamp" means we cannot later tell a DVSA-sourced colour from a typed one, which is the question an
+import audit asks first. This is a schema decision, so it needs a migration, so it needs the owner's
+yes before anything is written.
+
+**3. Does the operator get a say?** The form's merge is reversible: change the plate and
+`clearStale` takes back exactly what the lookup filled. A row written to the database is not. A car
+whose make DVSA has wrong — and one exists, `Cooper`/`Cooper`, where the MAKE is the incorrect field
+— would be corrected on screen and then saved by a press nobody connected to the lookup. The honest
+shapes are: write only on the operator's Save, or write on the lookup and audit it as its own event.
+
+### What it would be worth
+
+Measured on production the day the look-up fix shipped: **101 of 369 real-tenant cars (27%)** are
+thin. Each one currently costs a DVSA call **every time anybody looks it up**. Saving the answer
+makes that one call per car, ever — which matters because the key is shared across every tenant with
+no cache and no cap of our own ([[dvsa-shared-key-exhaustion]]).
+
+It also feeds the thing the freshness cron was proposed for. A thin record is invisible to any report
+built on make, model or year; filling 101 of them is the difference between a vehicle mix chart that
+describes the fleet and one that describes the cars somebody happened to type fully.
+
+### Not in scope
+
+**VIN.** `DvsaVehicle` carries no VIN, so the 97 blank VINs (26%) cannot be filled from this source
+at all, and a rule that treated a blank VIN as a reason to call would call for a quarter of the fleet
+and fill nothing. `DVSA_FILLABLE` excludes it deliberately and a gate clause asserts the exclusion
+against the TYPE in `lib/dvsa`, not against a list.
+
+**Correcting wrong values.** Everything here fills blanks and replaces a model that merely repeats
+the make. Neither touches a populated field that is simply incorrect. That is a data-quality pass
+with its own rules and its own audit, and it should not be smuggled in behind a look-up button.

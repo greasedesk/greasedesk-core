@@ -17,6 +17,7 @@
  * REGISTRATION ITSELF CHANGED. State stays with the form; the policy lives here, once.
  */
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
+import type { DvsaFailure } from '@/lib/dvsa';
 import type { RefreshOutcome } from '@/lib/mot-refresh';
 import { normalizeReg, sameRegistration } from '@/lib/vehicle-identity';
 
@@ -44,7 +45,10 @@ export type VehicleLookupResult =
       /** OUR id for this car — records hits only, and a HANDLE rather than a value to display.
        *  It is what lets a caller ask DVSA about the car it has just found (refreshMotFromDvsa). */
       vehicleId?: string | null }
-  | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error' };
+  | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error';
+      /** WHICH DVSA failure, when the server named one. Absent for our own refusals (empty reg) and
+       *  for a records miss, neither of which involved DVSA at all. */
+      dvsaReason?: DvsaFailure | 'empty_answer' | null };
 
 const S = (v: unknown): string => (v == null ? '' : String(v));
 const Snum = (v: unknown): string => (v == null ? '' : String(v));
@@ -111,9 +115,12 @@ export async function lookupVehicleByReg(
         mot: { motExpiry: d.motExpiry ?? null, lastMotMileage: d.lastMotMileage ?? null, lastMotDate: d.lastMotDate ?? null },
       };
     }
-    return { ok: false, reg, reason: 'not-found' };
+    // NOT-FOUND CARRIES THE SERVER'S DIAGNOSIS. The endpoint answers 200 { found:false, reason }
+    // for every DVSA failure, so `not-found` here is still "no prefill" — but the caller can now
+    // say WHICH, and a rate-limited key no longer reads to the operator as an unknown plate.
+    return { ok: false, reg, reason: 'not-found', dvsaReason: d?.reason ?? null };
   } catch {
-    return { ok: false, reg, reason: 'error' }; // network/parse failure — caller shows "enter manually"
+    return { ok: false, reg, reason: 'error', dvsaReason: null }; // network/parse — "enter manually"
   }
 }
 
@@ -144,14 +151,28 @@ export async function lookupVehicleByReg(
  * cannot claim a verification that did not happen. The two silences are told apart in the words
  * because they are fixed differently: DVSA not answering is theirs, a fetch not completing is ours.
  */
-export type MotRefreshReply = { outcome: RefreshOutcome; checkedAt: string | null };
+export type MotRefreshReply = {
+  outcome: RefreshOutcome;
+  checkedAt: string | null;
+  /**
+   * THE SPEC FIELDS OFF THE SAME ANSWER — null when the check did not answer.
+   *
+   * One call, both uses. The response the MOT came from already carried make, model, colour, fuel,
+   * engine and year, and the endpoint used to drop them: a car with a thin record and a fresh MOT
+   * stamp could be looked up every day and stay thin for ever. These fill the form's BLANKS only
+   * (applyLookup) and are not saved to the vehicle — see the endpoint for why that write is a
+   * separate decision.
+   */
+  vehicle: Partial<Record<'make' | 'model' | 'colour' | 'fuel' | 'year' | 'engineCc', string>> | null;
+};
 
 export async function refreshMotFromDvsa(vehicleId: string): Promise<MotRefreshReply> {
-  const silent = (sentence: string): MotRefreshReply => ({
+  const silent = (sentence: string, failure: DvsaFailure | null = null): MotRefreshReply => ({
     // stillDue:true because nothing was learned, which cannot have moved the band — the same
     // reading lib/mot-refresh takes for its own no_answer.
-    outcome: { kind: 'no_answer', sentence, expiry: null, stillDue: true },
+    outcome: { kind: 'no_answer', failure, sentence, expiry: null, stillDue: true },
     checkedAt: null,
+    vehicle: null,
   });
   try {
     const r = await fetch('/api/mot-refresh', {
@@ -160,10 +181,29 @@ export async function refreshMotFromDvsa(vehicleId: string): Promise<MotRefreshR
     });
     const j = r.ok ? await r.json().catch(() => null) : null;
     if (!j?.outcome) return silent('The check didn’t complete — nothing was learned.');
-    return { outcome: j.outcome as RefreshOutcome, checkedAt: typeof j.checkedAt === 'string' ? j.checkedAt : null };
+    return {
+      outcome: j.outcome as RefreshOutcome,
+      checkedAt: typeof j.checkedAt === 'string' ? j.checkedAt : null,
+      // ONLY OFF AN ANSWER. checkedAt is null for both silences and the endpoint sends no vehicle
+      // with either, but this is belt-and-braces: a form must never fill a field from a check that
+      // did not happen, and that rule is cheaper to enforce here than to remember at each caller.
+      vehicle: j.checkedAt && j.vehicle ? specStrings(j.vehicle) : null,
+    };
   } catch {
     return silent('The check didn’t complete — nothing was learned.');
   }
+}
+
+/** The endpoint sends year/engineCc as numbers; applyLookup merges strings. Nulls are dropped, not
+ *  stringified — "null" in a form field is worse than an empty one. */
+function specStrings(v: Record<string, unknown>): MotRefreshReply['vehicle'] {
+  const out: Record<string, string> = {};
+  for (const k of ['make', 'model', 'colour', 'fuel', 'year', 'engineCc'] as const) {
+    const raw = v[k];
+    if (raw == null || raw === '') continue;
+    out[k] = String(raw);
+  }
+  return out;
 }
 
 /**
@@ -214,18 +254,83 @@ export type LookupFill = {
  * spelled `!x.trim() &&`, one spelled `keep(p.x, …)` — and a rule with three implementations is
  * three rules. Values are compared and written as strings because that is what an input holds.
  */
+/**
+ * ── IS WHAT WE HOLD ABOUT THIS CAR WORTH ASKING DVSA FOR? ───────────────────────────────────────
+ * The second half of the LC09XFU report, and a different question from the MOT's. That car came
+ * back "Filled from your records" with make MINI, model MINI, and colour, year, fuel, engine and
+ * VIN all empty — a records hit so thin it filled almost nothing, and the records branch never
+ * reaches DVSA to do better. Measured on production the same afternoon: 101 of 369 real-tenant
+ * cars, 27%, are missing at least one field DVSA could have supplied.
+ *
+ * VIN IS DELIBERATELY NOT IN THIS LIST, although it is the commonest blank at 97 cars. DvsaVehicle
+ * carries no VIN, so including it would call DVSA for 26% of the fleet and fill nothing — a lookup
+ * that can only fail, on a shared key. A field belongs here when an answer could fill it.
+ */
+export const DVSA_FILLABLE = ['make', 'model', 'colour', 'fuel', 'year', 'engineCc'] as const;
+export type DvsaFillable = (typeof DVSA_FILLABLE)[number];
+
+/**
+ * A MODEL THAT MERELY REPEATS THE MAKE IS NOT A MODEL.
+ *
+ * 58 of TMBS's cars hold model == make — 57 of them "MINI"/"MINI" — which is what an import does
+ * when it has one name and two columns to put it in. The column is not empty, so every blanks-only
+ * merge ever written has skipped it, which is why those 58 have survived every look-up to date.
+ *
+ * Case- and space-insensitive, and that is the whole test. It does NOT attempt to judge whether a
+ * make is wrong: one car holds make "Cooper", model "Cooper", where Cooper is a model and the MAKE
+ * is the incorrect field. Filling blanks cannot fix that and must not pretend to — this is a rule
+ * about a value that says nothing, not a data-quality pass.
+ */
+export function modelEchoesMake(make: string | null | undefined, model: string | null | undefined): boolean {
+  const a = String(make ?? '').trim().toUpperCase();
+  const b = String(model ?? '').trim().toUpperCase();
+  return !!a && !!b && a === b;
+}
+
+/**
+ * The fields a merge may OVERWRITE on this record, as opposed to fill. Exactly one rule feeds it
+ * today, and it returns a list rather than a boolean so a second rule has somewhere to go that is
+ * not another parameter at every call site.
+ */
+export function echoedKeys(current: { make?: string | null; model?: string | null }): DvsaFillable[] {
+  return modelEchoesMake(current.make, current.model) ? ['model'] : [];
+}
+
+/**
+ * Would a DVSA answer tell us anything we do not already hold? Blank, or a model echoing the make.
+ *
+ * Paired with motCheckReason by the caller, never folded into it: `stale` is about how old our
+ * evidence is and `thin` is about how much of it there is, and a car can be either without being
+ * both. One DVSA call answers both questions — see the diary, where the condition is `stale || thin`
+ * and a single reply feeds the MOT fields and the blank fill.
+ */
+export function isThinRecord(v: Partial<Record<DvsaFillable, string | number | null | undefined>>): boolean {
+  if (DVSA_FILLABLE.some((k) => !String(v[k] ?? '').trim())) return true;
+  return modelEchoesMake(v.make as string, v.model as string);
+}
+
 export function applyLookup<T extends Record<string, string>>(
   current: T,
   incoming: Partial<Record<keyof T & string, string | null | undefined>>,
   reg: string,
-  opts: { mot?: boolean } = {},
+  opts: { mot?: boolean; overwritable?: readonly string[] } = {},
 ): { values: T; fill: LookupFill } {
   const values = { ...current };
   const fields: Record<string, string> = {};
+  /**
+   * THE NARROW EXCEPTION TO "NEVER CLOBBERED", and the order of the two guards below is the whole
+   * of its safety. `overwritable` names fields whose stored value says nothing — today only a model
+   * echoing the make (echoedKeys). It is a licence to REPLACE, never a licence to CLEAR: the
+   * "nothing offered" guard runs FIRST and unconditionally, so a field on this list keeps what it
+   * had whenever DVSA sends nothing for it. That is what makes it impossible for this to leave the
+   * form worse than it found it, which is the property the ruling asked for by name.
+   */
+  const over = new Set(opts.overwritable ?? []);
   for (const [k, raw] of Object.entries(incoming)) {
     const next = typeof raw === 'string' ? raw : '';
-    if (!next.trim()) continue;                       // nothing offered
-    if (String(values[k] ?? '').trim()) continue;     // already something there — never clobbered
+    if (!next.trim()) continue;                             // nothing offered — leave it alone
+    if (String(values[k] ?? '').trim() && !over.has(k)) continue; // something there — never clobbered
+    if (String(values[k] ?? '').trim() === next.trim()) continue; // identical: not a fill, not a change
     (values as Record<string, string>)[k] = next;
     fields[k] = next;                                 // remembered so it can be taken back
   }

@@ -77,6 +77,9 @@ const vehicles = await prisma.vehicle.findMany({
 console.log(`\n  ${WRITE ? 'WRITING' : 'DRY RUN'} — ${group.group_name}, ${vehicles.length} vehicles, ${PACE_MS}ms apart\n`);
 
 let looked = 0, missed = 0, gotExpiry = 0, gotReadings = 0, readingRows = 0, errors = 0, stamped = 0;
+/** Set when the run STOPPED early — a spent window or a refused credential. Null means it finished.
+ *  Reported out loud at the end: a partial sweep that reads as a complete one is the whole hazard. */
+let halted = null;
 const perCar = [];
 let rateAfter = 0;
 const rateRefused = {};
@@ -96,17 +99,33 @@ const before = await prisma.vehicleOdometerReading.count({ where: { group_id: GR
 
 for (const v of vehicles) {
   await new Promise((r) => setTimeout(r, PACE_MS));
-  let data = null;
-  try { data = await dvsaLookup(v.registration); } catch { errors += 1; continue; }
+  let r = null;
+  try { r = await dvsaLookup(v.registration); } catch { errors += 1; continue; }
   looked += 1;
-  if (!data) {
+  if (!r.ok) {
+    // ── A SWEEP MUST STOP WHEN THE WINDOW IS SPENT ──────────────────────────────────────────────
+    // This is the reason dvsaLookup now names its failures, and the reason that change had to land
+    // before any scheduled refresh is built. A 429 used to be indistinguishable from a 404 here:
+    // the loop would keep calling for every remaining car, record "no DVSA record or lookup failed"
+    // against each one, and finish with a confident report that most of the fleet is unknown to
+    // DVSA. Every one of those lines would be false, and the run would look complete.
+    //
+    // So: stop, say which car it stopped at, and leave the rest UNTOUCHED rather than wrongly
+    // marked. forbidden is the same shape of problem one level up — no later car will fare better.
+    if (r.reason === 'rate_limited' || r.reason === 'forbidden') {
+      halted = { reason: r.reason, reg: v.registration, remaining: vehicles.length - looked };
+      console.error(`\n  STOPPED at ${v.registration}: DVSA said ${r.reason}.`);
+      console.error(`  ${halted.remaining} car(s) NOT looked up — untouched, not recorded as missing.`);
+      console.error('  Nothing here is a statement about those cars. Re-run when the window has passed.\n');
+      break;
+    }
     missed += 1;
-    // A MISS IS NOT AN ERROR AND NOT AN EMPTY HISTORY. dvsaLookup returns null for an unknown reg
-    // (404) and for a transport failure alike — the two are indistinguishable to a caller, which is
-    // worth saying rather than reporting them together as "no history".
-    perCar.push({ reg: v.registration, readings: null, expiry: null, note: 'no DVSA record or lookup failed' });
+    // A MISS IS NOT AN ERROR AND NOT AN EMPTY HISTORY — and now it says WHICH miss. `not_found` is
+    // news about the car; a timeout or a 5xx is news about the call and tells us nothing about it.
+    perCar.push({ reg: v.registration, readings: null, expiry: null, note: `no reading: ${r.reason}` });
     continue;
   }
+  const data = r.vehicle;
 
   // REFRESH, NOT FILL — see lib/dvsa::motFieldsToWrite. Counted separately, because "gained a date
   // we never had" and "corrected a date that had gone stale" are different facts about the fleet.
@@ -255,6 +274,17 @@ if (anomalies.length) {
 }
 console.log(`\n  rate-capable NOW   ${await rateCapable()} of ${vehicles.length} sampled`);
 console.log(`  rate-capable AFTER ${rateAfter} of ${vehicles.length} sampled${Object.keys(rateRefused).length ? `  (refused: ${Object.entries(rateRefused).map(([k, n]) => `${k}×${n}`).join(', ')})` : ''}`);
+// ── WHETHER THIS RUN COVERED THE FLEET, STATED BEFORE ANY OTHER CONCLUSION ─────────────────────
+// Every count above describes the cars the loop REACHED. Printed after a halt without this line,
+// they describe a partial sweep in the words of a complete one — which is the same failure as a
+// gate reporting "0 red" over a population it never loaded.
+if (halted) {
+  console.log(`\n  *** PARTIAL RUN — STOPPED AT ${halted.reg}: ${halted.reason} ***`);
+  console.log(`  ${halted.remaining} car(s) were never looked up. The counts above cover ${looked} of ${vehicles.length}.`);
+  console.log('  Those cars are UNCHANGED and nothing above is a statement about them.');
+} else {
+  console.log(`\n  COMPLETE — all ${vehicles.length} car(s) were looked up.`);
+}
 if (!WRITE) console.log('\n  DRY RUN — nothing was written. Re-run with --write.\n');
 
 await prisma.$disconnect();

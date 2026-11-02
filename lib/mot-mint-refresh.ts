@@ -17,14 +17,19 @@
  * endpoint runs out of them. So this is called first, writes the vehicle row, and the mint then
  * reads what is there — the freeze needs no change at all.
  *
- * ── A FAILURE IS NOT NEWS ABOUT THE CAR ─────────────────────────────────────────────────────────
- * dvsaLookup answers null for a 404, a 403, a 429, a timeout and an unconfigured credential alike.
- * None of those says anything about this vehicle, so none of them writes a field, stamps
- * mot_checked_at, or stops the mint. The invoice is issued on the stored value, which is exactly
- * what happened before this existed. An MOT lookup must never be the reason a garage cannot bill.
+ * ── A FAILURE IS NOT NEWS ABOUT THE CAR, BUT IT IS NEWS ─────────────────────────────────────────
+ * No failure writes a field, stamps mot_checked_at, or stops the mint. The invoice is issued on the
+ * stored value, which is exactly what happened before this existed: an MOT lookup must never be the
+ * reason a garage cannot bill.
+ *
+ * What changed is that `answered: false` no longer stands alone. This comment used to say dvsaLookup
+ * "answers null for a 404, a 403, a 429, a timeout and an unconfigured credential alike" — true, and
+ * the reason the mint audit could not tell a car DVSA has never heard of from a key whose window was
+ * spent. The reason now rides along (`reason`), unused by the mint's DECISION and recorded in its
+ * outcome, because the decision is right either way and the diagnosis was the thing missing.
  */
 import type { PrismaClient } from '@prisma/client';
-import { dvsaLookup, motFieldsToWrite, type DvsaVehicle } from '@/lib/dvsa';
+import { dvsaLookup, motFieldsToWrite, type DvsaFailure, type DvsaResult } from '@/lib/dvsa';
 
 /** Long enough for a healthy DVSA, short enough that a sick one is not felt at the till. */
 export const MINT_LOOKUP_TIMEOUT_MS = 3000;
@@ -32,6 +37,8 @@ export const MINT_LOOKUP_TIMEOUT_MS = 3000;
 export type MintRefreshOutcome = {
   /** Did we get an answer at all? False for every failure mode, including the timeout. */
   answered: boolean;
+  /** WHICH failure, when there was one — null on an answer. Diagnosis, never a decision here. */
+  reason: DvsaFailure | null;
   /** Set only when the expiry itself moved — the fact worth an audit row. */
   expiryChanged: null | { from: string | null; to: string };
   /** Every field the write touched, for the audit. Empty when nothing moved. */
@@ -44,15 +51,21 @@ export type MintRefreshOutcome = {
  * and is the honest description of what this does. Cancelling properly means threading a signal
  * through the lookup, which is a change to a path four other callers share.
  */
-async function lookupWithin(reg: string, ms: number, lookup: (r: string) => Promise<DvsaVehicle | null>) {
+async function lookupWithin(reg: string, ms: number, lookup: (r: string) => Promise<DvsaResult>): Promise<DvsaResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // OUR deadline, named as ours. The race losing is a timeout WE imposed at MINT_LOOKUP_TIMEOUT_MS,
+  // which is shorter than dvsaLookup's own 5s abort — so this branch, not that one, is what a slow
+  // DVSA produces at the till, and it must not be reported as DVSA being unreachable.
+  const timedOut: DvsaResult = { ok: false, vehicle: null, reason: 'timeout', status: null };
   try {
     return await Promise.race([
       lookup(reg),
-      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); }),
+      new Promise<DvsaResult>((resolve) => { timer = setTimeout(() => resolve(timedOut), ms); }),
     ]);
   } catch {
-    return null; // a throwing lookup is a failed lookup, and a failed lookup is not news
+    // A THROWING LOOKUP IS A FAILED LOOKUP. dvsaLookup does not throw; an injected one might, and
+    // `unavailable` is the honest reading of a lookup that blew up rather than answered.
+    return { ok: false, vehicle: null, reason: 'unavailable', status: null };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -68,13 +81,14 @@ async function lookupWithin(reg: string, ms: number, lookup: (r: string) => Prom
 export async function refreshMotForMint(
   db: PrismaClient,
   vehicle: { id: string; registration: string; mot_expiry: Date | null; last_mot_mileage: number | null; last_mot_date: Date | null },
-  opts: { lookup?: (r: string) => Promise<DvsaVehicle | null>; timeoutMs?: number } = {},
+  opts: { lookup?: (r: string) => Promise<DvsaResult>; timeoutMs?: number } = {},
 ): Promise<MintRefreshOutcome> {
   const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
   const before = iso(vehicle.mot_expiry);
   try {
-    const data = await lookupWithin(vehicle.registration, opts.timeoutMs ?? MINT_LOOKUP_TIMEOUT_MS, opts.lookup ?? dvsaLookup);
-    if (!data) return { answered: false, expiryChanged: null, written: [] };
+    const r = await lookupWithin(vehicle.registration, opts.timeoutMs ?? MINT_LOOKUP_TIMEOUT_MS, opts.lookup ?? dvsaLookup);
+    if (!r.ok) return { answered: false, reason: r.reason, expiryChanged: null, written: [] };
+    const data = r.vehicle;
 
     const write = motFieldsToWrite(
       { mot_expiry: vehicle.mot_expiry, last_mot_mileage: vehicle.last_mot_mileage, last_mot_date: vehicle.last_mot_date },
@@ -86,11 +100,13 @@ export async function refreshMotForMint(
     const after = write.mot_expiry ? iso(write.mot_expiry) : before;
     return {
       answered: true,
+      reason: null,
       expiryChanged: write.mot_expiry ? { from: before, to: after as string } : null,
       written: Object.keys(write),
     };
   } catch {
-    // Belt and braces: a write that fails must not take the mint with it either.
-    return { answered: false, expiryChanged: null, written: [] };
+    // Belt and braces: a write that fails must not take the mint with it either. DVSA answered —
+    // the failure was OURS — so this is `unavailable` rather than any verdict about the lookup.
+    return { answered: false, reason: 'unavailable', expiryChanged: null, written: [] };
   }
 }

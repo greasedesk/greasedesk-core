@@ -7,7 +7,8 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { lookupVehicleByReg, lookupVehicleByVin, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { lookupVehicleByReg, lookupVehicleByVin, applyLookup, echoedKeys, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { failureSentence } from '@/lib/mot-refresh';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
 import MotBanner from '@/components/MotBanner';
@@ -139,7 +140,15 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
     setLookBusy(false);
     if (!r.ok) {
       if (r.reason === 'empty-reg') return;
-      setMsg({ text: t(r.reason === 'error' ? 'detailsEdit.dvsaError' : 'detailsEdit.dvsaNone'), ok: false });
+      // ── THE DIAGNOSIS WHEN THERE IS ONE ───────────────────────────────────────────────────────
+      // This pane said "DVSA has nothing for that registration" to a 404, a spent rate-limit
+      // window, a rejected credential and a timeout alike, because all four arrived as the same
+      // bare miss. failureSentence owns the wording so this pane and the diary cannot describe the
+      // same failure differently. `empty_answer` keeps the old copy: DVSA did answer, about a car
+      // it had nothing fillable for, which is what that string has always meant.
+      // (Not translated — same i18n debt as the diary's line, and noted in both places.)
+      const named = r.dvsaReason && r.dvsaReason !== 'empty_answer' ? failureSentence(r.dvsaReason) : null;
+      setMsg({ text: named ?? t(r.reason === 'error' ? 'detailsEdit.dvsaError' : 'detailsEdit.dvsaNone'), ok: false });
       return;
     }
     // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
@@ -148,7 +157,10 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
       { make, model, colour, fuel, year: vyear, engineCc },
       { make: r.vehicle.make, model: r.vehicle.model, colour: r.vehicle.colour,
         fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc },
-      r.reg, { mot: !!r.mot });
+      // THE ECHO RULE APPLIES HERE TOO, and this is why it lives in the shared module rather than
+      // at the diary's call site: 58 of TMBS's cars hold model == make, and a rule only one of two
+      // look-up surfaces obeys is a rule that drifts. DVSA sending nothing still leaves it alone.
+      r.reg, { mot: !!r.mot, overwritable: echoedKeys({ make, model }) });
     setMake(values.make); setModel(values.model); setColour(values.colour);
     setFuel(values.fuel); setVYear(values.year); setEngineCc(values.engineCc);
     setFill(f);

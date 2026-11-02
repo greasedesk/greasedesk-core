@@ -37,6 +37,12 @@ let fix = null;
 // The shape dvsaLookup returns, with an expiry a year on from what the fixture holds.
 const answers = { make: 'MINI', model: 'COOPER', colour: 'Red', fuel: 'Petrol', engineCc: 1499, year: 2014,
   motExpiry: FRESH, lastMotMileage: 117735, lastMotDate: '2026-08-21', odometerHistory: [] };
+// dvsaLookup returns a RESULT now (lib/dvsa::DvsaResult), not a vehicle-or-null, so an injected
+// lookup must answer in that shape. Built here rather than inline so the failure table below cannot
+// drift from the success case — and so `async () => null`, which used to stand for every failure and
+// would now land in refreshMotForMint's catch instead of its failure branch, cannot come back.
+const answered = async () => ({ ok: true, vehicle: answers, reason: null, status: 200 });
+const failsWith = (reason) => async () => ({ ok: false, vehicle: null, reason, status: null });
 
 try {
   const stale = await prisma.vehicle.count({ where: { group_id: ZZ, registration: REG } });
@@ -65,7 +71,7 @@ try {
   check('the fixture starts stale and unverified',
     a.v.mot_expiry.toISOString().slice(0, 10) === '2026-09-20' && a.v.mot_checked_at === null,
     'a check that starts where it wants to end proves nothing');
-  const r1 = await M.refreshMotForMint(prisma, a.v, { lookup: async () => answers });
+  const r1 = await M.refreshMotForMint(prisma, a.v, { lookup: answered });
   check('the refresh reports the expiry moved', r1.answered === true
     && r1.expiryChanged?.from === '2026-09-20' && r1.expiryChanged?.to === FRESH, JSON.stringify(r1));
   const afterA = await prisma.vehicle.findUnique({ where: { id: a.v.id },
@@ -84,17 +90,30 @@ try {
     'the stale date must be gone, not merely accompanied');
 
   // ── 2. WITH DVSA UNAVAILABLE, THE MINT IS UNAFFECTED ─────────────────────────────────────────
-  // Four failure shapes, because "it failed" is not one thing and the one people test is `null`.
+  // Several failure shapes, because "it failed" is not one thing — and each one must now also say
+  // WHICH, since `answered: false` alone could not tell a car DVSA has never heard of from a key
+  // whose window was spent. The DECISION is identical for all of them and that is the point: the
+  // mint is never blocked and nothing is ever stamped. Only the diagnosis differs.
   console.log('\n— and when DVSA is not there —');
   const b = await mk('B');
-  for (const [name, lookup, opts] of [
-    ['answers null', async () => null, {}],
-    ['throws', async () => { throw new Error('ECONNRESET'); }, {}],
-    ['never returns (timeout)', () => new Promise(() => {}), { timeoutMs: 300 }],
+  for (const [name, lookup, opts, expect] of [
+    ['has no record of the car', failsWith('not_found'), {}, 'not_found'],
+    ['is rate-limited', failsWith('rate_limited'), {}, 'rate_limited'],
+    ['is refused the credential', failsWith('forbidden'), {}, 'forbidden'],
+    ['throws', async () => { throw new Error('ECONNRESET'); }, {}, 'unavailable'],
+    ['never returns (timeout)', () => new Promise(() => {}), { timeoutMs: 300 }, 'timeout'],
   ]) {
     const r = await M.refreshMotForMint(prisma, b.v, { lookup, ...opts });
     check(`a lookup that ${name} writes nothing`, r.answered === false && r.written.length === 0 && r.expiryChanged === null, JSON.stringify(r));
+    check(`  …and the outcome NAMES it: ${expect}`, r.reason === expect, `reason=${JSON.stringify(r.reason)}`);
   }
+  // THE TIMEOUT IS OURS, NOT DVSA'S. A lookup that never returns is us giving up at timeoutMs, and
+  // reporting that as `unavailable` would blame DVSA for a deadline we chose. Asserted as a PAIR
+  // with the throw above, which is the one that genuinely is `unavailable`.
+  const slow = await M.refreshMotForMint(prisma, b.v, { lookup: () => new Promise(() => {}), timeoutMs: 200 });
+  const blew = await M.refreshMotForMint(prisma, b.v, { lookup: async () => { throw new Error('x'); } });
+  check('our deadline and their outage are told apart', slow.reason === 'timeout' && blew.reason === 'unavailable',
+    `slow=${slow.reason} blew=${blew.reason}`);
   const afterB = await prisma.vehicle.findUnique({ where: { id: b.v.id }, select: { mot_expiry: true, mot_checked_at: true } });
   check('  …and stamps nothing — a failure is not news about the car',
     afterB.mot_checked_at === null && afterB.mot_expiry.toISOString().slice(0, 10) === '2026-09-20',
