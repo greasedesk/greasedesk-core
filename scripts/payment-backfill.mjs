@@ -2,8 +2,19 @@
  * File: scripts/payment-backfill.mjs
  * Reconstruct Payment rows for invoices marked paid BEFORE the payment ledger existed.
  *
- *   node --experimental-strip-types --import ./scripts/_ts.mjs scripts/payment-backfill.mjs --group=GB-GD2141
- *   …same, plus --apply   to write
+ *   node scripts/payment-backfill.mjs --group=GB-GD2141                     # gate database (.env)
+ *   node scripts/payment-backfill.mjs --group=GB-GD2236 --yes-production   # the live tenant
+ *   …plus --apply   to write
+ *
+ * ── WHICH DATABASE, SAID OUT LOUD ───────────────────────────────────────────────────────────────
+ * This read DATABASE_URL from .env and nothing else, which was unambiguous while there was one
+ * database. Since 2026-10-26 .env points at the GATE project, so a tenant that lives on production
+ * reported "no tenant with ref …" — a true sentence about the wrong database, and the most
+ * plausible reading of it is that the ref is wrong. `--yes-production` reads the URLs from
+ * .migrate-target.production (the one file migrate-apply, encrypt-rep-bank and the date shift all
+ * share) BEFORE lib/db is imported, because lib/db builds its client at import time and dotenv
+ * does not override a variable that is already set. The Environment marker is then checked, so a
+ * stale variable cannot quietly satisfy the flag either.
  *
  * DRY RUN BY DEFAULT. --apply is the only thing that writes, and a tenant ref is always required:
  * there is no "all tenants" mode, because the one thing this must never do is sweep further than
@@ -53,6 +64,24 @@
  */
 import './_ts.mjs';
 import { createInterface } from 'node:readline';
+import { readFileSync, existsSync } from 'node:fs';
+
+// ── BEFORE lib/db, OR THE FLAG DOES NOTHING ─────────────────────────────────────────────────────
+// The client is built at import time from whatever is set then. Everything below this block may
+// import lib/db; nothing above it may.
+const YES_PRODUCTION = process.argv.includes('--yes-production');
+if (YES_PRODUCTION) {
+  const target = new URL('../.migrate-target.production', import.meta.url).pathname;
+  if (!existsSync(target)) {
+    console.error(`\nREFUSING: --yes-production needs ${target}. NOTHING HAS BEEN READ.\n`);
+    process.exit(2);
+  }
+  for (const line of readFileSync(target, 'utf8').split('\n')) {
+    const m = line.match(/^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*(.*)$/);
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
+  }
+}
+
 const { prisma } = await import('../lib/db.ts');
 const { invoiceTotals, effectivePaidDate } = await import('../lib/invoice.ts');
 const { recordPayment } = await import('../lib/payments.ts');
@@ -74,6 +103,13 @@ const gbp = (p) => `£${(p / 100).toFixed(2)}`;
 const pad = (s, n) => String(s).padEnd(n);
 
 try {
+  // WHERE AM I. Printed before anything is read, so the operator never has to infer it from a
+  // tenant that turned out to be missing. The marker is the authority; the flag is only a request.
+  const env = await prisma.environment.findFirst({ select: { kind: true, label: true } });
+  console.log(`\ndatabase: ${new URL(process.env.DATABASE_URL ?? 'postgres://unknown').host.split('.')[0]}  ·  Environment ${env?.kind ?? '(none)'}${env?.label ? ` (${env.label})` : ''}`);
+  if (YES_PRODUCTION && env?.kind !== 'production') {
+    throw new Error(`--yes-production was passed but the Environment marker says "${env?.kind}". Refusing.`);
+  }
   const g = await prisma.group.findUnique({
     where: { ref: REF },
     select: { id: true, ref: true, group_name: true, is_demo: true, is_internal: true },

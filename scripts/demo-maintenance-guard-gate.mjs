@@ -198,6 +198,23 @@ check('  …and it needs a TERMINAL before it will prompt',
   'a confirmation that can be piped in is not a confirmation');
 check('  …and the refusal is THROWN, not logged',
   /if \(refusal\) throw new Error\(/.test(prose(backfill)));
+{
+  // THE ORDER THAT HAS NO ERROR WHEN IT IS WRONG. lib/db builds its client at import time, so the
+  // production URLs must be in the environment BEFORE that import. Move the block below it and the
+  // flag silently does nothing: the script reads .env, finds the gate database, and reports "no
+  // tenant with ref GB-GD2236" — a true sentence about the wrong database, whose likeliest reading
+  // is that the ref is wrong.
+  const b = prose(backfill);
+  const flag = b.indexOf("'--yes-production'");
+  const file = b.indexOf('.migrate-target.production');
+  const db = b.indexOf("await import('../lib/db.ts')");
+  check('  …and it can reach production, with the URLs set BEFORE lib/db is imported',
+    flag > 0 && file > flag && db > file,
+    `flag ${flag}, target file ${file}, lib/db ${db} — this order has no error when it is wrong`);
+  check('  …with the Environment marker, not the flag, as the authority',
+    /env\?\.kind !== 'production'/.test(b),
+    'a stale DATABASE_URL must not be able to satisfy --yes-production');
+}
 
 check(`${SHIFT} parses --allow-reference-demo`, parsesFlag(shift));
 // TWICE, for the reason demo-refresh asks its activity check twice: the first call must refuse
