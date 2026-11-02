@@ -19,6 +19,8 @@
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
 import type { DvsaFailure } from '@/lib/dvsa';
 import type { RefreshOutcome } from '@/lib/mot-refresh';
+// VALUE imports, and safe: lib/mot-refresh is pure and client-side already (the diary imports it).
+import { motCheckReason, motLookupLine } from '@/lib/mot-refresh';
 import { normalizeReg, sameRegistration } from '@/lib/vehicle-identity';
 
 export type LookupVehicleFields = {
@@ -335,6 +337,148 @@ export function applyLookup<T extends Record<string, string>>(
     fields[k] = next;                                 // remembered so it can be taken back
   }
   return { values, fill: { reg: normalizeReg(reg) ?? '', fields, mot: !!opts.mot } };
+}
+
+/**
+ * ── THE WHOLE LOOK-UP, ONCE, FOR EVERY SURFACE THAT HAS A REGISTRATION BOX ──────────────────────
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────────────────────────
+ * The MOT refresh and the blank fill were built on the DIARY's quick-create and nowhere else, and
+ * the report came back from the NEW JOB CARD page: LC09XFU, S1CNE, L100BKY and KW21HLN all said
+ * "Filled from your records" and nothing more — S1CNE's make, model, colour, year, fuel and engine
+ * stayed blank, L100BKY stayed MINI/MINI, and no MOT line appeared on any of them. Every one of
+ * those is the defect that had just been fixed, on a surface that never got the fix.
+ *
+ * Three surfaces call lookupVehicleByReg — the diary, pages/admin/jobcards/new, and the existing
+ * card's Customer Details pane — and each held its OWN copy of what to do with the answer. That is
+ * the same shape of failure this module's header already describes ("three implementations drifted,
+ * and none of them handled the case where the REGISTRATION ITSELF CHANGED"); the fix then was to
+ * move the merge here, and the merge is now only part of the policy. The rest of it — records
+ * first, then DVSA for the gaps, and always a line about the MOT — went back to living in a page.
+ *
+ * So the POLICY lives here, entire:
+ *   1. our records first, because a returning car brings its owner, its history and its open cards;
+ *   2. then DVSA, when what we hold is stale OR thin, as ONE call serving both questions;
+ *   3. blanks only, never overwriting what is stored or typed, with a model that merely repeats the
+ *      make counted as blank (echoedKeys) and never cleared if DVSA offers nothing;
+ *   4. a line about the MOT, ALWAYS — including the press that makes no call at all.
+ *
+ * ── WHAT IS DELIBERATELY NOT SHARED ─────────────────────────────────────────────────────────────
+ * The STATE and the WORDING. Callers set their own fields from `values` and word their own status
+ * message from `source`, because the diary is translated through next-i18next and the new-card page
+ * is not, and folding that in here would either hardcode English into a shared module or silently
+ * drop a translation. `motLine` IS returned ready to print: the sentence is the feature and
+ * lib/mot-refresh owns it, so no surface composes a second version. (That line is not yet
+ * translated — the i18n debt is noted there and on both surfaces.)
+ *
+ * The one field whose NAME differs between surfaces is the customer's: `cust` on the diary,
+ * `customerName` on the new-card page. Named by the caller rather than guessed at, and omitted
+ * entirely by the existing-card pane, which owns its customer elsewhere.
+ */
+export type LookupAndFillOptions = {
+  /** OUR id for this car, when the caller has one — the handle /api/mot-refresh needs. */
+  vehicleId?: string | null;
+  /** default true — check our records first. False goes straight to DVSA (the existing-card pane,
+   *  where the record IS the form and re-reading it would tell us nothing new). */
+  internal?: boolean;
+  /** Which key in the caller's form holds the customer's name. Omit to fill no owner fields. */
+  ownerNameKey?: string;
+  /** Injectable for the gate; defaults to the wall clock. */
+  now?: Date;
+};
+
+export type LookupAndFillResult<T> =
+  | { ok: false; reg: string; reason: 'empty-reg' | 'not-found' | 'error';
+      dvsaReason: DvsaFailure | 'empty_answer' | null; motLine: null }
+  | { ok: true; reg: string; source: 'records' | 'dvsa';
+      /** The caller's own object with the blanks filled — every other key untouched. */
+      values: T;
+      fill: LookupFill;
+      /** What we now hold about the MOT, after any refresh. Null on a DVSA-branch hit. */
+      storedMot: StoredMot | null;
+      /** DVSA's own MOT facts, for the caller to send on save. */
+      mot: LookupMotMeta | null;
+      owner: LookupOwnerFields | null;
+      noShows: { count: number; dates: string[] } | null;
+      dueItems: NonNullable<Extract<VehicleLookupResult, { ok: true }>['dueItems']> | null;
+      openCards: OpenCardSummary[] | null;
+      /** THE LINE, ready to print. Never null on a hit — that is the point of it. */
+      motLine: string;
+      /** Did this press reach DVSA? For the gate, and for a caller that wants to say so. */
+      dvsaCalled: boolean;
+      /** Which failure, if the refresh ran and did not answer. */
+      refreshFailure: DvsaFailure | null };
+
+export async function lookupAndFill<T extends Record<string, any>>(
+  rawReg: string,
+  current: T,
+  opts: LookupAndFillOptions = {},
+): Promise<LookupAndFillResult<T>> {
+  const now = opts.now ?? new Date();
+  const r = await lookupVehicleByReg(rawReg, { internal: opts.internal, vehicleId: opts.vehicleId });
+  if (!r.ok) return { ok: false, reg: r.reg, reason: r.reason, dvsaReason: r.dvsaReason ?? null, motLine: null };
+
+  // ── 1. THE PREFILL, BLANKS ONLY ───────────────────────────────────────────────────────────────
+  const incoming: Record<string, string | null | undefined> = {
+    vin: r.vehicle.vin, mileage: r.vehicle.mileage, make: r.vehicle.make, model: r.vehicle.model,
+    colour: r.vehicle.colour, fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc,
+  };
+  // THE OWNER ONLY WHEN THE CALLER HAS SOMEWHERE TO PUT IT. A records hit brings the customer; a
+  // DVSA hit knows the car and not the customer, and r.owner is null there, so this is naturally
+  // empty rather than guarded on the source.
+  if (opts.ownerNameKey && r.owner) {
+    incoming[opts.ownerNameKey] = r.owner.name;
+    incoming.phone = r.owner.phone;
+    incoming.email = r.owner.email;
+  }
+  const first = applyLookup(current as Record<string, string>, incoming, r.reg,
+    { mot: !!r.mot, overwritable: echoedKeys({ make: current.make, model: current.model }) });
+  let values = first.values as unknown as T;
+  let fill = first.fill;
+
+  // ── 2. AND IF WHAT WE HOLD IS STALE OR THIN, ONE CALL TO DVSA ─────────────────────────────────
+  // Only on a records hit: the DVSA branch has just been to DVSA. The condition is the throttle —
+  // one shared key, no cache, no cap of ours — so a car that is fresh AND fully filled costs
+  // nothing, and the same car pressed four times in an afternoon costs one call.
+  let storedMot: StoredMot | null = r.source === 'records' ? (r.storedMot ?? null) : null;
+  let refreshFailure: DvsaFailure | null = null;
+  let dvsaCalled = r.source === 'dvsa';
+
+  if (r.source === 'records') {
+    const stale = motCheckReason({ motCheckedAt: storedMot?.motCheckedAt ?? null }, now);
+    // THIN IS ASKED OF THE MERGED VALUES, not of the stored record: anything the operator has
+    // already typed is not a gap, and filling it is not a reason to spend a call.
+    const thin = isThinRecord({ make: values.make, model: values.model, colour: values.colour,
+      fuel: values.fuel, year: values.year, engineCc: values.engineCc });
+    if (r.vehicleId && (stale || thin)) {
+      dvsaCalled = true;
+      const reply = await refreshMotFromDvsa(r.vehicleId);
+      storedMot = applyMotRefresh(storedMot, reply);
+      refreshFailure = reply.outcome.failure;
+      if (reply.vehicle) {
+        const second = applyLookup(values as Record<string, string>, reply.vehicle, r.reg,
+          { mot: fill.mot, overwritable: echoedKeys({ make: values.make, model: values.model }) });
+        values = second.values as unknown as T;
+        // BOTH FILLS, MERGED. Keeping only the second would forget what the records merge filled,
+        // and clearStale would then leave those fields behind when the plate changed.
+        fill = { ...fill, fields: { ...fill.fields, ...second.fill.fields } };
+      }
+    }
+  }
+
+  // ── 3. THE LINE, ALWAYS ───────────────────────────────────────────────────────────────────────
+  // A DVSA-branch hit has just been answered, so the stamp is now and the expiry is theirs. A
+  // records hit speaks from what we hold, which is what lets it say something on the press that
+  // made no call — the LC09XFU case, where two correct silences produced a blank screen.
+  const motLine = r.source === 'dvsa'
+    ? motLookupLine({ expiry: r.mot?.motExpiry ?? null, checkedAt: now, failure: null, now })
+    : motLookupLine({ expiry: storedMot?.motExpiry ?? null, checkedAt: storedMot?.motCheckedAt ?? null, failure: refreshFailure, now });
+
+  return {
+    ok: true, reg: r.reg, source: r.source, values, fill, storedMot, mot: r.mot ?? null,
+    owner: r.owner ?? null, noShows: r.noShows ?? null, dueItems: r.dueItems ?? null,
+    openCards: r.openCards ?? null, motLine, dvsaCalled, refreshFailure,
+  };
 }
 
 /** Has the plate moved away from the one this fill came from? No fill = nothing to be stale. */

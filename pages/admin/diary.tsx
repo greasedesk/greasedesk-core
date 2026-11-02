@@ -58,9 +58,8 @@ import MotBanner from '@/components/MotBanner';
 import type { JobCardPageProps } from '@/lib/jobcard-page-data';
 import { normalizeReg, normalizeVin } from '@/lib/vehicle-identity';
 import type { OpenCardSummary } from '@/lib/duplicate-cards';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, refreshMotFromDvsa, applyMotRefresh, applyLookup, isThinRecord, echoedKeys, staleAgainst, clearStale, type LookupFill, type StoredMot } from '@/lib/vehicle-lookup-client';
-import { motCheckReason, motLookupLine } from '@/lib/mot-refresh';
-import type { DvsaFailure } from '@/lib/dvsa';
+import { lookupAndFill, lookupVehicleByVin, backfillMotHistory, staleAgainst, clearStale, type LookupFill, type StoredMot } from '@/lib/vehicle-lookup-client';
+import { failureSentence } from '@/lib/mot-refresh';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { mileageError, vinWarn, phoneWarn, emailWarn, normalizePhone } from '@/lib/quick-validate';
 import { computeQuoteTotals, poundsToPennies } from '@/lib/quote-totals';
@@ -1709,7 +1708,10 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
   const [storedMot, setStoredMot] = useState<StoredMot | null>(null);
   // THE SECOND PHASE OF A LOOKUP, held separately from lookBusy so the form is usable the instant
   // the records hit lands: the fields are already filled while DVSA is still being asked.
-  const [motBusy, setMotBusy] = useState(false);
+  // motBusy IS GONE, not forgotten. It existed because the MOT refresh was a second await this
+  // component made on its own, after the look-up had already finished and cleared lookBusy. The
+  // whole look-up is now ONE awaited call (lookupAndFill), so lookBusy spans the DVSA call too and
+  // a second flag would be state nothing ever sets — which reads as a feature that never fires.
   /** The one line a look-up always leaves behind (lib/mot-refresh::motLookupLine). Never a bare
    *  sentence assembled here — the words are the feature and they are asserted without a browser. */
   const [motLine, setMotLine] = useState<string | null>(null);
@@ -1778,97 +1780,34 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
     // other path was not a fallback; for these cars it was nothing at all.
     //
     // Kept as a rewrite rather than a deletion so the reversal is visible with its reason.
-    const r = await lookupVehicleByReg(reg);
+    // ── ONE SHARED FUNCTION, NOT THIS PAGE'S OWN POLICY ───────────────────────────────────────
+    // lookupAndFill does the whole of it: our records first, then DVSA when what we hold is stale
+    // or thin (one call, both uses), blanks only with the echo rule, and the MOT line. This page
+    // had its own copy of the second half and the new-job-card page had none at all, which is how
+    // S1CNE and L100BKY came back unfilled with no MOT line on a surface nobody re-tested.
+    const r = await lookupAndFill(reg, { cust, phone, email, vin, mileage, make, model, colour: vColour, fuel, year, engineCc },
+      { ownerNameKey: 'cust' });
     setLookBusy(false);
-    setNoShows(r.ok ? (r.noShows ?? null) : null);
-    setDueItems(r.ok ? (r.dueItems ?? null) : null);
-    setOpenCards(r.ok ? (r.openCards ?? null) : null);
-    setStoredMot(r.ok ? (r.storedMot ?? null) : null);
     if (r.reg && r.reg !== reg) setReg(r.reg);
-    if (!r.ok) { setLookMsg({ text: t('create.lookupNone'), ok: false }); return; } // miss/failure → manual
-    // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
-    // and for which plate, so editing the registration can hand it back.
-    const { values, fill: f } = applyLookup(
-      { cust, phone, email, vin, mileage, make, model, colour: vColour, fuel, year, engineCc },
-      { cust: r.owner?.name, phone: r.owner?.phone, email: r.owner?.email,
-        vin: r.vehicle.vin, mileage: r.vehicle.mileage, make: r.vehicle.make, model: r.vehicle.model,
-        colour: r.vehicle.colour, fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc },
-      r.reg, { mot: !!r.mot });
+    if (!r.ok) {
+      setNoShows(null); setDueItems(null); setOpenCards(null); setStoredMot(null); setMotLine(null);
+      // THE DIAGNOSIS WHEN THE SERVER GAVE ONE — a rate-limited key must not read as an unknown
+      // plate. failureSentence owns the wording (untranslated; same i18n debt as the line below).
+      const named = r.dvsaReason && r.dvsaReason !== 'empty_answer' ? failureSentence(r.dvsaReason) : null;
+      setLookMsg({ text: named ?? t('create.lookupNone'), ok: false });
+      return; // miss/failure → manual
+    }
+    setNoShows(r.noShows); setDueItems(r.dueItems); setOpenCards(r.openCards); setStoredMot(r.storedMot);
+    const values = r.values;
     setCust(values.cust); setPhone(values.phone); setEmail(values.email);
     setVin(values.vin); setMileage(values.mileage); setMake(values.make); setModel(values.model);
     setVColour(values.colour); setFuel(values.fuel); setYear(values.year); setEngineCc(values.engineCc);
-    setFill(f);
+    setFill(r.fill);
     // DVSA's own facts, held for the create below. Not editable on this form — it is a booking, not
     // the MOT record — but no longer thrown away.
     if (r.mot) setMot(r.mot);
+    setMotLine(r.motLine);
     setLookMsg({ text: t(r.source === 'records' ? 'create.lookupRecord' : 'create.lookupDvsa'), ok: true });
-
-    // ── AND IF WHAT WE HOLD IS NOT EVIDENCE ABOUT TODAY, ASK DVSA NOW ──────────────────────────
-    // A records hit returns and never reaches DVSA — right for the owner and the history, wrong for
-    // the MOT, which is the one field on this form that can have changed somewhere else since we
-    // last looked. LC09XFU read "expired 2026-07-23" on a car that had been tested since, and
-    // pressing Look up again could not help.
-    //
-    // The CONDITION is the throttle, and it is the whole reason this is safe to put on a button a
-    // garage presses all day: one shared DVSA key, no cache and no cap of our own, so a window of a
-    // week (lib/mot-refresh::MOT_CHECK_FRESH_DAYS) means the same car four times in an afternoon
-    // costs one call. The DVSA branch above is not included — it has just been to DVSA.
-    if (r.source === 'records') {
-      // ── TWO QUESTIONS, ONE CALL ─────────────────────────────────────────────────────────────
-      // STALE is about how old our evidence is; THIN is about how much of it there is, and a car
-      // can be either without being both. LC09XFU was both at once, which is what made the first
-      // fix look like no fix: its MOT had been verified that morning, so the refresh correctly
-      // declined — and its record was still make MINI / model MINI with everything else empty,
-      // because the records branch never reaches DVSA.
-      //
-      // One DVSA response answers both. Asking twice would spend two of a shared key's calls to
-      // read the same payload, and the condition is still the throttle: a car that is fresh AND
-      // fully filled makes no call at all.
-      const stale = motCheckReason({ motCheckedAt: r.storedMot?.motCheckedAt ?? null }, new Date());
-      const thin = isThinRecord({ make: values.make, model: values.model, colour: values.colour,
-        fuel: values.fuel, year: values.year, engineCc: values.engineCc });
-      let held: StoredMot | null = r.storedMot ?? null;
-      let failure: DvsaFailure | null = null;
-      if (r.vehicleId && (stale || thin)) {
-        setMotBusy(true); setMotLine(null);
-        try {
-          const reply = await refreshMotFromDvsa(r.vehicleId);
-          // ONLY ON AN ANSWER, AND ONLY FROM THE SERVER'S OWN STAMP — the rule itself is
-          // lib/vehicle-lookup-client::applyMotRefresh, where it can be asserted without a
-          // browser. A silence returns the record unchanged, so the banner keeps saying what it
-          // said; a local `new Date()` here would claim a verification nobody performed.
-          held = applyMotRefresh(held, reply);
-          failure = reply.outcome.failure;
-          // ── AND THE BLANKS, OFF THE SAME ANSWER ─────────────────────────────────────────────
-          // The SECOND merge, applied to the values the records merge produced rather than to the
-          // state setters above, which have not re-rendered yet. `overwritable` is the echo rule
-          // and nothing else (echoedKeys): a model that merely repeats the make may be replaced,
-          // and applyLookup's own "nothing offered" guard means a silent DVSA leaves it as it was.
-          if (reply.vehicle) {
-            const over = echoedKeys({ make: values.make, model: values.model });
-            const { values: v2, fill: f2 } = applyLookup(values, reply.vehicle, r.reg, { mot: f.mot, overwritable: over });
-            setMake(v2.make); setModel(v2.model); setVColour(v2.colour);
-            setFuel(v2.fuel); setYear(v2.year); setEngineCc(v2.engineCc);
-            // BOTH fills, merged. setFill(f2) alone would forget what the records merge filled, and
-            // clearStale would then leave those fields behind when the plate changed.
-            setFill({ ...f, fields: { ...f.fields, ...f2.fields } });
-          }
-        } finally {
-          // CLEARED IN A FINALLY, as every busy flag here is: this component is not remounted by a
-          // same-URL refresh, so a flag left set stays set.
-          setMotBusy(false);
-        }
-      }
-      setStoredMot(held);
-      // ONE LINE, ALWAYS — including the press that made no call, which is the whole point. It
-      // speaks from what we HOLD, so "checked 09:23 — MOT valid to 6 October 2027" is what a fresh
-      // stamp and a distant expiry now say, instead of the blank screen that got reported as a bug.
-      setMotLine(motLookupLine({ expiry: held?.motExpiry ?? null, checkedAt: held?.motCheckedAt ?? null, failure, now: new Date() }));
-    } else {
-      // THE DVSA BRANCH HAS JUST BEEN TO DVSA, so the stamp is now and the expiry is theirs. No
-      // second call, and still a line: a new car deserves the same sentence as a known one.
-      setMotLine(motLookupLine({ expiry: r.mot?.motExpiry ?? null, checkedAt: new Date(), failure: null, now: new Date() }));
-    }
   }
   // Start: seeded from the clicked cell, or user-picked (pickWhen). DURATION is what the job
   // create sends — hours × 60, straight through, with no end time in the middle to be re-derived
@@ -1972,7 +1911,7 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                   year: storedMot?.year ?? (year.trim() ? Number(year) : null),
                 }}
                 bookingAt={startAt || null}
-                lookupBusy={lookBusy || motBusy || busy}
+                lookupBusy={lookBusy || busy}
                 onLookup={lookupKeyFor(vehicleLookupProvider) === 'registration' ? lookupVehicle : undefined}
               />
             )}
@@ -1980,10 +1919,8 @@ function CreateDialog({ info, siteId, resources, defaultResourceId, vehicleIdLab
                 this surface and the marketing list cannot describe the same outcome differently.
                 Printed even when nothing was learned: silence after a check reads as confirmation.
                 (Not yet translated — the sentence is composed server-side; i18n debt, noted.) */}
-            {!!regCanon && (motBusy || motLine) && (
-              <div className="text-xs text-muted" data-testid="create-mot-refresh">
-                {motBusy ? 'Checking the MOT with DVSA…' : motLine}
-              </div>
+            {!!regCanon && !!motLine && (
+              <div className="text-xs text-muted" data-testid="create-mot-refresh">{motLine}</div>
             )}
             {/* Vehicle — Registration anchors the card; VIN + Mileage optional. */}
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t('create.groupVehicle')}</div>

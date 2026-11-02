@@ -7,7 +7,7 @@
  */
 import React, { useState } from 'react';
 import { useTranslation } from 'next-i18next';
-import { lookupVehicleByReg, lookupVehicleByVin, applyLookup, echoedKeys, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { lookupAndFill, lookupVehicleByVin, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
 import { failureSentence } from '@/lib/mot-refresh';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
 import { lookupKeyFor, isPlausibleVin, type LookupProviderName } from '@/lib/vehicle-lookup-providers';
@@ -116,6 +116,9 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
   // it's saved with the form and displayed immediately below.
   const [mot, setMot] = useState<{ motExpiry: string | null; lastMotMileage: number | null; lastMotDate: string | null } | null>(null);
   const [lookBusy, setLookBusy] = useState(false);
+  /** The one line a look-up always leaves behind (lib/mot-refresh::motLookupLine), composed there
+   *  so this pane, the diary and the new-card page cannot word the same outcome differently. */
+  const [motLine, setMotLine] = useState<string | null>(null);
   // WHAT THE LAST LOOKUP FILLED, AND FOR WHICH PLATE. Only what it wrote is ever taken back: these
   // fields are seeded from the SAVED vehicle, so clearing indiscriminately would blank a real car
   // because somebody corrected a typo. See lib/vehicle-lookup-client::clearStale.
@@ -135,36 +138,29 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
 
   async function dvsaLookup() {
     setLookBusy(true); setMsg(null);
-    // The record already exists → DVSA only (internal: false), through the ONE shared client path.
-    const r = await lookupVehicleByReg(registration, { internal: false, vehicleId });
+    // THE SHARED POLICY (lib/vehicle-lookup-client::lookupAndFill). internal:false because on an
+    // existing card the saved record IS the form — re-reading our own row would tell us nothing
+    // new — so this surface goes straight to DVSA. Everything else is the same rule as the diary
+    // and the new-card page: blanks only, the echo rule, and always a line about the MOT.
+    const r = await lookupAndFill(registration, { make, model, colour, fuel, year: vyear, engineCc },
+      { internal: false, vehicleId });
     setLookBusy(false);
     if (!r.ok) {
+      setMotLine(null);
       if (r.reason === 'empty-reg') return;
-      // ── THE DIAGNOSIS WHEN THERE IS ONE ───────────────────────────────────────────────────────
-      // This pane said "DVSA has nothing for that registration" to a 404, a spent rate-limit
-      // window, a rejected credential and a timeout alike, because all four arrived as the same
-      // bare miss. failureSentence owns the wording so this pane and the diary cannot describe the
-      // same failure differently. `empty_answer` keeps the old copy: DVSA did answer, about a car
-      // it had nothing fillable for, which is what that string has always meant.
-      // (Not translated — same i18n debt as the diary's line, and noted in both places.)
+      // The DIAGNOSIS when there is one. This pane said "DVSA has nothing for that registration"
+      // to a 404, a spent rate-limit window, a rejected credential and a timeout alike.
+      // `empty_answer` keeps the old copy: DVSA answered, about a car it had nothing fillable for.
       const named = r.dvsaReason && r.dvsaReason !== 'empty_answer' ? failureSentence(r.dvsaReason) : null;
       setMsg({ text: named ?? t(r.reason === 'error' ? 'detailsEdit.dvsaError' : 'detailsEdit.dvsaNone'), ok: false });
       return;
     }
-    // THE SHARED MERGE (lib/vehicle-lookup-client): fill blanks only, and remember what was filled
-    // and for which plate. The MOT trio has no manual input, so a lookup always refreshes it.
-    const { values, fill: f } = applyLookup(
-      { make, model, colour, fuel, year: vyear, engineCc },
-      { make: r.vehicle.make, model: r.vehicle.model, colour: r.vehicle.colour,
-        fuel: r.vehicle.fuel, year: r.vehicle.year, engineCc: r.vehicle.engineCc },
-      // THE ECHO RULE APPLIES HERE TOO, and this is why it lives in the shared module rather than
-      // at the diary's call site: 58 of TMBS's cars hold model == make, and a rule only one of two
-      // look-up surfaces obeys is a rule that drifts. DVSA sending nothing still leaves it alone.
-      r.reg, { mot: !!r.mot, overwritable: echoedKeys({ make, model }) });
+    const values = r.values;
     setMake(values.make); setModel(values.model); setColour(values.colour);
     setFuel(values.fuel); setVYear(values.year); setEngineCc(values.engineCc);
-    setFill(f);
+    setFill(r.fill);
     if (r.mot) setMot(r.mot);
+    setMotLine(r.motLine);
     setMsg({ text: t('detailsEdit.dvsaDone'), ok: true });
   }
   const motShow = {
@@ -259,6 +255,12 @@ export default function CustomerDetailsForm({ jobCardId, vehicleId, owner, vehic
           decides whether the car can be driven here, and it must be impossible to miss. */}
       <MotBanner vehicle={motShow} bookingAt={bookingAt ?? null} lookupBusy={lookBusy || busy}
         onLookup={lookupKeyFor(vehicleLookupProvider) === 'registration' && registration.trim() ? dvsaLookup : undefined} />
+      {/* AFTER ANY LOOK-UP, ONE LINE. The banner above is silent by design once an MOT is clear of
+          its soon window (lib/mot-banner returns kind:'none'), which is how a working check came to
+          look like a broken one. The threshold is NOT repeated here: mot-banner-gate forbids this
+          file carrying its own copy of the number, and a comment restating it goes stale the day it
+          moves. (Not translated — i18n debt, noted on all three surfaces.) */}
+      {!!motLine && <p className="text-xs mt-1 text-muted" data-testid="details-mot-line">{motLine}</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelCls} data-testid="veh-id-label">{vehicleIdLabel}</label>

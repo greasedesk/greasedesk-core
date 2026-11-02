@@ -119,8 +119,20 @@ try {
   console.log('\n— one rule, three call sites, no survivors —');
   const FORMS = ['components/jobcard/CustomerDetailsForm.tsx', 'pages/admin/jobcards/new.tsx', 'pages/admin/diary.tsx'];
   const src = Object.fromEntries(FORMS.map((f) => [f, prose(readFileSync(f, 'utf8'))]));
-  const notApplying = FORMS.filter((f) => !/applyLookup\(/.test(src[f]));
-  check('all three apply the shared merge', notApplying.length === 0, notApplying.join(', ') || '3 of 3');
+  // RE-POINTED 2026-11-02, and the gate found it. This asked whether each form calls applyLookup,
+  // which was the right question while the merge was the whole of the shared rule. It no longer is:
+  // records-first, the stale-or-thin DVSA call and the MOT line moved into lookupAndFill too, and
+  // applyLookup is now its private step. This clause went RED when they moved — the honest outcome,
+  // and the reason the re-pointing is deliberate rather than a quiet loss of cover.
+  //
+  // What must hold is unchanged in substance: NO form carries its own copy of the policy. So the
+  // subject is now the one entry point, and a form calling applyLookup directly would be a second
+  // merge beside the shared one — which is what the next clause forbids.
+  const notApplying = FORMS.filter((f) => !/lookupAndFill\(/.test(src[f]));
+  check('all three go through the one shared look-up', notApplying.length === 0, notApplying.join(', ') || '3 of 3');
+  const ownMerge = FORMS.filter((f) => /applyLookup\(/.test(src[f]));
+  check('  …and none of them merges on its own beside it', ownMerge.length === 0,
+    ownMerge.join(', ') || 'the merge is lookupAndFill’s private step now');
   const notClearing = FORMS.filter((f) => !/clearStale\(/.test(src[f]));
   check('  …and all three clear on a plate change', notClearing.length === 0, notClearing.join(', ') || '3 of 3');
   // THE HAND-ROLLED MERGE, matched by its SHAPE rather than by a word prose could contain.

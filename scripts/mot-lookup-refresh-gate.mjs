@@ -52,7 +52,7 @@
 import './_gate-preflight.mjs';
 import './_ts.mjs';
 const { readFileSync } = await import('node:fs');
-const { hasKey } = await import('../lib/anchored-match.ts');
+const { hasKey, urlUnder } = await import('../lib/anchored-match.ts');
 const R = await import('../lib/mot-refresh.ts');
 const C = await import('../lib/vehicle-lookup-client.ts');
 
@@ -186,43 +186,61 @@ check('  …and it is NOT inside the prefill object, where it would read as a fo
 check('the client carries it on the RECORDS branch', hasKey(client, 'vehicleId', /typeof data\.vehicleId/),
   'checked for a string, so a malformed body cannot put an object in a URL');
 
-check('the diary consults the condition', diary.includes('motCheckReason('));
+// ── THE POLICY MOVED, AND SO DID THESE CLAUSES ───────────────────────────────────────────────
+// Everything from here to the end of this section used to read pages/admin/diary.tsx, because the
+// condition, the call and the merge lived there. They now live in lib/vehicle-lookup-client, so
+// these clauses follow them. All seventeen of them went RED when the code moved rather than
+// quietly matching nothing, which is the only reason this re-pointing is a deliberate act and not
+// a silent loss of cover. Which SURFACES obey the policy is section 9's business, not this one's.
+const fn = (() => {
+  const body = prose(src('lib/vehicle-lookup-client.ts'));
+  const at = body.indexOf('export async function lookupAndFill');
+  return at < 0 ? '' : body.slice(at);
+})();
+check('the shared function was located in source', fn.length > 0, `${fn.length} chars`);
+check('it consults the condition', fn.includes('motCheckReason('));
 check('  …BEFORE it calls DVSA, not after',
-  diary.indexOf('motCheckReason(') > 0 && diary.indexOf('refreshMotFromDvsa(') > diary.indexOf('motCheckReason('),
+  fn.indexOf('motCheckReason(') > 0 && fn.indexOf('refreshMotFromDvsa(') > fn.indexOf('motCheckReason('),
   'a condition evaluated after the call is not a throttle');
 check('  …and only for a records hit, since the DVSA branch has just been to DVSA',
-  /if \(r\.source === 'records'\) \{/.test(diary) && /if \(r\.vehicleId && \(stale \|\| thin\)\)/.test(diary),
+  /if \(r\.source === 'records'\) \{/.test(fn) && /if \(r\.vehicleId && \(stale \|\| thin\)\)/.test(fn),
   'the branch is on the source; the CALL is additionally gated on the handle and the condition');
-{
-  // THE HONESTY CLAUSE, scoped to the block. `new Date().toISOString()` is CORRECT elsewhere on
-  // this form — a DVSA answer this session does count as checked — so the scan must look only
-  // where a silent call could be stamped as a verification.
-  // RE-ANCHORED when the condition became `stale || thin` (one DVSA call, two questions). The old
-  // anchor was the single-condition `if`, which no longer exists — the gate went red rather than
-  // quietly matching nothing, which is the behaviour this scoping was rewritten for in the first
-  // place. The block is still "from the call's guard to the busy flag being cleared".
-  const start = diary.indexOf('if (r.vehicleId && (stale || thin))');
-  const end = diary.indexOf('setMotBusy(false)', start);
-  const block = start > 0 && end > start ? diary.slice(start, end) : '';
-  check('the refresh block exists and was located', block.length > 0, `${block.length} chars`);
-  check('  …it applies the SHARED rule rather than inlining its own',
-    /held = applyMotRefresh\(held, reply\)/.test(block),
-    'the rule is lib/vehicle-lookup-client::applyMotRefresh, asserted above by rendering it');
-  check('  …and writes no local clock of its own', !/new Date\(\)\.toISOString\(\)/.test(block),
-    'correct elsewhere on this form, never here');
-  // SCOPED TO THE BLOCK, like the two clauses above it. This was first written as
-  // /finally \{[\s\S]*?setMotBusy\(false\)/ against the WHOLE file, and diary.tsx holds several
-  // other finally blocks — so the lazy gap matched from one of THOSE through to this call, and the
-  // clause stayed green when the finally was removed. Found by red-proving it, not by reading it:
-  // the pattern looks anchored and is not. `block` ends immediately before setMotBusy(false), so
-  // what has to be true is that the block's own tail is the finally that leads into it.
-  check('  …and clears its busy flag in a FINALLY', /\}\s*finally\s*\{\s*$/.test(block),
-    'this component is not remounted by a same-URL refresh, so a flag left set stays set');
-}
-check('the outcome is printed even when nothing was learned',
-  /motBusy \|\| motLine/.test(diary) && diary.includes('create-mot-refresh'),
-  'silence after a check reads as confirmation');
-check('and another plate clears the previous car’s result', /setMotLine\(null\)/.test(diary));
+check('it computes staleness', /const stale = motCheckReason\(/.test(fn));
+check('  …and thinness, from the MERGED values rather than the raw record',
+  /const thin = isThinRecord\(\{ make: values\.make/.test(fn),
+  'values is what the records merge produced — asking the raw record would ignore anything already typed');
+check('  …and calls when EITHER is true', /if \(r\.vehicleId && \(stale \|\| thin\)\)/.test(fn), 'stale || thin');
+check('ONE call serves both', (fn.match(/await refreshMotFromDvsa\(/g) ?? []).length === 1,
+  'two calls would spend two of a shared key’s window to read the same payload');
+check('the spec fields are merged through applyLookup, not assigned directly',
+  /const second = applyLookup\(values as Record<string, string>, reply\.vehicle, r\.reg,/.test(fn),
+  'the blanks-only rule is applyLookup’s, not re-implemented beside it');
+check('  …with the echo licence from echoedKeys',
+  hasKey(fn, 'overwritable', 'echoedKeys({ make: values.make, model: values.model })'));
+check('  …and only on an answer', /if \(reply\.vehicle\)/.test(fn), 'a silence carries vehicle: null');
+check('BOTH fills are kept, so clearStale can take both back',
+  /fill = \{ \.\.\.fill, fields: \{ \.\.\.fill\.fields, \.\.\.second\.fill\.fields \} \}/.test(fn),
+  'keeping only the second would forget what the records merge filled');
+check('it applies the SHARED refresh rule rather than inlining one',
+  /storedMot = applyMotRefresh\(storedMot, reply\)/.test(fn),
+  'the rule is applyMotRefresh, asserted above by rendering it');
+check('  …and writes no local clock into the stored record',
+  !hasKey(fn, 'motCheckedAt', 'new Date()') && !hasKey(fn, 'motCheckedAt', 'now'),
+  'mot_checked_at means DVSA ANSWERED — only the server’s own stamp may set it');
+check('the line is composed by motLookupLine, not here',
+  (fn.match(/motLookupLine\(\{/g) ?? []).length === 2 && !/`Checked /.test(fn),
+  'both branches — records and DVSA — go through the one composer');
+check('  …and is returned UNCONDITIONALLY, so a no-call press still speaks',
+  (() => {
+    const at = fn.indexOf('const motLine = r.source === ');
+    if (at < 0) return false;
+    const line = fn.slice(fn.lastIndexOf('\n', at) + 1, fn.indexOf(';', at));
+    return /^\s*const motLine = /.test(line) && !/\bif\s*\(/.test(line);
+  })(),
+  'the LC09XFU case makes no call at all — a line reachable only through the call’s condition is the same blank screen again');
+check('a DVSA-branch line uses the answer we just received',
+  hasKey(fn, 'checkedAt', 'now') && hasKey(fn, 'failure', 'null'),
+  'that branch HAS just been answered, so now is the honest stamp there');
 
 // ── 3b. THE RECORD REACHES THE SCREEN, RENDERED ───────────────────────────────────────────────
 // The REAL component, over the REAL state rule, over a REAL reply from refreshMotFromDvsa. Loaded
@@ -424,55 +442,11 @@ check('and the four failures do not all say the same thing',
   new Set(['rate_limited', 'not_found', 'forbidden', 'timeout'].map((x) =>
     R.motLookupLine({ expiry: '2027-10-06', checkedAt: null, failure: x, now: LNOW }))).size === 4);
 
-// ── 7. THE DIARY ASKS BOTH QUESTIONS, ONCE ──────────────────────────────────────────────────────
-// Source, as section 3 is, and for the same reason — with the same caveat restated: this asserts
-// the wiring exists, not that the screen shows it. The screen is the owner's manual check.
-console.log('\n— the diary: stale || thin, one call, both uses (source) —');
-// `diary` is section 3's COMMENT-STRIPPED copy, deliberately: every clause below would otherwise
-// be satisfiable by the comments I wrote beside the code it is checking.
-check('it computes staleness', /const stale = motCheckReason\(/.test(diary));
-check('  …and thinness, from the MERGED values rather than the raw record',
-  /const thin = isThinRecord\(\{ make: values\.make/.test(diary),
-  'values is what the records merge produced — asking the raw record would ignore anything already typed');
-check('  …and calls when EITHER is true', /if \(r\.vehicleId && \(stale \|\| thin\)\)/.test(diary), 'stale || thin');
-check('ONE call serves both', (diary.match(/await refreshMotFromDvsa\(/g) ?? []).length === 1,
-  'two calls would spend two of a shared key’s window to read the same payload');
-check('the spec fields are merged through applyLookup, not assigned directly',
-  /applyLookup\(values, reply\.vehicle, r\.reg, \{ mot: f\.mot, overwritable: over \}\)/.test(diary),
-  'the blanks-only rule is the module’s, not re-implemented at the call site');
-check('  …with the echo licence from echoedKeys', /const over = echoedKeys\(\{ make: values\.make, model: values\.model \}\)/.test(diary));
-check('  …and only on an answer', /if \(reply\.vehicle\)/.test(diary), 'a silence carries vehicle: null');
-check('BOTH fills are kept, so clearStale can take both back',
-  /setFill\(\{ \.\.\.f, fields: \{ \.\.\.f\.fields, \.\.\.f2\.fields \} \}\)/.test(diary),
-  'setFill(f2) alone would forget what the records merge filled');
-check('the line is set from motLookupLine, not composed here',
-  (diary.match(/setMotLine\(motLookupLine\(/g) ?? []).length === 2,
-  'both branches — the records branch and the DVSA branch — go through the one composer');
-// WRITTEN ONCE AS AN ORDER TEST, WHICH DID NOT BITE. The first version asserted that the
-// setMotLine call sits after `setStoredMot(held)`, and red-proving it by moving the call inside a
-// condition — `if (stale || thin) setMotLine(...)` after that same line — left it GREEN: the
-// position was unchanged and the position was never the point. What matters is that the statement
-// is UNCONDITIONAL, so that is what is now read: the whole source line, which must be the call and
-// nothing else. (reached-but-not-asserted: named, reached, asserted — only the third counts.)
-check('  …and the records branch sets it UNCONDITIONALLY, so a no-call press still speaks',
-  (() => {
-    const blk = diary.slice(diary.indexOf("if (r.source === 'records') {"));
-    const anchor = blk.indexOf('setStoredMot(held);');
-    const lineAt = blk.indexOf('setMotLine(motLookupLine(', anchor);
-    if (anchor < 0 || lineAt < 0) return false;
-    // The statement's own source line, start to end.
-    const from = blk.lastIndexOf('\n', lineAt) + 1;
-    const line = blk.slice(from, blk.indexOf('\n', lineAt)).trim();
-    return line.startsWith('setMotLine(motLookupLine(') && !/\bif\s*\(/.test(line);
-  })(),
-  'the LC09XFU case makes no call at all — a line guarded by the call’s own condition is the same blank screen again');
-// Through lib/anchored-match (anchored-match-gate): a hand-written /motCheckedAt: .../ is a key
-// matcher, and the whole reason that rule exists is that such a pattern reads as anchored to the
-// property and is not — it would match the same text in a comment or in any nested object.
-check('no local clock is used for the stamp',
-  !hasKey(diary.slice(diary.indexOf("if (r.source === 'records') {"), diary.indexOf('setStoredMot(held);')),
-    'motCheckedAt', 'new Date().toISOString()'),
-  'mot_checked_at means DVSA ANSWERED');
+// ── 7. (WAS: THE DIARY ASKS BOTH QUESTIONS) ─────────────────────────────────────────────────────
+// Folded away deliberately. These clauses read pages/admin/diary.tsx for the condition, the single
+// call and the merged fill — all of which moved into lookupAndFill, where section 3 now reads them,
+// and whether each SURFACE obeys the policy is asserted for all three in section 9. Leaving a
+// diary-only copy here would have been a third place to keep the same rule in step.
 
 // ── 8. THE NEW SCANS BITE ───────────────────────────────────────────────────────────────────────
 console.log('\n— the new clauses reject their broken variants —');
@@ -499,6 +473,201 @@ check('RP-X the one-call clause would catch a second call',
   (() => { const bad = 'await refreshMotFromDvsa(a); await refreshMotFromDvsa(b);';
     return (bad.match(/await refreshMotFromDvsa\(/g) ?? []).length === 2; })(),
   'counted, not merely matched — a present-twice wiring fails');
+
+
+// ── 9. ONE FUNCTION, EVERY SURFACE ──────────────────────────────────────────────────────────────
+// REPORTED 2026-11-02, on production, after the diary fix was live: the NEW JOB CARD page said
+// "Filled from your records" and nothing more for LC09XFU, S1CNE, L100BKY and KW21HLN. S1CNE's
+// make, model, colour, year, fuel and engine stayed blank; L100BKY stayed MINI/MINI; no MOT line
+// on any of them. Every one of those is the defect that had just been fixed — on a surface that
+// held its own copy of what to do with a look-up and never got the fix.
+//
+// Three surfaces call the look-up. The policy now lives in lookupAndFill and the surfaces only set
+// state, so this section asserts BOTH halves: the function behaves (exercised against a stubbed
+// fetch, not scanned), and no surface has a second copy of the rule.
+console.log('\n— lookupAndFill, exercised against stubbed endpoints —');
+const realFetch2 = globalThis.fetch;
+const seen = [];
+/** Both endpoints, stubbed by URL: the records lookup and the refresh the records branch makes. */
+const stubBoth = ({ records, refresh }) => {
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    seen.push(u);
+    if (urlUnder(u, '/api/vehicle-lookup')) return { ok: true, json: async () => records };
+    if (urlUnder(u, '/api/mot-refresh')) return { ok: true, json: async () => refresh };
+    if (urlUnder(u, '/api/dvsa-lookup')) return { ok: true, json: async () => records };
+    throw new Error(`unexpected ${u}`);
+  };
+};
+// S1CNE AS IT ACTUALLY IS ON PRODUCTION: a records hit with make and model null, everything else
+// empty, and a 70-day-old MOT stamp. Both conditions true at once.
+const S1CNE_RECORDS = {
+  found: true, vehicleId: 'veh-s1cne',
+  vehicle: { registration: 'S1CNE', vin: '', mileage: null, make: '', model: '', colour: '', fuel: '', year: null, engineCc: null },
+  storedMot: { motExpiry: '2027-08-17', motCheckedAt: '2026-08-24T10:00:00.000Z', firstRegistered: null, year: null },
+  owner: { name: 'A Customer', phone: '07700 900000', email: 'a@example.com' },
+  noShows: null, dueItems: [], openCards: [],
+};
+const DVSA_FILLED = {
+  outcome: { kind: 'unchanged', failure: null, sentence: 'Checked just now — MOT date unchanged.', expiry: '2027-08-17', stillDue: false },
+  checkedAt: '2026-11-02T17:00:00.000Z', reason: null,
+  vehicle: { make: 'MINI', model: 'COOPER', colour: 'Silver', fuel: 'Petrol', year: 2009, engineCc: 1598 },
+};
+const BLANK_FORM = { cust: '', phone: '', email: '', vin: '', mileage: '', make: '', model: '', colour: '', fuel: '', year: '', engineCc: '' };
+try {
+  stubBoth({ records: S1CNE_RECORDS, refresh: DVSA_FILLED });
+  seen.length = 0;
+  const s1 = await C.lookupAndFill('S1CNE', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('S1CNE: a thin records hit REACHES DVSA', s1.ok && s1.dvsaCalled === true,
+    `dvsaCalled=${s1.ok && s1.dvsaCalled} — this is the case that came back blank on the new-card page`);
+  check('  …through the records endpoint FIRST, then the refresh',
+    seen.length === 2 && urlUnder(seen[0], '/api/vehicle-lookup') && urlUnder(seen[1], '/api/mot-refresh'),
+    seen.join(' → '));
+  check('  …and the blanks are filled',
+    s1.ok && s1.values.make === 'MINI' && s1.values.model === 'COOPER' && s1.values.colour === 'Silver'
+    && s1.values.fuel === 'Petrol' && s1.values.year === '2009' && s1.values.engineCc === '1598',
+    s1.ok ? JSON.stringify({ make: s1.values.make, model: s1.values.model, colour: s1.values.colour, fuel: s1.values.fuel, year: s1.values.year, engineCc: s1.values.engineCc }) : 'not ok');
+  check('  …the owner lands on the CALLER’S key, not a guessed one',
+    s1.ok && s1.values.cust === 'A Customer' && s1.values.phone === '07700 900000', s1.ok ? s1.values.cust : '');
+  check('  …and there IS a line', s1.ok && typeof s1.motLine === 'string' && s1.motLine.length > 0, s1.ok ? s1.motLine : '');
+  check('  …naming the stamp the SERVER returned, not a local clock',
+    s1.ok && /17:00/.test(s1.motLine) && /17 August 2027/.test(s1.motLine), s1.ok ? s1.motLine : '');
+  check('  …and BOTH fills are remembered, so changing the plate takes back both',
+    s1.ok && s1.fill.fields.cust === 'A Customer' && s1.fill.fields.make === 'MINI',
+    s1.ok ? Object.keys(s1.fill.fields).join(',') : '');
+
+  // L100BKY: the ECHO. A records hit that is NOT stale and NOT blank — only its model repeats its
+  // make — so the thin half alone has to carry the call.
+  stubBoth({
+    records: { ...S1CNE_RECORDS, vehicleId: 'veh-l100',
+      vehicle: { registration: 'L100BKY', vin: 'X', mileage: '1', make: 'MINI', model: 'MINI', colour: 'Red', fuel: 'Petrol', year: 2009, engineCc: 1598 },
+      storedMot: { motExpiry: '2027-08-05', motCheckedAt: LNOW.toISOString(), firstRegistered: null, year: null } },
+    refresh: { ...DVSA_FILLED, vehicle: { make: 'MINI', model: 'COOPER S', colour: 'Red', fuel: 'Petrol', year: 2009, engineCc: 1598 } },
+  });
+  const l1 = await C.lookupAndFill('L100BKY', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('L100BKY: a FRESH stamp with an echoing model still reaches DVSA',
+    l1.ok && l1.dvsaCalled === true, 'the thin half carries it — stale is false here');
+  check('  …and the echo is replaced with a real model', l1.ok && l1.values.model === 'COOPER S', l1.ok ? l1.values.model : '');
+
+  // AND THE CASE THAT MUST NOT CALL. Fresh stamp, nothing thin: the throttle.
+  stubBoth({
+    records: { ...S1CNE_RECORDS, vehicleId: 'veh-fresh',
+      vehicle: { registration: 'LC09XFU', vin: 'X', mileage: '1', make: 'MINI', model: 'COOPER', colour: 'Red', fuel: 'Petrol', year: 2009, engineCc: 1598 },
+      storedMot: { motExpiry: '2027-10-06', motCheckedAt: '2026-11-02T09:23:59.251Z', firstRegistered: null, year: null } },
+    refresh: DVSA_FILLED,
+  });
+  seen.length = 0;
+  const lc = await C.lookupAndFill('LC09XFU', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('LC09XFU: fresh AND full makes NO DVSA call', lc.ok && lc.dvsaCalled === false && seen.length === 1,
+    `${seen.length} call(s) — one shared key, no cache, no cap of ours`);
+  check('  …and STILL says something', lc.ok && /09:23/.test(lc.motLine) && /6 October 2027/.test(lc.motLine), lc.ok ? lc.motLine : '');
+
+  // A REFRESH THAT FAILED. The line must report the failure, and nothing may be filled from it.
+  stubBoth({
+    records: S1CNE_RECORDS,
+    refresh: { outcome: { kind: 'no_answer', failure: 'rate_limited', sentence: R.failureSentence('rate_limited'), expiry: null, stillDue: true }, checkedAt: null, reason: 'rate_limited', vehicle: null },
+  });
+  const rl = await C.lookupAndFill('S1CNE', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('a RATE-LIMITED refresh reports itself on the line',
+    rl.ok && rl.motLine === R.failureSentence('rate_limited'), rl.ok ? rl.motLine : '');
+  check('  …fills nothing from a call that did not answer',
+    rl.ok && rl.values.make === '' && rl.values.colour === '', rl.ok ? `make=${JSON.stringify(rl.values.make)}` : '');
+  check('  …but KEEPS what the records hit gave', rl.ok && rl.values.cust === 'A Customer', rl.ok ? rl.values.cust : '');
+  check('  …and leaves the stored stamp exactly as it was',
+    rl.ok && rl.storedMot?.motCheckedAt === '2026-08-24T10:00:00.000Z', rl.ok ? String(rl.storedMot?.motCheckedAt) : '');
+
+  // THE DVSA BRANCH: a car we do not hold. No second call, and still a line.
+  stubBoth({ records: { found: false }, refresh: DVSA_FILLED });
+  globalThis.fetch = async (url) => {
+    const u = String(url); seen.push(u);
+    if (urlUnder(u, '/api/vehicle-lookup')) return { ok: true, json: async () => ({ found: false }) };
+    if (urlUnder(u, '/api/dvsa-lookup')) return { ok: true, json: async () => ({ found: true, make: 'MINI', model: 'COOPER', colour: 'Blue', fuel: 'Petrol', year: 2015, engineCc: 1598, motExpiry: '2027-03-01' }) };
+    throw new Error(`unexpected ${u}`);
+  };
+  seen.length = 0;
+  const nu = await C.lookupAndFill('NEW1CAR', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('a NEW car falls through to DVSA and fills from it',
+    nu.ok && nu.source === 'dvsa' && nu.values.make === 'MINI' && nu.values.colour === 'Blue', nu.ok ? nu.source : '');
+  check('  …makes no refresh call, having just been to DVSA',
+    !seen.some((u) => urlUnder(u, '/api/mot-refresh')), seen.join(' → '));
+  check('  …and gets a line too', nu.ok && /1 March 2027/.test(nu.motLine), nu.ok ? nu.motLine : '');
+
+  // A MISS. No line at all — there is no car to make a claim about.
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (urlUnder(u, '/api/vehicle-lookup')) return { ok: true, json: async () => ({ found: false }) };
+    return { ok: true, json: async () => ({ found: false, reason: 'rate_limited' }) };
+  };
+  const miss = await C.lookupAndFill('NOSUCH1', BLANK_FORM, { ownerNameKey: 'cust', now: LNOW });
+  check('a miss carries no line, and names the DVSA reason',
+    !miss.ok && miss.motLine === null && miss.dvsaReason === 'rate_limited',
+    `${!miss.ok ? miss.dvsaReason : 'ok'} — "enter them manually" is the wrong instruction for a 429`);
+
+  // THE CALLER'S OTHER FIELDS SURVIVE. new.tsx passes its WHOLE form object through.
+  const wide = { ...BLANK_FORM, registration: 'S1CNE', notes: 'keep me', complaint: 'rattle' };
+  stubBoth({ records: S1CNE_RECORDS, refresh: DVSA_FILLED });
+  const w = await C.lookupAndFill('S1CNE', wide, { ownerNameKey: 'cust', now: LNOW });
+  check('every key the caller owns and the lookup does not is untouched',
+    w.ok && w.values.notes === 'keep me' && w.values.complaint === 'rattle', w.ok ? JSON.stringify({ n: w.values.notes, c: w.values.complaint }) : '');
+} finally {
+  globalThis.fetch = realFetch2;
+}
+
+console.log('\n— and no surface keeps a second copy of the rule —');
+const SURFACES = [
+  ['pages/admin/diary.tsx', 'the diary quick-create'],
+  ['pages/admin/jobcards/new.tsx', 'the new job card page'],
+  ['components/jobcard/CustomerDetailsForm.tsx', 'the existing card’s details pane'],
+];
+// ENUMERATED FROM THE MODULE'S CALLERS, not from this list: a fourth surface added later must
+// appear here or the completeness clause below fails. (completeness-clause-naming-convention.)
+const callers = ['pages/admin/diary.tsx', 'pages/admin/jobcards/new.tsx', 'components/jobcard/CustomerDetailsForm.tsx',
+  'pages/admin/marketing.tsx']
+  .filter((f) => /lookupVehicleByReg\(|lookupAndFill\(/.test(src(f)));
+check('every file that looks a registration up is one of the three named here',
+  callers.length === SURFACES.length && callers.every((f) => SURFACES.some(([g]) => g === f)),
+  callers.join(', '));
+for (const [file, what] of SURFACES) {
+  const body = prose(src(file));
+  check(`${what}: calls lookupAndFill`, /await lookupAndFill\(/.test(body), file);
+  check(`  …and does NOT call lookupVehicleByReg itself`, !/lookupVehicleByReg\(/.test(body),
+    'the records-then-DVSA order is the policy, and a surface that starts the lookup itself owns it');
+  check(`  …nor merges with applyLookup of its own`, !/applyLookup\(/.test(body),
+    'blanks-only, the echo rule and the second merge all live in the one function now');
+  check(`  …and prints the line from the function, never composing one`,
+    /setMotLine\(r\.motLine\)/.test(body) && !/motLookupLine\(/.test(body), file);
+  check(`  …clearing it when the plate changes`, /setMotLine\(null\)/.test(body),
+    'another car’s result is not this car’s');
+}
+// THE RENDER, not just the state: a line held in state and never printed is the same blank screen.
+for (const [file, what, testid] of [
+  ['pages/admin/diary.tsx', 'the diary', 'create-mot-refresh'],
+  ['pages/admin/jobcards/new.tsx', 'the new card page', 'new-mot-line'],
+  ['components/jobcard/CustomerDetailsForm.tsx', 'the details pane', 'details-mot-line'],
+]) {
+  const body = prose(src(file));
+  check(`${what} RENDERS it`, body.includes(testid) && new RegExp(`motLine[\\s\\S]{0,120}${testid}`).test(body),
+    `data-testid="${testid}"`);
+}
+check('the diary no longer carries a busy flag nothing sets', !/motBusy/.test(prose(src('pages/admin/diary.tsx'))),
+  'the whole look-up is one awaited call now, so lookBusy spans the DVSA call and a second flag would never fire');
+
+// ── 10. THE SHARED-FUNCTION CLAUSES BITE ────────────────────────────────────────────────────────
+console.log('\n— rejecting the shapes this replaced —');
+const OLD_NEW_TSX = "const r = await lookupVehicleByReg(form.registration);\n  const { values, fill: f } = applyLookup(p, {...}, r.reg, { mot: !!r.mot });";
+check('RP-Y the per-surface scan rejects the new-card page as it WAS',
+  /lookupVehicleByReg\(/.test(OLD_NEW_TSX) && /applyLookup\(/.test(OLD_NEW_TSX)
+  && !/lookupVehicleByReg\(/.test(prose(src('pages/admin/jobcards/new.tsx'))),
+  'the exact pre-change shape fails both clauses; the current file fails neither');
+check('RP-Z the render clause rejects state that is never printed',
+  (() => { const bad = "const [motLine, setMotLine] = useState(null);\n  setMotLine(r.motLine);"; return !/data-testid="new-mot-line"/.test(bad); })(),
+  'a line in state and absent from the markup is the blank screen all over again');
+check('RP-AA the completeness clause would see a FOURTH surface',
+  (() => {
+    const pretend = ['a.tsx', 'b.tsx', 'c.tsx', 'd.tsx'];
+    return pretend.length !== SURFACES.length;
+  })(),
+  'the list is checked against the files that actually call, so a new caller must be named here');
 
 console.log(`\n${out.filter((c) => c === 'F').length} failures of ${out.length}`);
 process.exit(out.includes('F') ? 1 : 0);

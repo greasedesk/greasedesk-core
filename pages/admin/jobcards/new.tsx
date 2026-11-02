@@ -36,7 +36,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/pages/api/auth/[...nextauth]';
 import { onboardingGateRedirect } from '@/lib/admin-guard';
 import { normalizeReg } from '@/lib/vehicle-identity';
-import { lookupVehicleByReg, lookupVehicleByVin, backfillMotHistory, applyLookup, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { lookupAndFill, lookupVehicleByVin, backfillMotHistory, staleAgainst, clearStale, type LookupFill } from '@/lib/vehicle-lookup-client';
+import { failureSentence } from '@/lib/mot-refresh';
 import { resolveTenantProfile } from '@/lib/locale-profiles';
 import { prisma } from '@/lib/db';
 import { phoneWarn, normalizePhone } from '@/lib/quick-validate';
@@ -108,6 +109,9 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
   const [fill, setFill] = useState<LookupFill | null>(null);
   const [looking, setLooking] = useState(false);
   const [lookMsg, setLookMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  /** The one line a look-up always leaves behind (lib/mot-refresh::motLookupLine). Composed there,
+   *  never here, so this page and the diary cannot word the same outcome differently. */
+  const [motLine, setMotLine] = useState<string | null>(null);
   // VIN decode (US / vPIC) — fill-blanks-only, same as the reg path.
   async function runVinLookup() {
     if (!form.vin?.trim()) return;
@@ -128,30 +132,35 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
 
   async function runLookup() {
     setLooking(true); setLookMsg(null);
-    const r = await lookupVehicleByReg(form.registration);
+    // ── THE SHARED POLICY, NOT THIS PAGE'S OWN ────────────────────────────────────────────────
+    // This page used to call lookupVehicleByReg and merge the answer itself, which meant it got
+    // the records prefill and nothing else: no DVSA call for a thin record, and no line about the
+    // MOT. Tested on production the day the diary fix shipped, LC09XFU, S1CNE, L100BKY and
+    // KW21HLN all said "Filled from your records" and stopped there — S1CNE blank, L100BKY still
+    // MINI/MINI. lookupAndFill is the whole rule, in one place, for every surface that has a
+    // registration box.
+    const r = await lookupAndFill(form.registration, form, { ownerNameKey: 'customerName' });
     setLooking(false);
     if (r.reg && r.reg !== form.registration) setForm((p) => ({ ...p, registration: r.reg }));
     if (!r.ok) {
+      setMotLine(null);
+      // The DIAGNOSIS when the server named one: a rate-limited key is not an unknown plate, and
+      // telling a garage to "enter them manually" for a 429 sends them to do work for nothing.
+      const named = r.dvsaReason && r.dvsaReason !== 'empty_answer' ? failureSentence(r.dvsaReason) : null;
       setLookMsg({
         ok: false,
-        text: r.reason === 'empty-reg' ? 'Enter a registration to look up.'
+        text: named ?? (r.reason === 'empty-reg' ? 'Enter a registration to look up.'
           : r.reason === 'not-found' ? 'No details found for that registration — enter them manually.'
-          : 'Lookup unavailable right now — enter the details manually.',
+          : 'Lookup unavailable right now — enter the details manually.'),
       });
       return;
     }
-    // THE SHARED MERGE — fill blanks only, and remember what was filled and from which plate.
-    setForm((p) => {
-      const { values, fill: f } = applyLookup(p, {
-        customerName: r.owner?.name, phone: r.owner?.phone, email: r.owner?.email,
-        vin: r.vehicle.vin, mileage: r.vehicle.mileage,
-        make: r.vehicle.make, model: r.vehicle.model, colour: r.vehicle.colour,
-        year: r.vehicle.year, fuel: r.vehicle.fuel, engineCc: r.vehicle.engineCc,
-      }, r.reg, { mot: !!r.mot });
-      setFill(f);
-      return { ...values, registration: r.reg };
-    });
+    // `values` is this form's own object with the blanks filled and every other key untouched, so
+    // registration and the flags ride through unchanged.
+    setForm({ ...r.values, registration: r.reg });
+    setFill(r.fill);
     if (r.mot) setMot(r.mot);
+    setMotLine(r.motLine);
     setLookMsg({ ok: true, text: r.source === 'records' ? 'Filled from your records.' : 'Filled from DVSA.' });
   }
 
@@ -232,7 +241,7 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
                       const { values } = clearStale(p, fill);
                       return { ...values, registration: next };
                     });
-                    if (staleAgainst(fill, next)) { setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null }); setFill(null); }
+                    if (staleAgainst(fill, next)) { setMot({ motExpiry: null, lastMotMileage: null, lastMotDate: null }); setFill(null); setMotLine(null); }
                   }}
                   onKeyDown={(e) => { if (e.key === 'Enter' && lookupKeyFor(vehicleLookupProvider) === 'registration') { e.preventDefault(); runLookup(); } }}
                   required
@@ -254,6 +263,11 @@ export default function NewJobCardPage({ vehicleIdLabel = 'Registration', vehicl
                 )}
               </div>
               {lookMsg && <p className={`text-xs mt-1 ${lookMsg.ok ? 'text-ok' : 'text-muted'}`}>{lookMsg.text}</p>}
+              {/* THE MOT, IN ITS OWN WORDS, after any look-up — "checked 09:23 — MOT valid to
+                  6 October 2027" rather than the blank space that got reported as a broken
+                  feature. lib/mot-refresh composes it so this page and the diary cannot describe
+                  the same outcome differently. (Not translated — i18n debt, noted in both.) */}
+              {!!motLine && <p className="text-xs mt-1 text-muted" data-testid="new-mot-line">{motLine}</p>}
             </div>
             <div>
               <label className={labelClass}>Customer name *</label>
