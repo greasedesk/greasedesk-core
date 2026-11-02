@@ -215,6 +215,12 @@ const TIERS = {
     // breaking the database to arrange one.
     'sign-in-failure-gate',
     'mot-banner-gate', 'mot-lookup-refresh-gate', 'dvsa-failure-reason-gate',
+    // THE MARKETING ENGINE, in two gates on purpose. The first needs no server and no database and
+    // proves the rules, the state machine, the rendered templates and the wiring. The second asks
+    // the six questions only Postgres can answer — that the pair CHECK really refuses, that the
+    // claim really serialises — and DECLINES until migration 20261102120000_marketing_engine is
+    // applied, rather than reporting 0 red across four absent tables.
+    'marketing-engine-gate', 'marketing-engine-db-gate',
     'mot-urgency-gate',
     'customer-car-gate',
     'sale-invoice-gate',

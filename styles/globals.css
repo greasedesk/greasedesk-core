@@ -24,6 +24,18 @@ html, body { overflow-x: clip; max-width: 100%; }
   --sidebar-muted: #7C8AA3;
   --sidebar-border: #1C3257;
 
+  /* ── EMAIL PAPER: THE ONE SURFACE THAT MUST NOT FOLLOW THE THEME (2026-11-02) ──────────────
+     A preview of an outgoing email is a picture of what a stranger's mail client will show, and
+     a mail client is not in our dark mode. Rendering the preview on --surface would make it
+     honest-looking and wrong: an operator checking a marketing email in dark mode would approve
+     white-on-dark copy that goes out as white-on-white.
+
+     Deliberately NOT redefined in the dark block below. That absence is the whole point of the
+     token, and the reason it is a token rather than the inline hex it replaces: a named thing
+     whose job is to stay put says so, where a literal just looks like a missed conversion. */
+  --email-paper: #FFFFFF;
+  --email-ink: #0F172A;
+
   /* Light workspace */
   --content-bg: #F4F6FA;
   --surface: #FFFFFF;

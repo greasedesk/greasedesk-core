@@ -19,75 +19,27 @@
  */
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { sendNotification, PLATFORM_SEND } from '@/lib/notify';
-import { prospectingRefusal } from '@/lib/prospect-suppression';
-import { emailHash, newUnsubscribeToken } from '@/lib/prospect-keys';
 import {
-  SEQUENCE, afterSend, isProspectStatus, looksLikeEmail, nameKey,
-  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment, sequenceView, sendingAllows,
-  type ProspectStatus, type SequenceView, type StopReason, type StripReason,
+  isProspectStatus, looksLikeEmail, nameKey,
+  normaliseEmail, pastRetention, postcodeKey, refuseEnrolment,
+  type ProspectStatus, type StripReason,
 } from '@/lib/prospects';
+import { enrolmentState, type SequenceState, type StopReason } from '@/lib/marketing-engine';
+import { enrol, runSequences, sendingEnabled, stopFor } from '@/lib/marketing-store';
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient;
 
-// ── THE SENDING SWITCH ───────────────────────────────────────────────────────────────────────────
-const SWITCH_ID = 'prospect_sending';
-
-/**
- * IS PROSPECT SENDING ON? No row = OFF — the default, because the sequence copy is placeholder until
- * the owner writes it. Read on every run and every render that shows a follow-up, never cached: a
- * switch that took an hour to take effect would be a switch that did not work when it mattered.
- */
-export async function prospectSendingEnabled(db: Db = prisma, at: { now?: Date; prospectId?: string } = {}): Promise<boolean> {
-  const [owner, lease] = await Promise.all([
-    db.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } }),
-    // Asked without a prospect (a cron run, a list of many), no lease can apply — see sendingAllows.
-    at.prospectId ? db.prospectSendingLease.findUnique({ where: { prospect_id: at.prospectId } }) : null,
-  ]);
-  return sendingAllows(owner, lease, { now: at.now ?? new Date(), prospectId: at.prospectId });
-}
-
-/** The OWNER'S switch and its author, for the Engine Room. `changedAt` NULL = never switched. A gate never writes it. */
-export async function prospectSendingState(db: Db = prisma) {
-  const row = await db.prospectSending.findUnique({ where: { id: SWITCH_ID } });
-  return { enabled: sendingAllows(row, null, { now: new Date() }), changedAt: row?.changed_at ?? null, changedBy: row?.changed_by ?? null };
-}
-
-/**
- * TURN IT ON OR OFF — owner only (enforced by the caller's guard), and AUDITED. Turning it on emails
- * real people, so who did it and when goes to SuperAdminAudit as well as onto the row.
- */
-export async function setProspectSending(opts: { enabled: boolean; operatorId: string; db?: Db }): Promise<void> {
-  const db = opts.db ?? prisma;
-  const now = new Date();
-  await db.$transaction(async (tx) => {
-    const before = await tx.prospectSending.findUnique({ where: { id: SWITCH_ID }, select: { enabled: true } });
-    await tx.prospectSending.upsert({
-      where: { id: SWITCH_ID },
-      update: { enabled: opts.enabled, changed_at: now, changed_by: opts.operatorId },
-      create: { id: SWITCH_ID, enabled: opts.enabled, changed_at: now, changed_by: opts.operatorId },
-    });
-    const queued = await tx.prospectSequence.count({ where: { state: 'active' } });
-    await tx.superAdminAudit.create({ data: {
-      operator_user_id: opts.operatorId,
-      action: opts.enabled ? 'prospect_sending.on' : 'prospect_sending.off',
-      target_name_snapshot: 'Prospect follow-up sending',
-      detail: { from: before?.enabled === true, to: opts.enabled, activeSequencesAtChange: queued },
-    } });
-  });
-}
-
-/** Where the unsubscribe page and endpoint live — the apex, which middleware serves to anyone. */
-export function prospectLinks(token: string, base?: string) {
-  const origin = (base || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'https://greasedesk.com').replace(/\/$/, '');
-  return {
-    /** The link in the email body: a page with a button. Mail scanners follow links, so opening it must not act. */
-    page: `${origin}/u/${token}`,
-    /** RFC 8058 one-click: a mail client POSTs `List-Unsubscribe=One-Click` here without opening anything. */
-    oneClick: `${origin}/api/prospect-unsubscribe?t=${encodeURIComponent(token)}`,
-  };
-}
+// ── THE SEQUENCE IS NOT THIS FILE'S ANY MORE (2026-11-02) ────────────────────────────────────────
+// The switch, the links, the sender and the enrolment moved to lib/marketing-store when three more
+// audiences arrived. A garage prospect is now one of four things that can be enrolled on a sequence,
+// and this file is one of four adapters — lib/marketing-store::readSubject reads a Prospect through
+// refuseEnrolment, which stays in lib/prospects so prospect eligibility has a single definition.
+//
+// WHAT STAYED: recording a visit, presenting a possible duplicate, the 24-month retention sweep, and
+// stripPersonal — the ONE writer that removes a named person and their email. That last one is why
+// MarketingEnrolment deliberately holds no address of its own: a second copy of a prospect's email
+// in a table this function does not reach would make the retention rule a rule nobody applies.
 
 // ── DUPLICATES — presented, never merged ─────────────────────────────────────────────────────────
 /**
@@ -121,43 +73,29 @@ export async function findMatches(name: string, postcode: string | null, db: Db 
 // ── THE ONE WAY THE PERSON LEAVES ────────────────────────────────────────────────────────────────
 const STOP_FOR_STRIP: Record<StripReason, StopReason> = { unsubscribed: 'unsubscribed', signed_up: 'signed_up', retention: 'retention' };
 
-export async function stopSequence(tx: Tx, prospectId: string, reason: StopReason, now: Date): Promise<boolean> {
-  // CONDITIONAL ON THE PRE-STATE: stopping an already-stopped sequence changes nothing and must not
-  // overwrite the FIRST reason with a later one — "unsubscribed" must not become "retention".
-  const r = await tx.prospectSequence.updateMany({
-    where: { prospect_id: prospectId, state: 'active' },
-    data: { state: 'stopped', stopped_at: now, stopped_reason: reason, next_due_at: null },
-  });
-  return r.count === 1;
+/**
+ * STOP THIS PROSPECT'S SEQUENCE. Delegates to the engine, which holds the conditional-on-pre-state
+ * update that stops an already-stopped enrolment from having its FIRST reason overwritten by a later
+ * one — "unsubscribed" must not become "retention".
+ *
+ * NOT inside the caller's transaction, and that is a real change from the version this replaces.
+ * stripPersonal ran its stop in the same transaction as the columns it cleared; the enrolment now
+ * lives in a table with no relation to Prospect, so the two writes are separate. The consequence if
+ * the second fails: the person's data is gone and an enrolment is left active — which the next send
+ * stops anyway, because readSubject reads `personal_stripped_at` and returns `retention`. The guard
+ * that matters is the one on the send path, not the one in the transaction.
+ */
+async function stopProspectSequence(prospectId: string, reason: StopReason, now: Date): Promise<boolean> {
+  return stopFor('garage_prospect', prospectId, reason, now);
 }
 
 export async function stripPersonal(tx: Tx, prospectId: string, reason: StripReason, now: Date): Promise<void> {
-  await stopSequence(tx, prospectId, STOP_FOR_STRIP[reason], now);
+  await stopProspectSequence(prospectId, STOP_FOR_STRIP[reason], now);
   await tx.prospectVisit.updateMany({ where: { prospect_id: prospectId }, data: { spoke_to: null } });
   // Only a record still holding the person is stripped; the FIRST reason stands.
   await tx.prospect.updateMany({
     where: { id: prospectId, personal_stripped_at: null },
     data: { email: null, personal_stripped_at: now, personal_stripped_reason: reason },
-  });
-}
-
-// ── ENROLMENT ────────────────────────────────────────────────────────────────────────────────────
-/**
- * ENROL, OR RECORD WHY NOT. An address that is already a customer's, or already unsubscribed, still
- * gets a sequence row — STOPPED, with the reason — so the log shows the email was deliberately never
- * sent rather than silently absent.
- */
-async function enrol(tx: Tx, prospect: { id: string; email: string }, now: Date) {
-  const existing = await tx.prospectSequence.findUnique({ where: { prospect_id: prospect.id }, select: { id: true } });
-  if (existing) return;
-  await tx.prospect.updateMany({ where: { id: prospect.id, unsubscribe_token: null }, data: { unsubscribe_token: newUnsubscribeToken() } });
-  const refusal = await prospectingRefusal(prospect.email);
-  const stopped: StopReason | null = refusal === 'already_customer' ? 'already_customer'
-    : refusal === 'prospect_unsubscribed' ? 'suppressed' : null;
-  await tx.prospectSequence.create({
-    data: stopped
-      ? { prospect_id: prospect.id, state: 'stopped', next_step: 1, started_at: now, stopped_at: now, stopped_reason: stopped }
-      : { prospect_id: prospect.id, state: 'active', next_step: 1, next_due_at: now, started_at: now },
   });
 }
 
@@ -176,7 +114,7 @@ export type RecordVisitInput = {
 export type RecordVisitResult =
   | { ok: true; prospectId: string; sequence: { state: string; stoppedReason: string | null } | null;
       /** What the follow-up is ACTUALLY doing — queued is never reported as running. */
-      view: SequenceView; sendingOn: boolean }
+      view: SequenceState; sendingOn: boolean }
   | { ok: false; code: string; message: string };
 
 const clean = (v: unknown): string | null => { const s = String(v ?? '').trim(); return s === '' ? null : s; };
@@ -230,55 +168,61 @@ export async function recordVisit(input: RecordVisitInput, db: Db = prisma): Pro
     if (status === 'signed_up') Object.assign(data, { signed_up_at: now });
     await tx.prospect.update({ where: { id }, data });
 
-    if (status === 'signed_up') {
-      await stripPersonal(tx, id, 'signed_up', now);
-    } else {
-      const after = await tx.prospect.findUniqueOrThrow({ where: { id }, select: { id: true, email: true, consent: true, personal_stripped_at: true, status: true } });
-      if (!refuseEnrolment(after)) await enrol(tx, { id, email: after.email! }, now);
-    }
+    if (status === 'signed_up') await stripPersonal(tx, id, 'signed_up', now);
     return id;
   });
 
-  // THE FIRST EMAIL GOES NOW, not at the next scheduled run — "it must work from the moment the
-  // address is entered". Awaited but never fatal: the visit is recorded whether or not the send works,
-  // and an unsent step stays due for the scheduled run to retry.
-  await runSequence({ now, onlyProspectId: prospectId, db }).catch(() => {});
+  // ── THE ENROLMENT IS CREATED OUTSIDE THE TRANSACTION, AND IT HAS TO BE ────────────────────────
+  // MarketingEnrolment lives in a table with no relation to Prospect, and enrolling asks the
+  // suppression list — a query the visit's transaction has no business holding a row lock through.
+  // The ordering is deliberate: the VISIT commits first, and the enrolment is the thing allowed to
+  // fail. A recorded visit with no follow-up is a rep's work saved; a follow-up with no visit is a
+  // record of an email nobody can explain. Commit the record, then the consequence.
+  if (status !== 'signed_up') {
+    const after = await db.prospect.findUniqueOrThrow({
+      where: { id: prospectId },
+      select: { email: true, consent: true, consent_at: true, personal_stripped_at: true, status: true },
+    });
+    // CONSENT_AT, NOT NOW. The owner agreed at the moment the rep recorded their answer, which may
+    // have been a previous visit — a visit today where nobody asked again leaves the earlier `agreed`
+    // standing, and an enrolment stamped today would be claiming consent we did not get today.
+    if (!refuseEnrolment(after) && after.consent_at) {
+      await enrol({ sequence: 'garage_prospect', subjectId: prospectId, consentAt: after.consent_at, now, db }).catch(() => {});
+    }
+  }
 
-  const seq = await db.prospectSequence.findUnique({ where: { prospect_id: prospectId }, select: { state: true, stopped_reason: true, last_sent_at: true } });
-  const sendingOn = await prospectSendingEnabled(db, { prospectId });
+  // THE FIRST EMAIL GOES NOW, not at the next scheduled run — "it must work from the moment the
+  // address is entered". Awaited but never fatal: the visit is recorded whether or not the send
+  // works, and an unsent step stays due for the scheduled run to retry.
+  const e = await db.marketingEnrolment.findUnique({
+    where: { sequence_key_subject_type_subject_id: { sequence_key: 'garage_prospect', subject_type: 'prospect', subject_id: prospectId } },
+    select: { id: true },
+  });
+  if (e) await runSequences({ now, onlySequence: 'garage_prospect', onlyEnrolmentId: e.id, db }).catch(() => {});
+
+  const seq = e ? await db.marketingEnrolment.findUnique({
+    where: { id: e.id }, select: { state: true, stopped_reason: true, last_sent_at: true, next_step: true },
+  }) : null;
+  const sendingOn = await sendingEnabled('garage_prospect', db, { enrolmentId: e?.id });
+  // hasCopy IS ASKED, because `holding` is a state the rep must be able to read. Without it a visit
+  // recorded while step 1 is unwritten would say "the first email will go within the hour", and it
+  // will not go until somebody writes it.
+  const hasCopy = seq ? await stepHasCopy(db, seq.next_step) : true;
   return { ok: true, prospectId, sequence: seq ? { state: seq.state, stoppedReason: seq.stopped_reason } : null,
-    view: sequenceView(seq, sendingOn), sendingOn };
+    view: enrolmentState(seq, { sendingOn, hasCopy }), sendingOn };
 }
 
-// ── UNSUBSCRIBE ──────────────────────────────────────────────────────────────────────────────────
-/**
- * STOPS IMMEDIATELY, visibly, and removes the person — keeping only the hash needed to go on
- * honouring it. Idempotent: a second click says it is already done rather than failing.
- */
-export async function unsubscribeByToken(token: string, now: Date = new Date(), db: Db = prisma):
-  Promise<{ ok: true; already: boolean } | { ok: false; code: 'not_found' }> {
-  const p = await db.prospect.findUnique({ where: { unsubscribe_token: token }, select: { id: true, email: true, personal_stripped_at: true } });
-  if (!p) return { ok: false, code: 'not_found' };
-  const already = p.personal_stripped_at !== null && !p.email;
-  await db.$transaction(async (tx) => {
-    if (p.email) {
-      await tx.prospectSuppression.upsert({
-        where: { email_hash: emailHash(p.email) }, update: {},
-        create: { email_hash: emailHash(p.email), reason: 'unsubscribed' },
-      });
-    }
-    await stripPersonal(tx, p.id, 'unsubscribed', now);
-    // A record ALREADY stripped for another reason still has its sequence stopped here, so an
-    // unsubscribe is never the one request that changes nothing.
-    await stopSequence(tx, p.id, 'unsubscribed', now);
-  });
-  return { ok: true, already };
+/** Is the words for this step written? The same predicate the runner uses, so the two agree. */
+async function stepHasCopy(db: Db, step: number): Promise<boolean> {
+  const { copyIsSendable } = await import('@/lib/marketing-engine');
+  const row = await db.marketingCopy.findUnique({ where: { sequence_key_step: { sequence_key: 'garage_prospect', step } } });
+  return copyIsSendable(row);
 }
 
 // ── SIGNUP ───────────────────────────────────────────────────────────────────────────────────────
 /**
  * A NEW TENANT'S ADDRESS MATCHED AGAINST EVERY PROSPECT HOLDING IT. Called from register-garage.
- * The send path refuses a customer's address regardless (lib/prospect-suppression), so this is not
+ * The send path refuses a customer's address regardless (lib/marketing-suppression), so this is not
  * the only guard — it is what makes the LOG say "signed up" rather than "already a customer".
  */
 export async function markSignedUpByEmail(email: string, groupId: string, now: Date = new Date(), db: Db = prisma): Promise<number> {
@@ -292,99 +236,6 @@ export async function markSignedUpByEmail(email: string, groupId: string, now: D
     });
   }
   return hits.length;
-}
-
-// ── THE SENDER ───────────────────────────────────────────────────────────────────────────────────
-export type SequenceRun = {
-  /** THE SWITCH, IN THE RUN'S OWN OUTPUT — so a run that sent nothing says why, rather than looking idle. */
-  sending: 'on' | 'off';
-  /** Sequences due now that were NOT sent because sending is off. Zero whenever sending is on. */
-  queued: number;
-  considered: number; sent: number; stopped: Array<{ prospectId: string; reason: StopReason }>; retrying: number;
-};
-
-/**
- * SEND EVERY DUE STEP. Called by the scheduled job, and once straight after a visit is recorded.
- *
- * CLAIMED BEFORE IT IS SENT, by a conditional update on the pre-state, so two overlapping runs cannot
- * both send one step — the second finds next_due_at already moved and matches nothing.
- */
-export async function runSequence(opts: { now?: Date; onlyProspectId?: string; db?: Db; base?: string } = {}): Promise<SequenceRun> {
-  const now = opts.now ?? new Date();
-  const db = opts.db ?? prisma;
-  const out: SequenceRun = { sending: 'on', queued: 0, considered: 0, sent: 0, stopped: [], retrying: 0 };
-
-  // ── THE SWITCH STOPS THE SEND, NEVER THE ENROLMENT ──────────────────────────────────────────
-  // Off: nothing is claimed, nothing advanced, nothing stopped. Every due sequence stays exactly as it
-  // is — queued — and starts at the step it is on (step 1 for anyone enrolled while off) the first run
-  // after the switch goes on. The run REPORTS that it held them, so an empty run is never mistaken for
-  // a run with nothing to do.
-  // The lease is measured on the WALL clock, not the run's `now`: `now` is the sequence's clock (a
-  // caller may pass a later one to make a step due), and a lease's five minutes are real minutes.
-  if (!(await prospectSendingEnabled(db, { prospectId: opts.onlyProspectId }))) {
-    out.sending = 'off';
-    out.queued = await db.prospectSequence.count({
-      where: { state: 'active', next_due_at: { lte: now }, ...(opts.onlyProspectId ? { prospect_id: opts.onlyProspectId } : {}) },
-    });
-    return out;
-  }
-  const due = await db.prospectSequence.findMany({
-    where: { state: 'active', next_due_at: { lte: now }, ...(opts.onlyProspectId ? { prospect_id: opts.onlyProspectId } : {}) },
-    select: { id: true, prospect_id: true, next_step: true, next_due_at: true,
-      prospect: { select: { email: true, consent: true, personal_stripped_at: true, status: true, garage_name: true, unsubscribe_token: true } } },
-    take: 200,
-  });
-
-  for (const s of due) {
-    out.considered++;
-    const lease = new Date(now.getTime() + 15 * 60_000);
-    const claimed = await db.prospectSequence.updateMany({
-      where: { id: s.id, state: 'active', next_step: s.next_step, next_due_at: s.next_due_at },
-      data: { next_due_at: lease },
-    });
-    if (claimed.count !== 1) continue;
-
-    const stop = async (reason: StopReason) => {
-      await db.$transaction((tx) => stopSequence(tx, s.prospect_id, reason, now));
-      out.stopped.push({ prospectId: s.prospect_id, reason });
-    };
-
-    // RE-ASKED AT SEND TIME: the prospect may have signed up, been stripped or withdrawn since.
-    const refusal = refuseEnrolment(s.prospect);
-    if (refusal) { await stop(refusal === 'signed_up' ? 'signed_up' : refusal === 'stripped' ? 'retention' : 'suppressed'); continue; }
-    const step = SEQUENCE.find((x) => x.step === s.next_step);
-    if (!step) { await stop('completed'); continue; }
-
-    const links = prospectLinks(s.prospect.unsubscribe_token ?? '', opts.base);
-    const r = await sendNotification({
-      recipient: s.prospect.email!, template: step.template, groupId: PLATFORM_SEND,
-      subject: { type: 'prospect', id: s.prospect_id },
-      data: { garageName: s.prospect.garage_name, unsubscribeUrl: links.page },
-      emailOpts: { headers: { 'List-Unsubscribe': `<${links.oneClick}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } },
-    });
-
-    if (r.ok) {
-      const next = afterSend(s.next_step, now);
-      if (next.state === 'active') {
-        await db.prospectSequence.update({ where: { id: s.id }, data: { next_step: next.next_step, next_due_at: next.next_due_at, last_sent_at: now } });
-      } else {
-        await db.prospectSequence.update({ where: { id: s.id }, data: { last_sent_at: now } });
-        await stop('completed');
-      }
-      out.sent++;
-    } else if (r.skipCode === 'already_customer') {
-      await stop('already_customer');
-    } else if (r.skipCode === 'prospect_unsubscribed') {
-      await stop('suppressed');
-    } else {
-      // NOT SENT FOR A REASON THAT MAY PASS — no provider, a provider refusal, a failed check. The
-      // step stays due and the lease expires, so the next run tries again. Never advanced: a step
-      // that did not go must not be skipped as if it had.
-      await db.prospectSequence.updateMany({ where: { id: s.id, state: 'active' }, data: { next_due_at: now } });
-      out.retrying++;
-    }
-  }
-  return out;
 }
 
 // ── RETENTION ────────────────────────────────────────────────────────────────────────────────────

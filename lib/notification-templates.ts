@@ -11,6 +11,7 @@ import { smsText, isOneSegment } from '@/lib/sms-text';
 import { portalSignInUrl } from '@/lib/party-portal';
 import { COMPANY, officeOneLine } from '@/lib/company-info';
 import { PROMOTION_CHANNELS } from '@/lib/affiliate-portal-copy';
+import type { SequenceKey } from '@/lib/marketing-engine';
 
 /** Named once; see the affiliate_welcome note on why this is not typed into the prose. */
 const AFFILIATE_SIGN_IN_URL = portalSignInUrl('affiliate');
@@ -37,11 +38,20 @@ export type NotificationTemplate = {
    */
   security?: boolean;
   /**
-   * PROSPECTING MAIL — GreaseDesk writing to a garage that is not a customer. On the TEMPLATE for the
-   * same reason as `security`: sendNotification consults lib/prospect-suppression before every such
-   * send and no caller can opt out of it. Never both this and `security`; prospect-gate checks.
+   * PLATFORM MARKETING — GreaseDesk writing to somebody on one of its own four sequences, naming
+   * WHICH one. On the TEMPLATE for the same reason as `security`: sendNotification consults
+   * lib/marketing-suppression before every such send and no caller can opt out of it, and the same
+   * declaration picks the marketing From address so no caller chooses which reputation to spend.
+   *
+   * IT NAMES THE SEQUENCE RATHER THAN SAYING `true` because the suppression answer differs between
+   * them — a garage on trial and a new affiliate ARE customers, and refusing their mail for that
+   * reason would silence the two sequences aimed at them. See lib/marketing-engine.
+   *
+   * Never both this and `security`, and never both this and `marketing`: that one means a GARAGE
+   * writing to its own customer, which is a different sender, a different footer and a different
+   * opt-out list. marketing-engine-gate checks all three.
    */
-  prospecting?: boolean;
+  platformMarketing?: SequenceKey;
   /**
    * A REMINDER OR AN OFFER — a garage writing to its own customer to bring them in. Honours the
    * separate marketing opt-out (owner decision B, 2026-09-10): a customer who said "no reminders or
@@ -825,57 +835,103 @@ export const NOTIFICATION_TEMPLATES = {
         <p style="font-size:13px;color:#475569">${esc(PROMOTION_CHANNELS)}</p>`),
     }),
   },
-  // ── PROSPECTING SEQUENCE — PLACEHOLDER COPY (2026-09-10) ───────────────────────────────────────
-  // NOT FINAL: the wording and the video link are the owner's to write. What is final is the frame
-  // every step shares — prospectFooter — because that is the compliance: who is writing, from where,
-  // and a working way to stop it.
-  prospect_step_1: {
-    label: 'Prospect follow-up — step 1 (placeholder)',
-    prospecting: true,
-    email: (d) => ({
-      subject: 'Following up from our visit — GreaseDesk',
-      html: pshell(`
-        <h2 style="margin:0 0 8px">Thanks for your time</h2>
-        <p>[PLACEHOLDER — step 1 copy: what GreaseDesk does for a garage like ${esc(d.garageName ?? 'yours')}.]</p>
-        ${prospectFooter(d)}`),
-    }),
+  // ── THE MARKETING SEQUENCES (2026-11-02) ───────────────────────────────────────────────────────
+  // FOUR TEMPLATES, NO COPY. The words are rows in MarketingCopy, written in the Engine Room and
+  // editable without a deploy, and lib/marketing-store passes them in as `subject`, `body`,
+  // `ctaLabel` and `ctaUrl`. What lives HERE is what must never be editable: the frame, the footer,
+  // the unsubscribe link, and the declaration of which sequence this is — which is what
+  // sendNotification asks the suppression list about and what picks the marketing From address.
+  //
+  // These replace prospect_step_1..3, which carried [PLACEHOLDER] bodies in compiled source. The
+  // reason the copy moved out is not convenience: it was the one part of the sequence that the owner
+  // had to write and a deploy had to carry, which meant the engine could not be finished before the
+  // words were, and the words could not be changed without a release.
+  //
+  // One template per sequence rather than one per step, because the frame does not differ by step
+  // and a step is a row. Twenty templates would be twenty places for the footer to drift.
+  marketing_garage_prospect: {
+    label: 'Sequence — garage prospects',
+    platformMarketing: 'garage_prospect',
+    email: (d) => marketingEmail(d),
   },
-  prospect_step_2: {
-    label: 'Prospect follow-up — step 2 (placeholder)',
-    prospecting: true,
-    email: (d) => ({
-      subject: 'See GreaseDesk in two minutes',
-      html: pshell(`
-        <h2 style="margin:0 0 8px">A short look</h2>
-        <p>[PLACEHOLDER — step 2 copy and the video link.]</p>
-        ${prospectFooter(d)}`),
-    }),
+  marketing_trial_garage: {
+    label: 'Sequence — garages on trial',
+    platformMarketing: 'trial_garage',
+    email: (d) => marketingEmail(d),
   },
-  prospect_step_3: {
-    label: 'Prospect follow-up — step 3 (placeholder)',
-    prospecting: true,
-    email: (d) => ({
-      subject: 'Still thinking it over?',
-      html: pshell(`
-        <h2 style="margin:0 0 8px">One last note</h2>
-        <p>[PLACEHOLDER — step 3 copy.]</p>
-        ${prospectFooter(d)}`),
-    }),
+  marketing_affiliate_interest: {
+    label: 'Sequence — affiliate waiting list',
+    platformMarketing: 'affiliate_interest',
+    email: (d) => marketingEmail(d),
+  },
+  marketing_affiliate_new: {
+    label: 'Sequence — new affiliates',
+    platformMarketing: 'affiliate_new',
+    email: (d) => marketingEmail(d),
   },
 } satisfies Record<string, NotificationTemplate>;
 
 /**
- * THE FOOTER EVERY PROSPECTING EMAIL CARRIES — who is writing, from where, and how to stop it.
- * The identity comes from lib/company-info so it cannot drift from the site's own; the unsubscribe
- * link is required, and a send with no link renders a visible fault rather than a quiet omission.
+ * ONE OWNER-WRITTEN EMAIL, RENDERED. Subject and body come from MarketingCopy; everything structural
+ * comes from here, so no edit in the Engine Room can remove the footer or the way out.
+ *
+ * ── THE BODY IS PLAIN TEXT, ESCAPED, SPLIT ON BLANK LINES ──────────────────────────────────────
+ * Not markdown and not HTML. The only person who types it is the owner, a parser is a second thing
+ * to get wrong, and an escaped body cannot carry a tag into a stranger's inbox. Blank lines become
+ * paragraphs because that is what somebody typing into a textarea means by them; single newlines
+ * become <br> for the same reason. lib/notification-templates::freeTextEmail already takes this
+ * approach for the one other owner-written body in the product, and this is deliberately the same.
+ *
+ * ── A MISSING LINK RENDERS A VISIBLE FAULT ─────────────────────────────────────────────────────
+ * As the prospecting footer did: lib/notify refuses to send a marketing email whose rendered body
+ * lacks its unsubscribe link, so what matters here is that the omission is LOUD rather than tidy. A
+ * silently footer-less marketing email is the one failure that cannot be taken back.
  */
-function prospectFooter(d: TemplateData): string {
+function marketingEmail(d: TemplateData): RenderedEmail {
+  const paragraphs = String(d.body ?? '')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p !== '')
+    .map((p) => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`)
+    .join('\n        ');
+  const ctaLabel = String(d.ctaLabel ?? '').trim();
+  const ctaUrl = String(d.ctaUrl ?? '').trim();
+  return {
+    subject: String(d.subject ?? '').trim() || 'A note from GreaseDesk',
+    html: pshell(`
+        ${paragraphs}
+        ${ctaLabel && ctaUrl ? button(ctaUrl, ctaLabel) : ''}
+        ${marketingSequenceFooter(d)}`),
+  };
+}
+
+/**
+ * WHY THIS PERSON IS RECEIVING THIS, IN THE WORDS OF HOW THEY AGREED.
+ *
+ * The sentence is chosen by `consentSource` — the value frozen on the enrolment when it was created,
+ * not a guess made at render time. It matters that the four differ: the prospecting footer said "you
+ * agreed, when GreaseDesk visited, to hear from us", which is true of a garage a rep stood in front
+ * of and false of everybody on the other three sequences. A footer that explains the wrong reason is
+ * worse than a vague one, because it tells somebody they consented in a way they did not.
+ *
+ * An unrecognised source gets the vague-but-true line rather than a wrong specific one.
+ */
+function marketingSequenceFooter(d: TemplateData): string {
   const link = String(d.unsubscribeUrl ?? '');
+  const because = ((): string => {
+    switch (String(d.consentSource ?? '')) {
+      case 'rep_visit': return `You're receiving this because you agreed, when ${esc(COMPANY.tradingName)} visited, to hear from us.`;
+      case 'signup': return `You're receiving this because you signed up for a ${esc(COMPANY.tradingName)} trial.`;
+      case 'waitlist_form': return `You're receiving this because you asked to be told when the ${esc(COMPANY.tradingName)} affiliate programme opened.`;
+      case 'affiliate_terms': return `You're receiving this because you joined the ${esc(COMPANY.tradingName)} affiliate programme.`;
+      default: return `You're receiving this because you asked to hear from ${esc(COMPANY.tradingName)}.`;
+    }
+  })();
   return `
     <p style="font-size:12px;color:#64748b;margin-top:24px">
-      You're receiving this because you agreed, when ${esc(COMPANY.tradingName)} visited, to hear from us.
-      ${link ? `<a href="${esc(link)}" style="color:#64748b">Unsubscribe</a> — one click, and no more emails.`
-               : '<strong>[UNSUBSCRIBE LINK MISSING — this email must not be sent]</strong>'}
+      ${because}
+      ${link ? `<a href="${esc(link)}" style="color:#64748b">Unsubscribe</a> — one click, and no more marketing email from us.`
+             : '<strong>[UNSUBSCRIBE LINK MISSING — this email must not be sent]</strong>'}
     </p>
     <p style="font-size:12px;color:#94a3b8">${esc(COMPANY.legalName)} · Company no. ${esc(COMPANY.companyNumber)} · ${esc(officeOneLine())}</p>`;
 }

@@ -541,7 +541,17 @@ try {
     // hit these by accident and THIS CLAUSE asked what audience they were — the same accident also
     // rewrote freeTextEmail, which is a garage writing to its OWN customer and must keep the tenant
     // line. That is the pair this map exists to keep apart.
-    'prospect_step_1', 'prospect_step_2', 'prospect_step_3',
+    // THE FOUR MARKETING SEQUENCES (2026-11-02), which replaced prospect_step_1..3 when the engine
+    // took on three more audiences. All four are GreaseDesk writing on its OWN account and none can
+    // say "on behalf of your garage": a prospect is not a customer and has no garage on our books; a
+    // garage on trial is being written to about ITS GreaseDesk account, not about its customers; and
+    // an affiliate has no garage of ours at all.
+    //
+    // LISTED, not matched on the `marketing_` prefix, for the reason stated above the set: a name
+    // pattern would adopt the next template somebody happened to call marketing_* without anybody
+    // deciding what audience it had. marketing-engine-gate asserts the other direction — that only
+    // these four carry the platform-marketing flag at all.
+    'marketing_garage_prospect', 'marketing_trial_garage', 'marketing_affiliate_interest', 'marketing_affiliate_new',
   ]);
   const allKeys = Object.keys(TPL.NOTIFICATION_TEMPLATES);
   const sample = { ...regPayload, refCode: 'ZZAL1234', referralLink: 'https://example.test/r/ZZAL1234',

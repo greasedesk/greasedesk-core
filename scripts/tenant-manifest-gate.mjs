@@ -17,6 +17,7 @@
  */
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError } = await import('./_gate-preflight.mjs');
+const { readFileSync, readdirSync } = await import('node:fs');
 import './_ts.mjs';
 
 const out = [];
@@ -50,11 +51,44 @@ try {
   const tables = new Set(rows.map((r) => r.table_name).filter((t) => !t.startsWith('_prisma')));
   const classified = new Set([...M.EXPORTED_MODELS, ...M.OMITTED_MODELS.map((o) => o.model)]);
   const unclassifiedTables = [...tables].filter((t) => !classified.has(t));
-  const phantomEntries = [...classified].filter((m) => !tables.has(m));
+  /**
+   * ── A TABLE ARRIVING IS NOT A PHANTOM (2026-11-02) ──────────────────────────────────────────
+   * The manifest necessarily LEADS the database by one push: the code that ships with a migration
+   * has to classify the tables that migration creates, so between writing the migration and
+   * applying it, the manifest names tables information_schema has never heard of. Read as phantoms,
+   * those are a red for doing the thing the two-push policy requires.
+   *
+   * A table is excused ONLY when a PENDING migration — one on disk, not in _prisma_migrations, and
+   * carrying the classification header the chokepoint requires — creates it by name. That is the
+   * same test schema-drift-gate applies before it declines: a pending migration is deliberate only
+   * if it declares itself, and anything pending without a header is a mess rather than a window.
+   *
+   * It does NOT excuse a name nothing creates. A manifest entry for a table no migration brings is
+   * still a phantom, and still red.
+   */
+  const onDisk = readdirSync('prisma/migrations', { withFileTypes: true })
+    .filter((d) => d.isDirectory()).map((d) => d.name).sort();
+  const applied = (await prisma.$queryRawUnsafe(
+    'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL',
+  )).map((r) => r.migration_name);
+  const arriving = new Set();
+  const pendingUndeclared = [];
+  for (const name of onDisk.filter((n) => !applied.includes(n))) {
+    let sql = '';
+    try { sql = readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8'); } catch { /* unreadable counts as undeclared */ }
+    if (!/^\s*--\s*@migration:/m.test(sql)) { pendingUndeclared.push(name); continue; }
+    for (const m of sql.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"([^"]+)"/gi)) arriving.add(m[1]);
+  }
+  const phantomEntries = [...classified].filter((m) => !tables.has(m) && !arriving.has(m));
   check(`every table in the database is classified (${tables.size} tables)`,
     unclassifiedTables.length === 0, unclassifiedTables.join(', ') || 'none unclassified');
   check('  …and the manifest names no table that does not exist',
     phantomEntries.length === 0, phantomEntries.join(', ') || 'none phantom');
+  check('  …and every excused name is one a DECLARED pending migration creates',
+    pendingUndeclared.length === 0,
+    pendingUndeclared.length
+      ? `pending without a @migration: header, so not a deliberate window: ${pendingUndeclared.join(', ')}`
+      : (arriving.size ? `${arriving.size} arriving: ${[...arriving].join(', ')}` : 'nothing pending — the manifest is level with the database'));
 
   const colsOf = async (t) => new Set((await prisma.$queryRawUnsafe(
     `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, t,

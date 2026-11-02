@@ -329,10 +329,10 @@ model Group {
   /// schema change: a CHECK would make every wording change a constraining migration and a second
   /// push. The list is enforced in code at the one writer instead, and a value whose label has
   /// since been reworded still renders — as itself (lib/signup-source::heardAboutLabel).
-  heard_about                   String?
+  heard_about       String?
   /// The free text behind "Something else". NULL unless that option was chosen. Trimmed and capped
   /// at the writer; blank becomes NULL, because an empty string is a typed answer of nothing.
-  heard_about_other             String?
+  heard_about_other String?
   // WHAT THE LINK SAID, captured on the FIRST visit (gd_utm, lib/consent) under the SAME
   // functional-consent rule as gd_ref — so NULL is also what a visitor who refused the cookie
   // leaves behind, and we cannot tell that apart from a visitor who arrived with no campaign on
@@ -340,12 +340,12 @@ model Group {
   /// NULL = no campaign parameter on the link, OR the visitor refused the functional cookie —
   /// and we cannot tell those two apart, which is why the Engine Room says "not recorded" rather
   /// than naming a reason. Never used to decide money.
-  utm_source                    String?
+  utm_source        String?
   /// NULL = the same absence as utm_source. The three are captured together and absent together,
   /// but each is independently nullable: a link may carry a source and no medium.
-  utm_medium                    String?
+  utm_medium        String?
   /// NULL = the same absence as utm_source: nothing on the link, or no functional consent.
-  utm_campaign                  String?
+  utm_campaign      String?
 
   // ── TaxProfile (item-13 onboarding groundwork). The Group is the LEGAL entity that files one
   // tax return, so tax identity lives here; currency + locale are TRADING identity and stay on Site
@@ -432,6 +432,8 @@ model Group {
   // Human-facing, immutable account reference (GB-GD<n>), auto-assigned from a Postgres
   // sequence via a column default (atomic / collision-safe). Never updated by any API.
   /**
+   * /**
+   * /**
    * /**
    * /**
    * /**
@@ -1117,29 +1119,25 @@ model Rep {
 
 /**
  * WHAT THE AFFILIATE PROPOSES WE PAY, AND WHO DECIDES IT.
- *
  * ── WHY A REQUEST AND NOT A FORM THAT WRITES Rep.bank_* ─────────────────────────────────
  * Rep's bank columns are operator-write-only on purpose, and the reason is in lib/rep-magic-link's
  * header: there is no password, the link IS the credential, and the mailbox IS the account. A
  * self-serve bank form would therefore let whoever holds the inbox redirect the money.
- *
  * The dashboard still has to collect the details, so the two correct rules are reconciled by a third
  * state rather than by overriding one of them: the affiliate proposes HERE, the owner applies it in
  * the Engine Room, and only that write touches Rep.bank_*. NOTHING IS EVER PAID FROM THIS TABLE —
  * it is a proposal, and a proposal that could be paid would be the hole it exists to close.
- *
  * ── WHAT IS ENCRYPTED, AND WHAT THAT BUYS ────────────────────────────────────────────
  * sort code and account number: AES-256-GCM (lib/payee-crypto). The account NAME is plaintext — it
  * is a person's name and it has to print on a remittance, so encrypting it would cost "paying
  * J Smith" on the approval screen and buy nothing.
- *
  * It protects a DATABASE DUMP — a Neon branch, a stolen connection string, the nightly R2 dump — and
  * NOT an attacker holding the running app, which reads the key from the environment. Said plainly
  * because an encrypted column invites the belief that it covers more than it does.
  */
 model RepPayeeRequest {
-  id     String @id @default(uuid())
-  rep_id String
+  id                 String    @id @default(uuid())
+  rep_id             String
   /// 'self' | 'nominee'. RepPayeeRequest_payee_kind_chk holds the set; lib/payee holds the same list
   /// for the type system, and a gate asserts the two agree rather than trusting that they do.
   payee_kind         String
@@ -1178,7 +1176,6 @@ model RepPayeeRequest {
 
 /**
  * WHICH TERMS THEY ACCEPTED, AND WHEN. APPEND-ONLY, LIKE AuditLog.
- *
  * Rep.terms_accepted_at already records THAT they accepted and keeps that meaning: the first
  * acceptance. It cannot answer WHICH VERSION, and a single terms_version column would answer that
  * only until the terms are re-issued — at which point the update erases the evidence of what the
@@ -1186,8 +1183,8 @@ model RepPayeeRequest {
  * updated.
  */
 model RepTermsAcceptance {
-  id     String @id @default(uuid())
-  rep_id String
+  id          String   @id @default(uuid())
+  rep_id      String
   /// The Document version stamp in force AT ACCEPTANCE (e.g. '2026-11-01') — frozen, never a lookup
   /// of the latest. That is the whole reason Document versions a legal page: what they agreed to is
   /// a different question from what the page says today.
@@ -1334,8 +1331,8 @@ model TenantAffiliateTerms {
   // The RENEWAL months are deliberately NOT here (owner ruling, same day): £750 is the list
   // price, read at checkout, and once a garage subscribes Stripe holds its amount. Freezing it
   // would promise "£750 for ever" to anyone who ever clicked a referral link.
-  offer_months_paid    Int?
-  months_given         Int?
+  offer_months_paid Int?
+  months_given      Int?
 
   group     Group @relation(fields: [group_id], references: [id], onDelete: Cascade)
   /// RESTRICT, not Cascade: deleting an affiliate must not silently erase what a garage was
@@ -1375,26 +1372,26 @@ model Environment {
 }
 
 model ProgrammeSettings {
-  id                         String   @id @default("singleton")
+  id                         String    @id @default("singleton")
   /// THE one trial length, read by Checkout, by Group.trial_ends_at and by /llms.txt. It lived in
   /// two hard-coded 60s kept in step by a comment saying one mirrored the other.
-  trial_days                 Int      @default(30)
+  trial_days                 Int       @default(30)
   /// KEPT FOR A FUTURE PROMOTION (owner, 2026-10-26). Every annual plan is 12-for-10 today,
   /// new or renewal, so nothing currently prices this differently from the renewal figure.
-  new_annual_months_paid     Int      @default(10)
-  renewal_annual_months_paid Int      @default(10)
-  offer_months_paid          Int      @default(8)
-  months_given               Int      @default(12)
-  total_reward_pennies       Int      @default(12000)
-  instalment_pennies         Int      @default(3000)
-  minimum_payout_pennies     Int      @default(10000)
+  new_annual_months_paid     Int       @default(10)
+  renewal_annual_months_paid Int       @default(10)
+  offer_months_paid          Int       @default(8)
+  months_given               Int       @default(12)
+  total_reward_pennies       Int       @default(12000)
+  instalment_pennies         Int       @default(3000)
+  minimum_payout_pennies     Int       @default(10000)
   /// DO THE GARAGES GET THE OFFER? Read by refuseOffer: a referred garage's first year is 12
   /// months for the price of 8. It says nothing about whether a person may BECOME an affiliate —
   /// that is affiliate_joining_open below. The name is wrong and is kept deliberately (owner,
   /// 2026-10-30): renaming it needs a DROP, which would 500 every public page between apply and
   /// push, because Prisma selects all scalars and getProgrammeSettings is reached by /, /pricing
   /// and /llms.txt. The rename is boarded as cosmetic. The code says offerOpen.
-  affiliate_signups_open     Boolean  @default(true)
+  affiliate_signups_open     Boolean   @default(true)
   /// MAY SOMEONE JOIN THE PROGRAMME? The public signup at affiliates.greasedesk.com. The other
   /// half of the switch that was answering two questions. CLOSED by default: it is turned on by
   /// someone who can see the signup page working, and a fresh database starts shut rather than
@@ -1402,7 +1399,7 @@ model ProgrammeSettings {
   /// (owner, 2026-10-30) — which is why it is not in PUBLIC_COPY_PATHS and saving it revalidates
   /// nothing. If the page ever becomes static, this needs the revalidate-and-read-back the trial
   /// length has, or a closed programme would keep accepting people from a cached page.
-  affiliate_joining_open     Boolean  @default(false)
+  affiliate_joining_open     Boolean   @default(false)
   /// @nulls: copy_revalidated_at, copy_revalidate_error
   /// Whether the PUBLIC SITE agrees with trial_days. The marketing pages are statically generated
   /// and refreshed on demand when the setting is saved; a save that succeeds while the refresh
@@ -1421,8 +1418,8 @@ model ProgrammeSettings {
   /// There is no "alerts off" switch, deliberately: emptying the list restores the default
   /// recipient rather than silencing anything. Addresses are cleaned at the single writer
   /// (refuseAlertEmails), which is why the column carries no CHECK.
-  alert_emails               String[] @default([])
-  updated_at                 DateTime @updatedAt
+  alert_emails               String[]  @default([])
+  updated_at                 DateTime  @updatedAt
 }
 
 model CommissionRate {
@@ -5698,6 +5695,182 @@ model ProspectSendingLease {
   prospect Prospect @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
 }
 
+// ══ THE MARKETING ENGINE (2026-11-02) ═══════════════════════════════════════════════════════════
+// Four sequences, one state machine. The rules are lib/marketing-engine; the writes are
+// lib/marketing-store. These four tables REPLACE ProspectSequence, ProspectSending and
+// ProspectSendingLease, which are dropped in a second migration once the code using them is gone —
+// a shared database, so a constraining change cannot land before the deployment that stops writing
+// the old shape (constraint-migration-before-deploy).
+
+/// ONE ENGINE, FOUR SEQUENCES — the enrolment of one subject on one sequence.
+///
+/// ── WHY NOT ProspectSequence WITH MORE COLUMNS ─────────────────────────────────────────────────
+/// That table is the right machine with one audience welded into its primary key
+/// (prospect_id @unique → Prospect, cascading). A trial garage is a Group, a waiting affiliate is an
+/// AffiliateWaitlist row, a new affiliate is a Rep. Postgres has no polymorphic foreign key, so the
+/// alternatives were four nullable subject columns of which exactly one is ever set and no
+/// constraint able to say which, or a second copy of the runner, the switch, the stop reasons and
+/// the cron. Measured first: that table held 0 rows on production and its switch had never been
+/// turned on, so generalising it was a schema change over empty tables, not a data migration.
+///
+/// ── NO FOREIGN KEY TO THE SUBJECT, AND WHAT THAT COSTS ─────────────────────────────────────────
+/// (subject_type, subject_id) IS the reference. The cost is that a deleted subject leaves an
+/// enrolment standing, where a cascade used to clear it silently. The runner therefore treats a
+/// subject it cannot resolve as a STOP with reason `subject_gone` — named, not crashed, and not
+/// retried for ever. The tenant PURGE sweeps the `group` rows explicitly for the same reason; the
+/// other three subject types are ours and must never be swept with a tenant.
+///
+/// ── NO EMAIL COLUMN, DELIBERATELY AND IMPORTANTLY ──────────────────────────────────────────────
+/// The address is read from the subject at send time. A copy here would be a second home for
+/// personal data outside lib/prospect-store::stripPersonal, which is the ONE writer that removes a
+/// prospect's email — and a retention rule with a second copy it cannot reach is not a retention
+/// rule. It also means an erasure anywhere else needs no change here.
+model MarketingEnrolment {
+  id String @id @default(uuid())
+
+  /// lib/marketing-engine SEQUENCE_KEYS. Held, with subject_type, by MarketingEnrolment_pair_chk.
+  sequence_key String
+  /// Which TABLE subject_id points into — lib/marketing-engine SUBJECT_TYPES. Strictly derivable
+  /// from sequence_key (SUBJECT_OF is a function) and kept anyway, then held to that map by
+  /// MarketingEnrolment_pair_chk. A bare uuid in a polymorphic column is unreadable to anyone
+  /// querying by hand in two years; a type column that CANNOT disagree with the code is
+  /// self-describing at no risk. The pair CHECK is the one that matters: without it a trial-garage
+  /// enrolment could carry a Prospect id, and the one thing this table must never do is send one
+  /// audience's email to somebody from another.
+  subject_type String
+  subject_id   String
+
+  /// 'active' | 'stopped' — MarketingEnrolment_state_chk, carried over from ProspectSequence_stop_chk.
+  state          String
+  /// The step to send next, 1-based. 1..5, held by MarketingEnrolment_step_chk.
+  next_step      Int
+  /// NULL exactly when stopped — an active enrolment is always due at some time.
+  next_due_at    DateTime?
+  started_at     DateTime
+  /// NULL = nothing has been sent yet.
+  last_sent_at   DateTime?
+  /// NULL exactly while active.
+  stopped_at     DateTime?
+  /// WHY it stopped, never merely that it did — lib/marketing-engine STOP_REASONS. NULL exactly
+  /// while active.
+  stopped_reason String?
+
+  /// WHY THIS SEND IS ALLOWED, frozen at enrolment: lib/marketing-engine CONSENT_SOURCES, and the
+  /// moment it was given. FROZEN because it records what the enrolment was JUSTIFIED BY, which must
+  /// not change under us. What the send is SUBJECT TO — the unsubscribe list, whether the address has
+  /// become a customer, the switch, whether the subject still exists — is read LIVE on every send.
+  consent_source String
+  consent_at     DateTime
+
+  /// THE WAY OUT, ON THE ENROLMENT RATHER THAN ON FOUR SUBJECT TABLES.
+  ///
+  /// Prospect.unsubscribe_token could only serve prospects; a Group, an AffiliateWaitlist row and a
+  /// Rep have no such column, and adding one to each would be three columns implementing one rule.
+  /// Stored as-is, not hashed, for the reason the prospect column gave: it is not a credential, the
+  /// only power it grants is STOPPING email, and the sender has to put it in every message anyway.
+  ///
+  /// NULL = no email has been addressed to this enrolment yet, so no link was ever sent.
+  ///
+  /// Per-enrolment, while an unsubscribe is GLOBAL: clicking any one of them suppresses the address
+  /// for all four sequences and stops every other enrolment that address is on. A token is the
+  /// identifier of a message, not the scope of the request it carries.
+  unsubscribe_token String? @unique
+
+  created_at DateTime @default(now())
+
+  lease MarketingSendingLease?
+
+  /// One enrolment per subject per sequence. A second is the same person sent the same five emails
+  /// twice, which is the failure a marketing engine is most likely to produce.
+  @@unique([sequence_key, subject_type, subject_id], map: "MarketingEnrolment_subject_uq")
+  @@index([state, next_due_at], map: "MarketingEnrolment_due_idx")
+  @@index([subject_type, subject_id], map: "MarketingEnrolment_subject_idx")
+}
+
+/// WHETHER ONE SEQUENCE SENDS. One row per sequence; NO ROW = OFF, which is the default and the
+/// state every sequence ships in — because the copy is the owner's and nothing may reach a real
+/// person before they have read it.
+///
+/// It stops the SEND, never the ENROLMENT: somebody enrolled while a sequence is off is QUEUED and
+/// starts at step 1 when it is switched on. "Queued" is derived from this plus the enrolment
+/// (lib/marketing-engine::enrolmentState), never stored.
+model MarketingSending {
+  /// lib/marketing-engine SEQUENCE_KEYS — one row each, so the four switches are independent and a
+  /// sequence being on says nothing about any other.
+  sequence_key String   @id
+  enabled      Boolean
+  changed_at   DateTime
+  /// The operator who made the CURRENT decision. The history is in SuperAdminAudit.
+  changed_by   String
+}
+
+/// A GATE'S OVERRIDE, NEVER THE OWNER'S SWITCH: sending ON or OFF for ONE enrolment until
+/// expires_at. Consulted only by a run that names that enrolment — no cron run and no other
+/// enrolment ever sees it — and ignored once expired, so a lease left behind by a killed gate is
+/// harmless from the moment it is written. Read only through sendingAllows(). At most 5 minutes:
+/// MarketingSendingLease_short_chk.
+///
+/// The ProspectSendingLease pattern unchanged, now keyed on the enrolment so it can have a real
+/// foreign key and cascade.
+model MarketingSendingLease {
+  enrolment_id String   @id
+  enabled      Boolean
+  created_at   DateTime @default(now())
+  expires_at   DateTime
+  created_by   String
+
+  enrolment MarketingEnrolment @relation(fields: [enrolment_id], references: [id], onDelete: Cascade)
+}
+
+/// THE WORDS, EDITABLE WITHOUT A DEPLOY. One row per (sequence, step).
+///
+/// ── A MISSING STEP HOLDS; IT NEVER SENDS AND NEVER SKIPS ───────────────────────────────────────
+/// No row, a blank subject or a blank body means the step does NOT go: the runner reports `no_copy`
+/// and leaves the enrolment exactly where it is. Nobody receives an empty email, and no step is
+/// advanced as though it had been sent. The Engine Room shows the same verdict the runner will
+/// reach, from the same pure function — "ready to send" on a screen beside a silent hold in the cron
+/// is the pair that wastes an afternoon.
+///
+/// ── PLAIN TEXT, NOT MARKDOWN AND NOT HTML ──────────────────────────────────────────────────────
+/// body is escaped at render and wrapped paragraph by paragraph. The only person who types here is
+/// the owner, a parser is a second thing to get wrong, and an escaped body cannot carry a tag into a
+/// real person's inbox. lib/notification-templates::freeTextEmail already takes exactly this
+/// approach for the one other owner-written body in the product.
+///
+/// ── NO DRAFT/PUBLISH AXIS, DELIBERATELY ────────────────────────────────────────────────────────
+/// Document has one because a published legal version must freeze. This is latest-wins, like a
+/// `page`: the sequences ship OFF, an edit is read on the next run, and a second axis is a second
+/// state to be wrong about. If an edit landing mid-sequence ever becomes a real hazard, the switch
+/// is the thing to turn off, and it already exists.
+model MarketingCopy {
+  id String @id @default(uuid())
+
+  /// lib/marketing-engine SEQUENCE_KEYS, held by MarketingCopy_sequence_chk.
+  sequence_key String
+  /// 1..5, held by MarketingCopy_step_chk.
+  step         Int
+  subject      String
+  body         String
+
+  /// A CALL TO ACTION IS BOTH COLUMNS OR NEITHER (MarketingCopy_cta_chk), so no renderer has to
+  /// decide what a label with no link means. The URL is refused unless it parses as an absolute
+  /// http(s) URL — see ctaUrlAllowed: escaping a `javascript:` href makes it harmless-looking,
+  /// refusing it makes it absent.
+  ///
+  /// NULL on BOTH = this email has no button, which is a normal thing for an email to be and not an
+  /// unfinished one. The CHECK is what makes the pair unambiguous: there is no state in which one is
+  /// set and the other is missing, so a reader never has to guess which half was forgotten.
+  /// @nulls: cta_label, cta_url
+  cta_label String?
+  cta_url   String?
+
+  updated_at DateTime @updatedAt
+  /// The operator who last wrote these words. No FK: the copy outlives the account.
+  updated_by String
+
+  @@unique([sequence_key, step], map: "MarketingCopy_step_uq")
+}
+
 /// A "BECOME A RESELLER" EXPRESSION OF INTEREST, from the public reseller site at
 /// reps.greasedesk.com. NOT a signup: no account, no KYC, no Rep row — those are a later build, and
 /// nothing here grants anything.
@@ -5728,13 +5901,13 @@ model AffiliateWaitlist {
   /// LOWER-CASED BY THE WRITER (lib/affiliate-waitlist), because this unique index decides who is
   /// already waiting and Postgres uniqueness is case-sensitive: without the fold, Sam@x.com and
   /// sam@x.com are two places in one queue for one person.
-  email      String   @unique
+  email String @unique
 
   /// 'trade' | 'creator' (lib/affiliate-waitlist::WAITLIST_AUDIENCES), held by
   /// AffiliateWaitlist_audience_chk. NULL = THEY DID NOT SAY, which the form allows and which is a
   /// real answer — never defaulted to the commoner one, and never inferred from which button they
   /// pressed, because a guess recorded as a fact is indistinguishable from the fact later.
-  audience   String?
+  audience String?
 
   @@index([created_at])
 }

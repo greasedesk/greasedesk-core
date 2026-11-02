@@ -56,7 +56,13 @@ const ALLOWED = {
 };
 
 /** Keyed by a bare string, so the graph below is blind to them. Checked by name, not by analysis. */
-const SUBJECT_KEYED = ['twoFactorSecret', 'deliveredCode', 'twoFactorRecoveryCode', 'verificationToken', 'authRateLimit', 'countryWaitlist'];
+// A SEVENTH FROM 2026-11-02. MarketingEnrolment reaches four different subject tables through
+// (subject_type, subject_id) and has no relation to Group at all, so it is invisible to the graph
+// analysis below in exactly the way the other six are — and unlike them, only SOME of its rows
+// belong to a tenant. The clause below asserts it is swept; marketing-engine-gate asserts the
+// sweep's own WHERE is scoped to subject_type 'group', which is the half that keeps the other
+// three audiences' rows out of a tenant's purge.
+const SUBJECT_KEYED = ['twoFactorSecret', 'deliveredCode', 'twoFactorRecoveryCode', 'verificationToken', 'authRateLimit', 'countryWaitlist', 'marketingEnrolment'];
 
 /** Pure, so the synthetic cases below test the real analysis rather than a copy of it. */
 export function purgeSurvivors(schema, purgeSrc) {
@@ -141,7 +147,7 @@ try {
     'the split is the two-part test doing its job, and the next reader needs the argument, not the outcome');
 
   // ── 3. WHAT THE GRAPH CANNOT SEE ─────────────────────────────────────────────────────────────
-  console.log('\n— the subject-keyed six, checked by name because nothing can find them —');
+  console.log(`\n— the subject-keyed ${SUBJECT_KEYED.length}, checked by name because nothing can find them —`);
   for (const t of SUBJECT_KEYED) {
     check(`${t} is still swept`, new RegExp(`\\.${t}\\.deleteMany\\(`).test(purge),
       'no group_id and no relation — a schema analysis is blind to it, which is how a real mobile number survived a purge');

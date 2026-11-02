@@ -279,7 +279,28 @@ export const TENANT_MANIFEST: Readonly<Record<string, Entry>> = {
   ProspectSending: OURS('an outreach message we sent'),
   ProspectSendingLease: OURS('a lock held while we send outreach'),
   ProspectSuppression: OURS('an address that asked us not to contact them'),
-  ProspectVisit: OURS('a visit to our marketing site by a prospect'),
+  // CORRECTED 2026-11-02: this said "a visit to our marketing site by a prospect", which is not what
+  // the model is. A ProspectVisit is a REP standing on a forecourt — the row carries rep_id,
+  // visited_on, spoke_to and a note about the business. Nothing about it is a web visit. The
+  // classification was right and the sentence explaining it was wrong, which is the worse of the two
+  // ways round: the next reader believes the sentence.
+  ProspectVisit: OURS('a rep’s visit to a garage, recorded before they were a tenant at all'),
+
+  // ── THE MARKETING ENGINE (2026-11-02) ────────────────────────────────────────────────────────
+  // GLOBAL REACH, and that is not a dodge. MarketingEnrolment has no group_id: it points at one of
+  // four subject tables through (subject_type, subject_id), and only ONE of those four is a tenant.
+  // So it cannot be reached by group mechanically, and `by: 'group'` here would be a claim the
+  // datamodel audit would rightly reject.
+  //
+  // THE PURGE IS THE PART THAT MATTERS, and it is not derivable from this line: the sweep takes the
+  // rows whose subject_type is 'group' and leaves the other three alone. Those rows are about a
+  // garage that no longer exists and an enrolment pointing at one is an email waiting to fail; the
+  // prospect, waiting-list and affiliate rows are ours and have nothing to do with any tenant.
+  // See lib/tenant-purge and purge-completeness-gate, which is where that claim is checked.
+  MarketingEnrolment: OURS('somebody’s place in one of our own email sequences — ours, and shared across four audiences, so never one tenant’s to take. The purge takes the group-subject rows'),
+  MarketingSending: OURS('whether one of our sequences is switched on — a decision about our selling, not about any tenant'),
+  MarketingSendingLease: OURS('a lock held while we send one of our sequences. Operational, ours, and nothing to do with the tenant'),
+  MarketingCopy: OURS('the words in our own marketing emails'),
 };
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────

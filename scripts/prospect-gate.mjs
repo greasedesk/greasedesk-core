@@ -36,6 +36,45 @@ const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
 
 const prisma = await gatePrisma();
+
+// ── THE ENGINE THIS GATE DRIVES WAS GENERALISED UNDER IT (2026-11-02) ───────────────────────────
+// The prospect sequence is one of four audiences on lib/marketing-store now, and its state lives in
+// MarketingEnrolment / MarketingSending / MarketingSendingLease rather than in the three
+// Prospect* tables every clause below names. Migration 20261102120000_marketing_engine is the
+// OWNER'S to apply; until it is, recordVisit writes a table this database does not have, so not one
+// of the flow clauses can reach its subject.
+//
+// IT DECLINES HERE, BEFORE ANY FIXTURE OR ANY READ, rather than running against the old shape and
+// reporting a verdict about an engine that no longer exists. What MOVED is proved meanwhile by
+// scripts/marketing-engine-gate.mjs (230 clauses, no database): the template flags, the send-path
+// ordering, the fail-closed suppression, the state machine, the per-audience customer policy.
+// What is NOT yet proved anywhere is this gate's own subject — the end-to-end flow from a rep
+// recording a visit to an email leaving — and that is a real hole, not a resolved one. The rewrite
+// onto the new names is boarded; it is deliberately not written blind, because a gate that cannot be
+// executed is a gate nobody has checked.
+const engineTables = await prisma.$queryRawUnsafe(
+  `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
+  ['MarketingEnrolment', 'MarketingSending'],
+).catch(() => []);
+// IT DECLINES EITHER WAY, and the two reasons are different — which is why the state is reported
+// rather than assumed. With the migration NOT applied, recordVisit writes a table this database
+// does not have and the first fixture throws. With it applied, every clause below still names the
+// retired tables and the retired templates, so a green verdict would be about nothing. One stale
+// gate, two failure modes, and no version of today in which it can honestly report.
+{
+  await prisma.$disconnect().catch(() => {});
+  declineToRun(
+    engineTables.length === 2
+      ? 'the marketing engine IS applied to this database and this gate has not been rewritten onto it — '
+        + 'every clause names ProspectSequence, ProspectSending or the prospect_step_* templates, none of '
+        + 'which the prospect flow writes any more. A verdict from the old names over the new engine '
+        + 'would be worse than no verdict.'
+      : `the prospect flow now writes MarketingEnrolment, and this database has ${engineTables.length} of its `
+        + '2 core tables — migration 20261102120000_marketing_engine is additive and the owner\'s to apply. '
+        + 'Even once applied, this gate needs rewriting onto the new names before it can report.',
+  );
+}
+
 const PR = await import('../lib/prospects.ts');
 const PK = await import('../lib/prospect-keys.ts');
 const ST = await import('../lib/prospect-store.ts');

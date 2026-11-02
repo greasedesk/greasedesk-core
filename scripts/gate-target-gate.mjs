@@ -148,7 +148,10 @@ try {
   const at = (t) => notify.indexOf(t);
   const envAt = at('environmentSendRefusal(');
   const dispatchAt = at('adapter.send(');
-  const guards = { demo: at('demoSendDecision('), prospect: at('prospectingRefusal('), suppression: at('await isSuppressed(') };
+  // RENAMED 2026-11-02 with the marketing engine: prospectingRefusal became marketingRefusal, which
+  // takes the SEQUENCE as well as the address because the answer differs between the four. Same
+  // position in the same order; only the name and the argument changed.
+  const guards = { demo: at('demoSendDecision('), platformMarketing: at('marketingRefusal('), suppression: at('await isSuppressed(') };
   check('the environment check sits immediately before the single provider dispatch',
     envAt > 0 && dispatchAt > envAt && (dispatchAt - envAt) < 1200,
     `environment at ${envAt}, adapter.send at ${dispatchAt}`);

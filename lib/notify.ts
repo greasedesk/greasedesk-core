@@ -17,7 +17,8 @@
 import { prisma } from '@/lib/db';
 import { sendEmail, type SendEmailOpts } from '@/lib/email-service';
 import { NOTIFICATION_TEMPLATES, type TemplateKey, type TemplateData } from '@/lib/notification-templates';
-import { prospectingRefusal } from '@/lib/prospect-suppression';
+import { marketingRefusal } from '@/lib/marketing-suppression';
+import type { SequenceKey } from '@/lib/marketing-engine';
 import { linkMessageToThread, touchThread } from '@/lib/message-threads';
 import { smsText } from '@/lib/sms-text';
 import { smsAllowance } from '@/lib/sms-allowance';
@@ -115,7 +116,17 @@ export type SendNotificationResult = {
    * GreaseDesk yet", which is false — it is switched on, they are in a demo.
    */
   skipCode?: 'demo_tenant' | 'opted_out' | 'not_configured' | 'no_recipient' | 'no_renderer' | 'unknown_template' | 'allowance_spent'
-    | 'already_customer' | 'prospect_unsubscribed' | 'prospect_check_failed'
+    /** A PLATFORM MARKETING template to an address that belongs to a GreaseDesk customer. Refused
+     *  only for the sequences whose audience is NOT our customers — see
+     *  lib/marketing-engine::REFUSE_IF_CUSTOMER. */
+    | 'already_customer'
+    /** A PLATFORM MARKETING template to an address on GreaseDesk's own unsubscribe list. One list for
+     *  all four sequences. Named `platform_` because `marketing_check_failed` below already means a
+     *  TENANT'S customer preference could not be read, and one code cannot mean two things. */
+    | 'platform_unsubscribed' | 'platform_check_failed'
+    /** A step whose copy nobody has written yet. The enrolment HOLDS at that step — it is not
+     *  advanced and nothing is sent, so the email goes when the words exist. */
+    | 'no_copy'
     /** THIS IS THE GATE DATABASE. Nothing is sent from it — a gate can drive a real signup, and
      *  the verification email must not leave the building. Distinct from `demo_tenant`: that is a
      *  real database holding an invented tenant; this is a different database entirely. */
@@ -337,7 +348,7 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
 
   const channel: NotifyChannel = args.channel ?? 'email';
   const adapter = ADAPTERS[channel];
-  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; prospecting?: boolean; marketing?: boolean; email?: Function; sms?: Function } | undefined;
+  const tpl = NOTIFICATION_TEMPLATES[args.template] as { label: string; security?: boolean; platformMarketing?: SequenceKey; marketing?: boolean; email?: Function; sms?: Function } | undefined;
   const common = { groupId, scope, channel, template: args.template, provider: adapter?.provider ?? 'none', recipient: args.recipient, subjectRef: args.subject,
     body: args.body ?? null, sentByUserId: args.sentByUserId ?? null, threadId: args.threadId ?? null,
     // Frozen here, on `common`, so EVERY exit below carries it — including the early skips. Set at
@@ -370,20 +381,25 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     return { ok: false, notificationId: id, status: 'skipped', reason: demo.reason, skipCode: 'demo_tenant' };
   }
 
-  // ── PROSPECTING MAIL: GREASEDESK WRITING TO A GARAGE THAT IS NOT A CUSTOMER (2026-09-10) ──────
+  // ── PLATFORM MARKETING: GREASEDESK WRITING TO SOMEBODY ON ONE OF ITS OWN SEQUENCES ────────────
   // Keyed on the TEMPLATE, the same way `security` is, so no caller can forget it: there is no
-  // argument to omit. Before the opt-out check below and never bypassed by it — a prospecting
-  // template cannot also be a security one (prospect-gate asserts none is both).
+  // argument to omit. Before the opt-out check below and never bypassed by it — a platform
+  // marketing template cannot also be a security one (marketing-engine-gate asserts none is both).
+  //
+  // The template names WHICH SEQUENCE, not merely that it is marketing, because the answer differs
+  // between them: a trial garage and a new affiliate ARE customers, so refusing their mail for that
+  // reason would silence the two sequences aimed at them. The per-sequence answer and its reasoning
+  // are lib/marketing-engine::REFUSE_IF_CUSTOMER.
   //
   // This is NOT isSuppressed. That check returns false for every platform send, because opt-out is
-  // kept on a tenant's customers and we have none; routed through it, an unsubscribe would have been
-  // ignored. lib/prospect-suppression consults its own list, refuses any address that already
-  // belongs to a customer — the worst outcome this feature can produce — and FAILS CLOSED.
-  if (tpl.prospecting) {
-    const refusal = await prospectingRefusal(args.recipient);
+  // kept on a tenant's customers and we have none; routed through it, an unsubscribe would be
+  // ignored on all four sequences. lib/marketing-suppression consults GreaseDesk's own list and
+  // FAILS CLOSED.
+  if (tpl.platformMarketing) {
+    const refusal = await marketingRefusal(args.recipient, tpl.platformMarketing);
     if (refusal) {
       const reason = refusal === 'already_customer' ? 'address belongs to an existing GreaseDesk customer'
-        : refusal === 'prospect_unsubscribed' ? 'address has unsubscribed from GreaseDesk prospecting mail'
+        : refusal === 'platform_unsubscribed' ? 'address has unsubscribed from GreaseDesk marketing email'
         : 'could not confirm the address may be written to — refused rather than risked';
       const id = await record({ ...common, status: 'skipped', error: reason });
       return { ok: false, notificationId: id, status: 'skipped', reason, suppressed: true, skipCode: refusal };
@@ -446,6 +462,16 @@ export async function sendNotification(args: SendNotificationArgs): Promise<Send
     common.unsubscribeToken = token;
     renderData = { ...renderData, unsubscribeUrl: links.page };
     emailOpts = { ...(emailOpts ?? {}), headers: { ...(emailOpts?.headers ?? {}), ...unsubscribeHeaders(links) } };
+  }
+
+  // ── WHICH DOMAIN IT LEAVES FROM ───────────────────────────────────────────────────────────────
+  // A platform marketing email goes from the marketing subdomain so a junk report cannot damage the
+  // domain the invoices leave from. Set HERE, from the template's own declaration, for the same
+  // reason the suppression check is: a caller cannot choose which reputation to spend, and cannot
+  // forget to. `tpl.marketing` (a GARAGE'S offer to its own customer) is deliberately NOT included —
+  // that mail is from the garage, on our apex, and its reputation is already the one it has.
+  if (tpl.platformMarketing && channel === 'email') {
+    emailOpts = { ...(emailOpts ?? {}), marketing: true };
   }
 
   // Render for the channel. A template with no renderer for this channel is a skip, never a guess.

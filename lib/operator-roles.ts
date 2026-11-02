@@ -61,6 +61,12 @@ export const ER_NAV: ErNavItem[] = [
   // reps.greasedesk.com with rep management. REGISTERED HERE on purpose: erMinRole falls back to
   // 'support' for an unregistered href, so a missing line would have opened this to the lowest role.
   { href: '/superadmin/prospects', label: 'Prospects', minRole: 'owner' },
+  // MARKETING — the four sequences, their copy, and the four switches. OWNER ONLY, and the switch is
+  // the reason: turning one on emails real people and there is no undo on a sent email. The API
+  // enforces the same independently (owner for every write, any operator may read), because a nav
+  // entry is not an authorisation. REGISTERED HERE on purpose: erMinRole falls back to 'support' for
+  // an unregistered href, so a missing line would open this to the lowest role.
+  { href: '/superadmin/marketing', label: 'Marketing', minRole: 'owner' },
   // Content (legal + marketing pages). The SCREEN is owner + CM (Support 404s); within it, `legal`
   // actions are Owner-only, enforced server-side in the API — a CM can edit `page`, not `legal`.
   { href: '/superadmin/content', label: 'Content', minRole: 'country_manager' },

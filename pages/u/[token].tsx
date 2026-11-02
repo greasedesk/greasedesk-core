@@ -6,7 +6,7 @@
  * Mail scanners follow links. If a GET unsubscribed, a corporate scanner would unsubscribe the
  * prospect before they had read the email — the same reason the rep sign-in page waits for a button.
  * The button POSTs. A mail client that supports RFC 8058 one-click never opens this page at all: it
- * POSTs straight to /api/prospect-unsubscribe from the List-Unsubscribe header.
+ * POSTs straight to /api/marketing-unsubscribe from the List-Unsubscribe header.
  *
  * NO DATABASE IN THIS FILE, and no getServerSideProps: a page with none ships whole to the browser,
  * so anything imported here is in the bundle (client-bundle-gate; leaf-module-for-client-constants).
@@ -22,7 +22,7 @@ export default function Unsubscribe() {
   const go = async () => {
     setState('busy');
     try {
-      const r = await fetch(`/api/prospect-unsubscribe?t=${encodeURIComponent(String(router.query.token ?? ''))}`, {
+      const r = await fetch(`/api/marketing-unsubscribe?t=${encodeURIComponent(String(router.query.token ?? ''))}`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click',
       });
       const j = await r.json().catch(() => ({}));

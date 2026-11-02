@@ -8,7 +8,8 @@
 import Head from 'next/head';
 import Link from 'next/link';
 import type { GetServerSideProps } from 'next';
-import { STATUS_LABEL, sequenceLabel, sequenceView, type ProspectStatus } from '@/lib/prospects';
+import { STATUS_LABEL, type ProspectStatus } from '@/lib/prospects';
+import { enrolmentState, stateLabel } from '@/lib/marketing-engine';
 
 type Row = { id: string; garageName: string; postcode: string | null; status: string; lastVisit: string | null; followUp: string };
 
@@ -52,27 +53,31 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const gate = await requireRepPage(ctx);
   if (!gate.ok) return gate.result;
   const repId = gate.rep.repId;
-  const { prospectSendingEnabled } = await import('@/lib/prospect-store');
-  const sendingOn = await prospectSendingEnabled();
+  const { sendingEnabled, copyFor, enrolmentsFor } = await import('@/lib/marketing-store');
+  const [sendingOn, copy] = await Promise.all([sendingEnabled('garage_prospect'), copyFor('garage_prospect')]);
   const ps = await prisma.prospect.findMany({
     where: { OR: [{ created_by_rep_id: repId }, { visits: { some: { rep_id: repId } } }] },
     select: {
       id: true, garage_name: true, postcode: true, status: true, email: true, personal_stripped_at: true,
       visits: { orderBy: { visited_on: 'desc' }, take: 1, select: { visited_on: true } },
-      sequence: { select: { state: true, stopped_reason: true, last_sent_at: true } },
     },
     orderBy: { updated_at: 'desc' },
     take: 50,
   });
+  // A second query, not an `include`: the enrolment serves four subject tables and so has no
+  // relation to Prospect. enrolmentsFor is the one join, shared with the Engine Room list.
+  const enrolments = await enrolmentsFor('garage_prospect', ps.map((p) => p.id));
   const rows: Row[] = ps.map((p) => ({
     id: p.id, garageName: p.garage_name, postcode: p.postcode, status: p.status,
     lastVisit: p.visits[0]?.visited_on.toISOString().slice(0, 10) ?? null,
     // THE FOLLOW-UP IN WORDS, from the one shared derivation: queued reads as queued, never as running,
     // and a stopped one says why.
-    followUp: p.sequence
-      ? sequenceLabel(sequenceView(p.sequence, sendingOn))
-      : p.personal_stripped_at ? 'No follow-up — contact details removed'
-      : p.email ? 'No follow-up — they did not agree to emails' : 'No follow-up — no email given',
+    followUp: (() => {
+      const e = enrolments.get(p.id) ?? null;
+      if (e) return stateLabel(enrolmentState(e, { sendingOn, hasCopy: copy.some((c) => c.step === e.next_step && c.sendable) }));
+      return p.personal_stripped_at ? 'No follow-up — contact details removed'
+        : p.email ? 'No follow-up — they did not agree to emails' : 'No follow-up — no email given';
+    })(),
   }));
   return { props: { rows } };
 };

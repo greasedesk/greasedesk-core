@@ -20,7 +20,7 @@
       "schedule": "45 3 * * *"
     },
     {
-      "path": "/api/cron/prospect-sequence",
+      "path": "/api/cron/marketing-sequences",
       "schedule": "20 * * * *"
     },
     {

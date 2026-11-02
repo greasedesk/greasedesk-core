@@ -7,6 +7,32 @@ import { Resend } from 'resend';
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'no-reply@greasedesk.com';
 
+/**
+ * TWO FROM ADDRESSES, SO ONE REPUTATION CANNOT BURN THE OTHER (2026-11-02).
+ *
+ * Marketing mail goes from a SUBDOMAIN — news.greasedesk.com — and transactional mail keeps the
+ * apex. The point is not the address, it is the DKIM domain a spam complaint lands on: a garage that
+ * marks a sequence email as junk must not make that garage's next invoice less likely to arrive.
+ *
+ * ── UNSET MEANS FALL BACK, AND THAT IS NOT A SILENT FAILURE ────────────────────────────────────
+ * With MARKETING_EMAIL_FROM unset, marketing mail goes from EMAIL_FROM — exactly what happened
+ * before this existed. It is the right fallback because the alternative is a marketing engine that
+ * cannot send at all until a variable is typed into Vercel, and the sequences ship OFF anyway. What
+ * makes it honest rather than quiet is marketingFromConfigured() below: the Engine Room shows the
+ * sequence's switch beside the answer, so nobody turns one on believing the subdomain is in use when
+ * it is not. See docs/marketing-subdomain-dns.md step 4.
+ *
+ * Only lib/notify sets `marketing: true`, and only for a template that declares a sequence. A gate
+ * asserts no transactional template can reach it.
+ */
+const MARKETING_EMAIL_FROM = process.env.MARKETING_EMAIL_FROM || '';
+
+/** Is marketing mail actually leaving from the marketing subdomain? Read by the Engine Room. */
+export const marketingFromConfigured = (): boolean => MARKETING_EMAIL_FROM.trim() !== '';
+
+/** The address marketing mail leaves from, for the Engine Room to show. Never a secret. */
+export const marketingFromAddress = (): string => MARKETING_EMAIL_FROM.trim() || EMAIL_FROM;
+
 if (!RESEND_API_KEY) {
   console.error('FATAL: P.7 Notification System (Email) failed authentication. RESEND_API_KEY is missing in the environment config.');
 }
@@ -31,8 +57,14 @@ export type SendEmailOpts = {
   /** Silent copies (e.g. the garage's own record of an invoice send). */
   bcc?: string[];
   attachments?: Array<{ filename: string; content: Buffer }>;
-  /** Extra message headers — List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) for prospecting mail. */
+  /** Extra message headers — List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) for marketing mail. */
   headers?: Record<string, string>;
+  /**
+   * SEND THIS FROM THE MARKETING SUBDOMAIN, not the apex. Set by lib/notify for a template that
+   * declares a marketing sequence, and by nothing else — a caller does not get to choose which
+   * reputation to spend.
+   */
+  marketing?: boolean;
 };
 
 /**
@@ -48,9 +80,12 @@ export const sendEmail = async (to: string, subject: string, html: string, opts:
   try {
     // EMAIL_FROM may itself be "Name <addr>" — extract the bare address before re-naming,
     // otherwise the from field nests brackets and Resend rejects it (422).
-    const bareFrom = EMAIL_FROM.includes('<') ? (EMAIL_FROM.match(/<([^>]+)>/)?.[1] ?? EMAIL_FROM) : EMAIL_FROM;
+    // The marketing subdomain when the message is marketing AND the variable is set; the apex
+    // otherwise. Chosen here, at the one place a From is assembled, so there is no second rule.
+    const configuredFrom = opts.marketing && MARKETING_EMAIL_FROM.trim() ? MARKETING_EMAIL_FROM.trim() : EMAIL_FROM;
+    const bareFrom = configuredFrom.includes('<') ? (configuredFrom.match(/<([^>]+)>/)?.[1] ?? configuredFrom) : configuredFrom;
     const { data, error } = await resend.emails.send({
-      from: opts.fromName ? `${opts.fromName.replace(/[<>"]/g, '')} <${bareFrom}>` : EMAIL_FROM,
+      from: opts.fromName ? `${opts.fromName.replace(/[<>"]/g, '')} <${bareFrom}>` : configuredFrom,
       to: [to], // Resend expects an array for 'to'
       subject: subject,
       html: html,

@@ -26,7 +26,8 @@ import React, { useState } from 'react';
 import type { GetServerSideProps } from 'next';
 import { prisma } from '@/lib/db';
 import { requireOperatorPage, erMinRole, type OperatorRoleName } from '@/lib/operator-auth';
-import { STATUS_LABEL, sequenceLabel, sequenceView, type ProspectStatus } from '@/lib/prospects';
+import { STATUS_LABEL, type ProspectStatus } from '@/lib/prospects';
+import { enrolmentState, stateLabel } from '@/lib/marketing-engine';
 import EngineRoomLayout from '@/components/layout/EngineRoomLayout';
 
 type Visit = { on: string; repId: string; spokeTo: string | null; note: string | null; status: string };
@@ -49,55 +50,30 @@ type Sending = { enabled: boolean; changedAt: string | null; changedBy: string |
  * env var nobody reads. Turning it ON is a deliberate two-step: it emails real people, and the
  * confirmation says how many. Turning it OFF is one tap, because stopping mail cannot hurt anybody.
  */
-function SendingSwitch({ initial }: { initial: Sending }) {
-  const [s, setS] = useState(initial);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const flip = async (enabled: boolean) => {
-    setBusy(true); setErr(null);
-    try {
-      const r = await fetch('/api/superadmin/prospect-sending', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
-      if (!r.ok) { setErr('That did not save.'); return; }
-      const j = await r.json();
-      setS({ ...s, enabled: j.enabled, changedAt: j.changedAt ? String(j.changedAt).slice(0, 16).replace('T', ' ') : null, changedBy: j.changedBy });
-      setConfirming(false);
-    } finally {
-      setBusy(false);
-    }
-  };
+/**
+ * READ-ONLY HERE SINCE 2026-11-02, and that is the point. This screen used to carry the switch
+ * itself; there are four sequences now, and two places to turn the same one on is how one of them
+ * ends up showing a stale answer to the only question that matters. The switch lives once, on
+ * /superadmin/marketing, beside the copy it sends — which is also the order somebody should do it
+ * in: read the emails, then turn them on.
+ */
+function SendingState({ sending }: { sending: Sending }) {
   return (
-    <div className={`mt-4 rounded-xl border p-4 ${s.enabled ? 'border-ok bg-ok-soft' : 'border-warn bg-warn-soft'}`} data-testid="er-sending">
+    <div className={`mt-4 rounded-xl border p-4 ${sending.enabled ? 'border-ok bg-ok-soft' : 'border-warn bg-warn-soft'}`} data-testid="er-sending">
       <div className="font-semibold text-ink" data-testid="er-sending-state">
-        Follow-up sending is {s.enabled ? 'ON' : 'OFF'}
+        Follow-up sending is {sending.enabled ? 'ON' : 'OFF'}
       </div>
-      <p className="text-sm text-ink mt-1">
-        {s.enabled
-          ? `${s.running} running. New follow-ups start within the hour of a rep recording the address.`
-          : `${s.queued} follow-up${s.queued === 1 ? ' is' : 's are'} queued. Nothing is emailed to anyone until this is switched on; each queued prospect then starts from the first email.`}
+      <p className="mt-1 text-sm text-muted">
+        {sending.enabled
+          ? `${sending.running} running, ${sending.queued} queued.`
+          : `${sending.queued} follow-up${sending.queued === 1 ? ' is' : 's are'} queued. Nothing is emailed to anyone until this is switched on; each queued prospect then starts from the first email.`}
       </p>
-      <p className="text-xs text-muted mt-1">
-        {s.changedAt ? `Last changed ${s.changedAt} by ${String(s.changedBy).slice(0, 8)}.` : 'Never switched on — this is the default.'}
+      <p className="mt-1 text-xs text-muted">
+        {sending.changedAt ? `Last changed ${sending.changedAt} by ${String(sending.changedBy).slice(0, 8)}.` : 'Never switched on — this is the default.'}
       </p>
-      {err && <p className="text-sm text-bad mt-2">{err}</p>}
-      <div className="mt-3 flex gap-2">
-        {s.enabled ? (
-          <button onClick={() => flip(false)} disabled={busy} className="rounded-lg px-4 py-2 text-sm bg-surface border border-line" data-testid="er-sending-off">
-            Switch sending off
-          </button>
-        ) : confirming ? (
-          <>
-            <button onClick={() => flip(true)} disabled={busy} className="rounded-lg px-4 py-2 text-sm bg-accent text-white" data-testid="er-sending-confirm">
-              Yes — email {s.queued} {s.queued === 1 ? 'person' : 'people'} from the next run
-            </button>
-            <button onClick={() => setConfirming(false)} className="rounded-lg px-4 py-2 text-sm bg-surface border border-line">Cancel</button>
-          </>
-        ) : (
-          <button onClick={() => setConfirming(true)} className="rounded-lg px-4 py-2 text-sm bg-surface border border-line" data-testid="er-sending-on">
-            Switch sending on…
-          </button>
-        )}
-      </div>
+      <a href="/superadmin/marketing" className="mt-3 inline-block rounded-lg px-4 py-2 text-sm bg-surface border border-line" data-testid="er-sending-link">
+        Switch it, and read the emails, in Marketing →
+      </a>
     </div>
   );
 }
@@ -109,7 +85,7 @@ export default function Prospects({ role, rows, sending }: { role: OperatorRoleN
       <div className="p-6 max-w-5xl">
         <h1 className="text-lg font-semibold text-ink" data-testid="er-prospects">Prospects</h1>
         <p className="text-sm text-muted mt-1">Garages reps have visited that are not yet customers — the ground covered, kept after a rep moves on.</p>
-        <SendingSwitch initial={sending} />
+        <SendingState sending={sending} />
         {rows.length === 0 ? (
           <p className="text-sm text-muted mt-6" data-testid="er-prospects-none">No visits have been recorded yet.</p>
         ) : (
@@ -159,30 +135,39 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
     take: 500,
     include: {
       visits: { orderBy: { visited_on: 'desc' } },
-      sequence: { select: { state: true, stopped_reason: true, last_sent_at: true } },
     },
   });
   const d = (x: Date | null) => (x ? x.toISOString().slice(0, 10) : null);
-  const { prospectSendingState } = await import('@/lib/prospect-store');
-  const state = await prospectSendingState();
+  // THE ENROLMENT IS A SECOND QUERY NOW, not an `include`: MarketingEnrolment has no relation to
+  // Prospect, deliberately, because it serves four subject tables. enrolmentsFor is the one join.
+  const { allSwitchStates, copyFor, enrolmentsFor } = await import('@/lib/marketing-store');
+  const [switches, copy, enrolments] = await Promise.all([
+    allSwitchStates(), copyFor('garage_prospect'), enrolmentsFor('garage_prospect', ps.map((p) => p.id)),
+  ]);
+  const state = switches.find((x) => x.sequence === 'garage_prospect')!;
   const rows: Row[] = ps.map((p) => ({
     id: p.id, garageName: p.garage_name,
     address: [p.address_line1, p.address_locality, p.postcode].filter(Boolean).join(', ') || null,
     status: p.status, email: p.email, stripped: p.personal_stripped_reason,
     consent: p.consent, consentAt: d(p.consent_at),
-    // FROM THE ONE SHARED DERIVATION: queued reads as queued, never as running; stopped says why.
-    followUp: p.sequence ? sequenceLabel(sequenceView(p.sequence, state.enabled)) : 'never started',
+    // FROM THE ONE SHARED DERIVATION: queued reads as queued, never as running; stopped says why;
+    // and a step nobody has written reads as HELD rather than as on its way.
+    followUp: (() => {
+      const e = enrolments.get(p.id) ?? null;
+      if (!e) return 'never started';
+      return stateLabel(enrolmentState(e, { sendingOn: state.enabled, hasCopy: copy.some((c) => c.step === e.next_step && c.sendable) }));
+    })(),
     signedUpAt: d(p.signed_up_at),
     visits: p.visits.map((v) => ({ on: d(v.visited_on)!, repId: v.rep_id, spokeTo: v.spoke_to, note: v.note, status: v.status_at_visit })),
   }));
-  const active = ps.filter((p) => p.sequence?.state === 'active');
+  const active = ps.map((p) => enrolments.get(p.id)).filter((e) => e?.state === 'active');
   const sending: Sending = {
     enabled: state.enabled,
     changedAt: state.changedAt ? state.changedAt.toISOString().slice(0, 16).replace('T', ' ') : null,
     changedBy: state.changedBy,
-    // While OFF every active sequence is queued; while ON, only those that have not yet sent anything.
-    queued: state.enabled ? active.filter((p) => !p.sequence!.last_sent_at).length : active.length,
-    running: state.enabled ? active.filter((p) => p.sequence!.last_sent_at).length : 0,
+    // While OFF every active enrolment is queued; while ON, only those that have not yet sent.
+    queued: state.enabled ? active.filter((e) => !e!.last_sent_at).length : active.length,
+    running: state.enabled ? active.filter((e) => e!.last_sent_at).length : 0,
   };
   return { props: { role: gate.op.role, rows, sending } };
 };

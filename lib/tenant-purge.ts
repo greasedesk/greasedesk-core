@@ -229,7 +229,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
   const visitIds = subjects?.visitIds ?? [];
   const entryIds = subjects?.commissionEntryIds ?? [];
   const [twoFactorSecrets, deliveredCodes, recoveryCodes, verificationTokens, waitlist, rateLimits,
-    repVisitAnswers, repLeads, repVisitNotes, commissionEntryNotes] = await Promise.all([
+    repVisitAnswers, repLeads, repVisitNotes, commissionEntryNotes, marketingEnrolments] = await Promise.all([
     ids.length ? prisma.twoFactorSecret.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.deliveredCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
     ids.length ? prisma.twoFactorRecoveryCode.count({ where: { subject_type: 'tenant', subject_id: { in: ids } } }) : 0,
@@ -243,6 +243,15 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     visitIds.length ? prisma.repLead.count({ where: { visit_id: { in: visitIds } } }) : 0,
     visitIds.length ? prisma.repVisitNote.count({ where: { visit_id: { in: visitIds } } }) : 0,
     entryIds.length ? prisma.commissionEntryNote.count({ where: { entry_id: { in: entryIds } } }) : 0,
+    // THE TENANT'S PLACE IN OUR OWN TRIAL SEQUENCE. No FK to Group — MarketingEnrolment points at
+    // four different subject tables — so the cascade never sees it. The subject id IS the group id
+    // for this one audience, so unlike the user and visit ids there is nothing to capture: the
+    // identifier survives the delete because it is the argument.
+    //
+    // SCOPED BY subject_type AS WELL. Without it this would count, and the sweep would delete, any
+    // enrolment whose subject_id happened to equal this uuid — which cannot happen today and is
+    // exactly the kind of "cannot happen" that outlives its premise.
+    prisma.marketingEnrolment.count({ where: { sequence_key: 'trial_garage', subject_type: 'group', subject_id: groupId } }),
   ]);
 
   return {
@@ -262,6 +271,7 @@ export async function countTenantRows(groupId: string, subjects?: PurgeSubjects)
     VerificationToken: verificationTokens, CountryWaitlist: waitlist, AuthRateLimit: rateLimits,
     RepVisitAnswer: repVisitAnswers, RepLead: repLeads, RepVisitNote: repVisitNotes,
     CommissionEntryNote: commissionEntryNotes,
+    MarketingEnrolment: marketingEnrolments,
   };
 }
 
@@ -376,6 +386,19 @@ export async function purgeTenant(operatorUserId: string, groupId: string): Prom
     if (subjects.emails.length) {
       await tx.verificationToken.deleteMany({ where: { identifier: { in: subjects.emails } } });
     }
+
+    // THE TENANT'S PLACE IN OUR OWN TRIAL SEQUENCE. No FK to Group, so the cascade below never sees
+    // it, and an enrolment left pointing at a purged garage is five emails queued to an address that
+    // no longer exists — readSubject would stop it on the next run with `subject_gone`, which is the
+    // right behaviour for a row that should not be there and no reason to leave one.
+    //
+    // ONLY THE 'group' SUBJECT TYPE. The prospect, waiting-list and affiliate enrolments are OURS
+    // and have nothing to do with any tenant: a garage that signed up does not take our record of
+    // having approached it, and sweeping them here would delete another audience's rows because
+    // their table happens to be shared. The lease cascades from the enrolment.
+    await tx.marketingEnrolment.deleteMany({
+      where: { sequence_key: 'trial_garage', subject_type: 'group', subject_id: groupId },
+    });
     // SetNull would leave the email behind with a nulled group — the same trap the User delete above
     // avoids. Deleted explicitly, before the cascade gets the chance to merely disown it.
     await tx.countryWaitlist.deleteMany({ where: { group_id: groupId } });

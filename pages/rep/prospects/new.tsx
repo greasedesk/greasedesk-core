@@ -22,7 +22,8 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import type { GetServerSideProps } from 'next';
-import { PROSPECT_STATUSES, STATUS_LABEL, sequenceSavedSentence, type ProspectStatus, type SequenceView } from '@/lib/prospects';
+import { PROSPECT_STATUSES, STATUS_LABEL, type ProspectStatus } from '@/lib/prospects';
+import { savedSentence, type SequenceState } from '@/lib/marketing-engine';
 
 type Match = { id: string; garageName: string; postcode: string | null; addressLine1: string | null; status: string; lastVisit: string | null; visitCount: number };
 
@@ -72,9 +73,9 @@ export default function NewVisit() {
       if (!r.ok) { setErr(j.message ?? 'That could not be saved.'); return; }
       // SAY WHAT ACTUALLY HAPPENED TO THE FOLLOW-UP. She is standing in front of a garage owner she has
       // just promised something to: "started" when nothing has gone would be a lie she then repeats.
-      // The sentence is lib/prospects::sequenceSavedSentence — the SAME derivation the Engine Room and
+      // The sentence is lib/marketing-engine::savedSentence — the SAME derivation the Engine Room and
       // her list read — so this screen cannot call a queued follow-up "on its way".
-      setDone(sequenceSavedSentence(j.view as SequenceView));
+      setDone(savedSentence(j.view as SequenceState));
     } finally {
       setBusy(false);
     }
