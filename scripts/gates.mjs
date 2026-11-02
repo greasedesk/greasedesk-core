@@ -169,7 +169,7 @@ const TIERS = {
     'sms-allowance-gate',
   ],
   core: [
-    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate', 'migration-class-gate', 'rep-site-gate', 'job-clock-gate', 'purchase-model-gate',
+    'date-constant-gate', 'purge-completeness-gate', 'client-bundle-gate', 'gate-origin-gate', 'anchored-match-gate', 'contact-preferences-gate', 'carrier-stop-gate', 'marketing-optout-gate', 'unsubscribe-link-gate', 'demo-refresh-guard-gate', 'demo-maintenance-guard-gate', 'free-text-offer-gate', 'staff-preferences-gate', 'version-endpoint-gate', 'migration-class-gate', 'rep-site-gate', 'job-clock-gate', 'purchase-model-gate',
     'schema-drift-gate',
     'rep-host-gate',
     'engine-room-palette-gate',

@@ -1417,3 +1417,175 @@ Both the same shape, both found by a red-proof rather than by reading.
   post makes it something somebody has to remember.
 - With the minimum payout at £0 the sentence is omitted and 6.2's "whatever its size" loses the rule
   it was contrasting with. Harmless, not false; it would read oddly.
+
+---
+
+## The frozen reference demo, and a script that did not ask
+
+**Parked 2026-11-02 by the owner, for after that day's 2pm demo.** Nothing here is urgent; all of it
+is a decision rather than a repair.
+
+### What happened
+
+The demo tenant **GB-GD2236 Marketbridge Motor Works** had its dated rows moved forward so a demo
+would show a garage working this week: **+56 days** for operational dates (whole weeks, so weekday
+and displayed time survive) and **+2 calendar months** for the cost/reporting anchors (so monthly
+periods stay on the 1st). Applied and verified on production: every column landed on the value the
+dry run predicted, twelve invariants held, and six weekday/time-of-day fingerprints came back
+byte-identical.
+
+Two things surfaced on the way, and one after.
+
+### 1. A uniform shift is not one statement
+
+The first attempt failed on production with
+
+```
+23505  CostInstance (cost_id, period_start) = (b334c453-…, 2025-10-01) already exists
+```
+
+The set is unique before and unique after; the collision is **mid-statement**. Postgres checks a
+unique index as each row is written, an `UPDATE` has no row order, and monthly periods are each
+other's targets — so the row moving `2025-08-01 → 2025-10-01` is checked while the row still sitting
+on `2025-10-01` has not moved. `SET CONSTRAINTS ALL DEFERRED` cannot help: these are unique
+**indexes** (Prisma `@@unique`), not deferrable constraints.
+
+It was never only `CostInstance`. Asking `pg_index` finds **four** covered columns —
+`CostInstance.period_start`, `CostRate.effective_from`, `LeaveRecord.date`,
+`VehicleOdometerReading.reading_date` — so three more were queued behind the one that fired. The
+fix moves an affected column in two passes inside one transaction, out to a parking century and
+back, and **derives which columns need it from the database** rather than from a list that would
+have named only the one we had already been bitten by.
+
+`scripts/shift-collision-proof.mjs` proves it on the gate DB: 33 of 33, with all four RED proofs
+raising a real `23505` against the old single-statement SQL first, so the fixture is known to
+reproduce the bug rather than to decorate around it. Both halves import the statements from
+`scripts/_shift-sql.mjs` — the module the real script uses — because a second copy of the idea
+written beside the test agrees with itself whatever either one does.
+
+**Worth generalising:** this collision class applies to *any* bulk edit of a column under a unique
+index, not just dates. The proof is deliberately named without `gate` so the runner ignores it;
+promoting it to a real `-gate.mjs` in a tier is the obvious next step.
+
+### 2. Three invariants that were wrong about their own subject
+
+The first dry run reported 661 invoices "paid before they were issued" and 833 of 836 with
+`issued_at ≠ date_issued`. Both were the checks, not the data: `issued_at` carries a time of day
+and `date_issued` is that same day at **midnight**. Compared on `::date`, both are zero.
+
+A fourth asserted every `date_issued` sits at midnight, and failed on three rows — invoices 0811,
+0812 and 0813, which carry `issued_at == date_issued == created_at` to the millisecond because they
+were issued through the **live app**. Midnight is the generator's convention; the instant is what
+`lib/invoice-issue` writes. Zero was an assertion about the fixture, and it would have blocked the
+write over three correct rows. It is now reported, with the count checked for equality instead.
+
+### 3. The decisions actually parked
+
+**`demo-shift-dates.mjs` never asked `refuseDemoMaintenance`.** It carried its own hardcoded tenant
+id and so bypassed the convention that decides which demos a maintenance script may write to —
+`lib/demo-tenants.ts:52` names GB-GD2236 as the frozen reference demo and deliberately keeps it out
+of `DEMO_TENANTS`; `never-subscribes-gate.mjs:110` asserts that refusal, and
+`demo-lifecycle-gate.mjs` records the incident behind it (a cron that once deleted the reference
+demo). The shift ran cleanly, but the guard that would have raised this an hour earlier was not
+consulted.
+
+### 3b. SETTLED, 2026-11-02 — protected from jobs that act ON it, a participant in jobs that act WITHIN it
+
+Owner's ruling. The reference demo stays protected from automated jobs that act **on** a tenant —
+crons, sweeps, lifecycle — and is a **full participant** in jobs that act **within** one. An
+owner-run one-off script may write to it with an explicit `--allow-reference-demo` plus the ref
+typed back. It is **not** added to `DEMO_TENANTS`, which would have handed the same authority to
+every cron.
+
+That distinction was not a refinement for its own sake. "Protected from automated jobs" was already
+untrue and should stay untrue: `runConfirmPaidSweep` has no demo exclusion and sweeps every tenant
+hourly, which is what clears the reference demo's invoices out of the clearance window. Excluding it
+would leave them pending forever — worse than the problem. `demo-lifecycle` (03:45 daily) *is*
+excluded, by identity, because of the incident where it deleted the tenant. Same word, two
+categories.
+
+**What was built.** `refuseDemoMaintenance` took the question that had been smuggled into it. It
+answered "is this tenant a declared demo?"; the ruling makes the answer depend on the **caller** as
+well, because a cron and a person at a keyboard must get different answers about the same tenant.
+So the caller declares its class, and the override is unreachable from the wrong one:
+
+- `REFERENCE_DEMOS` — a second declared list, disjoint from `DEMO_TENANTS`, naming the one tenant
+  the override may point at. Not a pattern ("any unlisted demo"): the population is one tenant
+  today, which is exactly when a list and a pattern are indistinguishable and the wrong one gets
+  chosen.
+- `actor` defaults to `'automation'`, so every pre-existing two-argument caller keeps its answer and
+  a new script that forgets to think about this gets the safe one. The reference demo still refuses
+  `not_listed` on that call — asserted over every shape of the group row, not read off the code.
+- `flagged` from an automation caller is checked **first**, with its own refusal code. A cron holding
+  the override is a worse fact than a cron pointed at the wrong tenant, so it is what the message says.
+- `write` is separate from `flagged`: a dry run needs no typed ref. A ceremony people perform to see
+  a number stops being a ceremony.
+- Eight distinguishable refusal codes, asserted distinct — a predicate returning one code for every
+  mistake would have satisfied half the clauses.
+
+`demo-shift-dates.mjs` now asks the predicate **twice** — once before a row is read, once after the
+typed ref and before the transaction — the shape `demo-refresh.mjs` uses for its activity check, and
+for the same reason. Its hardcoded id stopped being the authority: the row is fetched by **ref** and
+the id is cross-checked, so a replaced tenant goes red instead of the literal silently winning. The
+four identity facts stay; they answer "is this the tenant I was written for", which is a different
+question from "may I write to this tenant".
+
+**The gates keep their own copies, deliberately.** `demo-lifecycle-gate` says why in as many words:
+never put the declaration where the guarded thing can reach it, and `lib/demo-tenants` is imported
+by the app, so it *is* that place. The four hardcoded refs stay and a clause asserts they **agree**
+with the list. Agreement catches drift; sharing would remove the second opinion.
+
+`demo-maintenance-guard-gate.mjs` (core tier, 55 clauses) holds the matrix and the source shape. It
+is pure — no database, no terminal, no tenant — which is also the only way it could be written:
+`never-subscribes-gate` §7 is where these clauses belong by subject, but it reads the live sales demo
+and the live reference demo and **neither exists on the gate database**, so it exits at its own line
+46 before §7 is reached. Clauses added there would not have run. The scripts are deliberately never
+executed by the gate: they write to production, and a gate that runs one to watch it refuse is one
+flag away from being the hazard.
+
+Red-proved six ways, each on its named subject: the actor guard disabled (6 red), the flag parse
+removed (1), the write refusal ignored (1), the second predicate call moved above the prompt (1),
+the list repointed at another ref (5 — all four carriers), and the backfill made to demand a typed
+ref for a dry run (1).
+
+### Also parked: the demo's Revenue tile reads £0.00
+
+Marketbridge has **800 invoices at `paid` and one `Payment` row** — and that one row is not part of
+the problem, it is the proof the path works: invoice 0813 was issued and marked paid through the live
+app on 2026-11-02 at 10:27 and produced a correct `processing` row, a correct cache of 0, and
+Pending clearance of £78.00. The Revenue and Issued-vs-paid tiles take the money from
+`receivedInPeriod()` (which sums `Payment.amount_pennies`) and the count from `Invoice.status='paid'`
+— two sources, one of them populated for the back catalogue. Hence "£0.00 — 690 paid invoices".
+
+"Pending clearance £0.00", reported alongside it, was never a symptom: it was an empty population at
+10:03, correctly reported as zero. That tile reads invoice lines and never payments, so the backfill
+cannot change it either way.
+
+This is **older than the shift** and nothing to do with it: revenue stopped deriving from
+`Invoice.amount_paid_pennies` on the ruling of 2026-08-16, and this tenant was generated 2026-08-10.
+`lib/demo/generate.ts` was fixed afterwards, so a newly generated demo is fine — Kingsford carries
+778 payments and £268,928.56.
+
+`scripts/payment-backfill.mjs` already performs exactly this repair, with every safeguard wanted
+(dry run by default, mandatory `--group`, no all-tenants mode, idempotent `source_ref`,
+`reconstructed` flag, and `settled`/warranty left alone). **It refuses GB-GD2236 by design** — which
+is the guard above working. Repairing the tile therefore depended on the ruling above, which is why
+the owner's call on the day was: no fix, avoid the card.
+
+**Measured read-only against production, 2026-11-02 (the dry run the owner will run himself).** 836
+invoices examined, **800 rows to reconstruct, £267,973.44**, payment dates 2025-10-09 → 2026-10-06,
+all `chargeable`. Skipped for the documented reasons: 23 `settled` (warranty, £0 by construction),
+12 `issued`, and 0813 which already holds a row. No invoice lacks a paid date, no zero totals, and
+**no divergence** between a recorded `amount_paid_pennies` and the invoice total — so every amount is
+a clean inference with nothing to adjudicate.
+
+Over `rolling_12` (2025-12-01 → 2026-12-01) the tiles would read **690 · £230,139.07** where they
+now read 690 · £0.00, with **0 of the 690 left uncovered**. Issued stays 691 · £231,125.24; the
+£986.17 gap is the invoices issued in the window and not yet paid. The direct confirmation that this
+is an empty population and not a wrong sum: `receivedInPeriod`'s own query returns **0 rows** today.
+
+The invariant it would land into is clean. Asked of production read-only with the gate's own
+exported `expectedCachePennies` — rather than by repointing a gate at production, which is what three
+earlier incidents were — across **2047 invoices · 1123 payment rows · 1 refund**: cache matches
+ledger everywhere, nothing carries a paid figure without a row, and all 188 reconstructed rows are
+labelled and keyed as such, both ways.

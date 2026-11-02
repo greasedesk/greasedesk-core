@@ -37,17 +37,32 @@
  * frozen". The first half is true and is precisely why a demo needs this: the sales demo's 743 paid
  * invoices had no Payment rows, so the dashboard a prospect sees first read £0.00 revenue against
  * £260k issued. "Not real" describes what the data MEANS, not whether it should be self-consistent.
- * The second half is preserved exactly — the frozen reference is absent from that list, so being
- * listed already excludes it.
+ *
+ * ── AND THE REFERENCE DEMO, SINCE 2026-11-02 ────────────────────────────────────────────────────
+ * The second half no longer holds on its own. Owner's ruling: the frozen reference demo is
+ * protected from jobs that act ON a tenant, and an owner-run one-off script may write to it with
+ * an explicit flag plus the ref typed back. So:
+ *
+ *   node … scripts/payment-backfill.mjs --group=GB-GD2236 --allow-reference-demo          # dry run
+ *   node … scripts/payment-backfill.mjs --group=GB-GD2236 --allow-reference-demo --apply  # writes
+ *
+ * The flag alone authorises nothing. `--apply` on the reference demo also needs a terminal and the
+ * ref typed back, and the decision still belongs to lib/demo-tenants::refuseDemoMaintenance — this
+ * script reports what ceremony it performed and takes the answer. It is NOT added to DEMO_TENANTS,
+ * which would have handed the same authority to every cron.
  */
 import './_ts.mjs';
+import { createInterface } from 'node:readline';
 const { prisma } = await import('../lib/db.ts');
 const { invoiceTotals, effectivePaidDate } = await import('../lib/invoice.ts');
 const { recordPayment } = await import('../lib/payments.ts');
-const { refuseDemoMaintenance } = await import('../lib/demo-tenants.ts');
+const { refuseDemoMaintenance, isReferenceDemo } = await import('../lib/demo-tenants.ts');
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1];
 const APPLY = process.argv.includes('--apply');
+// THE OVERRIDE, and it is inert on its own: it only ever unlocks a tenant named in
+// lib/demo-tenants::REFERENCE_DEMOS, and only for a write that was also typed back.
+const ALLOW_REFERENCE = process.argv.includes('--allow-reference-demo');
 const REF = arg('group');
 
 if (!REF) {
@@ -65,9 +80,29 @@ try {
   });
   if (!g) throw new Error(`no tenant with ref ${REF}`);
   if (g.is_demo || g.is_internal) {
+    // ── THE CEREMONY HAPPENS FIRST, because the predicate's question is whether it happened ────
+    // Asked only where it is needed: a plain --apply on the declared sales demo must not start
+    // prompting. If this decides wrongly the predicate still refuses `not_confirmed`, so the
+    // cheap check fails closed rather than granting anything.
+    let confirmed = false;
+    if (APPLY && ALLOW_REFERENCE && isReferenceDemo(g.ref)) {
+      if (!process.stdin.isTTY) {
+        throw new Error(`${g.ref}: writing to the reference demo needs a terminal. The dry run does not.`);
+      }
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const typed = await new Promise((res) => rl.question(`\n  Type the tenant ref (${g.ref}) to write to the reference demo: `, res));
+      rl.close();
+      confirmed = typed.trim() === g.ref;
+      if (!confirmed) console.log('  not confirmed.');
+    }
     // Both conditions checked against the database at the moment of use, via the shared predicate.
     // BY REF, not id: a refresh replaces the tenant and the id changes with it (see DEMO_TENANTS).
-    const refusal = refuseDemoMaintenance(g.ref, g);
+    // The request says who is asking and what was done; the predicate decides.
+    const refusal = refuseDemoMaintenance(g.ref, g, {
+      actor: 'operator',
+      write: APPLY,
+      override: { flagged: ALLOW_REFERENCE, confirmed },
+    });
     if (refusal) throw new Error(`${REF} (${refusal.code}): ${refusal.message}`);
   }
 

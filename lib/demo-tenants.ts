@@ -105,45 +105,190 @@ export function refuseRefresh(
 }
 
 /**
- * MAY A MAINTENANCE SCRIPT WRITE TO THIS DEMO TENANT?
+ * THE FROZEN REFERENCE DEMO. A SECOND list, and deliberately NOT an entry in DEMO_TENANTS.
+ *
+ * ── WHY A LIST AND NOT "ANY UNLISTED DEMO" ──────────────────────────────────────────────────────
+ * Owner's ruling, 2026-11-02: the reference demo stays protected from jobs that act ON a tenant —
+ * crons, sweeps, lifecycle — while an owner-run one-off script may write to it with an explicit
+ * flag plus the ref typed back. That override has to POINT somewhere. Spelled as "any `is_demo`
+ * tenant not in DEMO_TENANTS" it would be a pattern, and the argument at the top of this file is
+ * that protection is a list you must be ON rather than a pattern you can match. Authorisation
+ * deserves the same shape. Today the population is exactly one tenant, which is precisely when a
+ * list and a pattern are indistinguishable and the wrong one gets chosen.
+ *
+ * ── WHY IT IS NOT JUST ADDED TO DEMO_TENANTS ────────────────────────────────────────────────────
+ * That list authorises AUTOMATED maintenance, and being on it is what demo-refresh demands before
+ * it DESTROYS a tenant. This one grants strictly less: one operator, at a keyboard, naming the
+ * tenant and typing its ref. The two must never merge, so they are two lists and
+ * demo-maintenance-guard-gate asserts they are disjoint — an entry on both would mean the narrower
+ * authority had quietly become the wider one.
+ *
+ * ── AND WHY THE GATES KEEP THEIR OWN COPIES ─────────────────────────────────────────────────────
+ * demo-lifecycle-gate says it in as many words: never put the declaration where the guarded thing
+ * can reach it. This module is imported by the app, so it is exactly that place. The gates' own
+ * hardcoded refs therefore STAY, and the gate asserts they agree with this list rather than
+ * replacing them with it. Agreement catches drift; sharing would remove the second opinion.
+ */
+export const REFERENCE_DEMOS: readonly DemoTenant[] = [
+  { ref: 'GB-GD2236', purpose: 'Frozen reference demo — the recording set, and the fixture other tenants are compared against.' },
+];
+
+export const isReferenceDemo = (ref: string | null | undefined): boolean =>
+  !!ref && REFERENCE_DEMOS.some((t) => t.ref === ref);
+
+/**
+ * WHO IS ASKING — and it is a SEPARATE question from which tenant.
+ *
+ * `refuseDemoMaintenance` used to answer one question: is this tenant a declared demo? The ruling
+ * above makes the answer depend on the CALLER as well, because a cron and a person at a keyboard
+ * must get different answers about the same tenant. Folding that into the tenant question — a
+ * single `allowReferenceDemo` boolean — would be one knob answering two questions, and wrong for
+ * one of them the first time a cron is handed a config file.
+ */
+export type MaintenanceActor = 'automation' | 'operator';
+
+export type MaintenanceRequest = {
+  /**
+   * DEFAULT 'automation', so a caller that does not say is treated as a cron. Every existing
+   * caller keeps its behaviour with no edit, and a new script that forgets to think about this
+   * gets the safe answer rather than the convenient one.
+   */
+  actor?: MaintenanceActor;
+  /**
+   * Is this call authorising a WRITE? A dry run reads and needs no typed confirmation — demanding
+   * one would mean typing a ref to find out whether there is anything to do, and a ceremony people
+   * perform to see a number stops being a ceremony.
+   */
+  write?: boolean;
+  /** The reference-demo override: the flag the operator passed, and the ref they typed back. */
+  override?: {
+    /** `--allow-reference-demo` was on the command line. */
+    flagged?: boolean;
+    /** The operator typed the tenant's ref and it matched. Set by the SCRIPT, never inferred. */
+    confirmed?: boolean;
+  };
+};
+
+/**
+ * MAY THIS CALLER WRITE TO THIS DEMO TENANT?
  *
  * Distinct from `refuseRefresh` on purpose. That one authorises DESTRUCTION and its message says so.
- * This authorises a repair — a ledger backfill, a column fill — on a tenant whose data is invented.
- * The two conditions are the same because the targeting discipline is the same: a list entry is a
- * claim written once, `is_internal` is the fact that makes it true, checked at the moment of use.
+ * This authorises a repair — a ledger backfill, a column fill, a date shift — on a tenant whose
+ * data is invented. The two conditions for a LISTED demo are the same because the targeting
+ * discipline is the same: a list entry is a claim written once, `is_internal` is the fact that
+ * makes it true, checked at the moment of use.
  *
- * The FROZEN REFERENCE is excluded by construction, not by a name check: Marketbridge is
- * deliberately absent from DEMO_TENANTS, so "listed" already means "not the frozen one". A second,
- * explicit exclusion by id would be a rule that could drift out of step with the list it duplicates.
+ * ── THE DEFAULT IS UNCHANGED, DELIBERATELY ──────────────────────────────────────────────────────
+ * Called with two arguments — every caller that existed before 2026-11-02, and every cron that
+ * ever will — the reference demo still refuses `not_listed`, with the same message. The override
+ * branch is not merely unsatisfied for an automation caller, it is UNREACHABLE: `actor` must say
+ * 'operator' before the reference demo is even looked up. So adding this parameter cannot have
+ * opened anything, which is a claim demo-maintenance-guard-gate asserts over the whole matrix
+ * rather than leaving to be read off the code.
  *
- * WHY THIS EXISTS AT ALL: scripts/payment-backfill refused every `is_demo` tenant outright, on the
- * reasoning that nothing in a demo is real. True, and it is exactly why a demo needs the repair —
- * its 743 paid invoices had no Payment rows, so the dashboard a prospect sees first read £0.00
- * revenue. "Not real" is an argument about what the data MEANS, not about whether it should be
- * self-consistent.
+ * ── A FLAG IN THE WRONG HANDS NAMES ITSELF ──────────────────────────────────────────────────────
+ * `flagged` from an automation caller is checked FIRST and refused with its own code. It means a
+ * cron has acquired the override from somewhere, which is the exact failure this exists to prevent
+ * — more alarming than whatever else is wrong with the request, so it is what the message says.
+ *
+ * ── WHY THIS EXISTS AT ALL ──────────────────────────────────────────────────────────────────────
+ * scripts/payment-backfill refused every `is_demo` tenant outright, on the reasoning that nothing
+ * in a demo is real. True, and it is exactly why a demo needs the repair — its 743 paid invoices
+ * had no Payment rows, so the dashboard a prospect sees first read £0.00 revenue. "Not real" is an
+ * argument about what the data MEANS, not about whether it should be self-consistent.
+ *
+ * PURE, so a gate can prove every refusal without a database, a terminal or a tenant. The TTY and
+ * the typed ref are the SCRIPT's job; what arrives here is the script stating that it got them.
  */
 export function refuseDemoMaintenance(
   /** The ref the caller named. Keyed on ref for the same reason refuseRefresh is — see the field. */
   ref: string,
   group: { ref: string | null; is_internal: boolean | null; is_demo: boolean } | null,
+  req?: MaintenanceRequest,
 ): RefreshRefusal | null {
-  if (!isListedDemoTenant(ref)) {
+  const operator = req?.actor === 'operator';
+  const flagged = req?.override?.flagged === true;
+
+  // THE ALARMING COMBINATION, before anything else is considered. A cron holding the override is a
+  // worse fact than a cron pointed at the wrong tenant, and an error naming the lesser cause sends
+  // the next reader to the wrong place.
+  if (flagged && !operator) {
     return {
-      code: 'not_listed',
-      message: `${ref} is a demo tenant but is not declared in lib/demo-tenants::DEMO_TENANTS. `
-        + `Maintenance scripts write only to declared demos — which excludes the frozen reference demo, `
-        + `deliberately absent from that list.`,
+      code: 'override_not_available_to_automation',
+      message: `${ref}: the reference-demo override was passed by a caller that did not declare itself `
+        + `an operator. It is available only to a one-off script run by a person, never to a cron, a `
+        + `sweep or a lifecycle job. If this IS such a script, it must say so (actor: 'operator').`,
     };
   }
-  if (!group) return { code: 'not_found', message: `${ref} is listed as a demo tenant but does not exist.` };
-  if (group.is_internal !== true) {
+
+  if (isListedDemoTenant(ref)) {
+    if (!group) return { code: 'not_found', message: `${ref} is listed as a demo tenant but does not exist.` };
+    // THE SECOND CONDITION, checked against the database at the moment of use. A list entry is a
+    // claim; this is the fact that makes it true.
+    if (group.is_internal !== true) {
+      return {
+        code: 'not_internal',
+        message: `${group.ref ?? ref} is listed but is NOT is_internal. Something has changed since it `
+          + `was listed — check the tenant before the list.`,
+      };
+    }
+    return null;
+  }
+
+  // ── THE OPERATOR OVERRIDE, and it is a LADDER: each rung names what is missing ────────────────
+  if (operator && isReferenceDemo(ref)) {
+    if (!flagged) {
+      return {
+        code: 'reference_demo',
+        message: `${ref} is the frozen reference demo. A one-off script may write to it, but only when `
+          + `the operator says so explicitly — pass --allow-reference-demo and type the ref when asked.`,
+      };
+    }
+    if (req?.write === true && req?.override?.confirmed !== true) {
+      return {
+        code: 'not_confirmed',
+        message: `${ref}: --allow-reference-demo was passed but the ref was not typed back. A write to the `
+          + `reference demo is confirmed at a keyboard; a dry run needs no confirmation.`,
+      };
+    }
+    if (!group) return { code: 'not_found', message: `${ref} is declared a reference demo but does not exist.` };
+    // BOTH FACTS, read from the row now. The override permits writing to a tenant whose data is
+    // INVENTED and whose records are OURS; a row that has stopped being either is a different
+    // tenant wearing a listed ref, and the flag must not carry over to it.
+    if (group.is_demo !== true) {
+      return {
+        code: 'not_demo',
+        message: `${group.ref ?? ref} is declared a reference demo but is NOT is_demo. The override applies `
+          + `only to a tenant whose data is invented — refusing to write to one that is not.`,
+      };
+    }
+    if (group.is_internal !== true) {
+      return {
+        code: 'not_internal',
+        message: `${group.ref ?? ref} is declared a reference demo but is NOT is_internal. Something has `
+          + `changed since it was declared — check the tenant before the list.`,
+      };
+    }
+    return null;
+  }
+
+  // FLAGGED, BY AN OPERATOR, AT SOMETHING ELSE. Its own code: the override is not a skeleton key,
+  // and "you pointed it at the wrong tenant" is a different sentence from "this tenant is not a
+  // declared demo".
+  if (operator && flagged) {
     return {
-      code: 'not_internal',
-      message: `${group.ref ?? ref} is listed but is NOT is_internal. Something has changed since it `
-        + `was listed — check the tenant before the list.`,
+      code: 'override_target_not_listed',
+      message: `${ref} is not declared in lib/demo-tenants::REFERENCE_DEMOS, so --allow-reference-demo `
+        + `does not authorise it. The override names one tenant; it is not a general exemption.`,
     };
   }
-  return null;
+
+  return {
+    code: 'not_listed',
+    message: `${ref} is a demo tenant but is not declared in lib/demo-tenants::DEMO_TENANTS. `
+      + `Maintenance scripts write only to declared demos — which excludes the frozen reference demo, `
+      + `deliberately absent from that list.`,
+  };
 }
 
 // ── IS ANYONE USING IT? (2026-09-11) ─────────────────────────────────────────────────────────────
