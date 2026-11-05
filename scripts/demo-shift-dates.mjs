@@ -35,8 +35,21 @@
  * before this script was written: all 162 period_start values sit on the 1st, and after a 56-day
  * shift ZERO of them would. That needs whole calendar months.
  *
+ * Service-schedule due dates are month-anchored too, for a third reason: a date leg on a schedule
+ * row IS a month (lib/service-schedule::SCHEDULE_DATE_IS_MONTH) stored on the 1st, so a day shift
+ * would move "due November" to "due 26 November" — a day nobody chose, printed on a frozen invoice
+ * as though somebody had.
+ *
  * So there are two offsets, declared separately, and the dry run proves each one keeps its own
  * invariant. A single offset would have quietly broken whichever category it was not chosen for.
+ *
+ * ── AND THE INVARIANT HAS TO EXIST, NOT JUST THE OFFSET ─────────────────────────────────────────
+ * Both month-anchored invariants below were added on 2026-11-05, after the reporting anchor was
+ * found sitting on 26 October at 13:58:49 on the gate database. The column was ALREADY in the
+ * monthly bucket and the shift was already correct — +2 months preserves a day-of-month — which is
+ * exactly why nothing caught it: a correct shift of an incorrect value is still incorrect, and
+ * looks untouched. The offset decides what moves; only an invariant decides what is allowed to be
+ * there in the first place.
  *
  * ── WHAT IS DELIBERATELY NOT MOVED ──────────────────────────────────────────────────────────────
  * `created_at` everywhere. In this tenant it is GENERATION metadata, not story: Invoice.created_at
@@ -215,6 +228,30 @@ const PLAN = [
   { t: 'Cost', scope: 'group', iv: MONTHLY, cast: 'ts', cols: ['active_from', 'active_to'] },
   { t: 'CostRate', scope: 'cost', iv: MONTHLY, cast: 'ts', cols: ['effective_from'] },
   { t: 'Group', scope: 'self', iv: MONTHLY, cast: 'ts', cols: ['reporting_start_date'] },
+  /**
+   * A DUE DATE IS A CALENDAR COMMITMENT, NOT A BOOKING, so it answers to the month calendar.
+   *
+   * It was missing from this plan altogether until 2026-11-05 — not mis-shifted, OMITTED. The
+   * consequence was quiet: the work moved eight weeks forward and the cars’ due items stayed where
+   * they were, so a demo’s "brake fluid due next month" drifted into being overdue with nothing in
+   * the dry run mentioning it.
+   *
+   * WHOLE MONTHS, which does both halves at once. A month-precision row is stored at midnight on
+   * STORED_DAY_OF_MONTH (the 1st) and a whole-month shift leaves it there; a day-precision row is a
+   * real date a garage chose and keeps its day-of-month. +56 days would have moved the
+   * month-precision rows off the 1st, which is the thing lib/service-schedule exists to prevent.
+   *
+   * NO TWO-PASS NEEDED, and that is ASKED rather than assumed: the partial unique index on this
+   * table covers (group, vehicle, observation_key), not due_date, so uniqueCoveredColumns finds
+   * nothing here and the mid-statement collision CostInstance hit cannot arise.
+   *
+   * ONE EDGE, RECORDED BECAUSE IT IS UNREACHABLE TODAY RATHER THAN IMPOSSIBLE: Postgres clamps a
+   * month shift to the shorter month, so a day-precision due date on the 30th AND one on the 31st
+   * both land on the 28th. That mapping is not injective, which the two-pass note above assumes it
+   * is. Harmless here only because no unique index covers this column — if one ever does, that
+   * assumption has to be re-read rather than inherited.
+   */
+  { t: 'VehicleDueItem', scope: 'group', iv: MONTHLY, cast: 'ts', cols: ['due_date'] },
 ];
 
 const shiftExpr = (col, iv, cast) =>
@@ -359,6 +396,27 @@ async function invariants(when) {
   oks.push(await q('scheduled_date disagreeing with start_at\'s day', `SELECT count(*)::int n FROM "JobCard" WHERE "group_id" = $1 AND "scheduled_date" IS NOT NULL AND "start_at" IS NOT NULL AND "scheduled_date" <> "start_at"::date`, 0));
   oks.push(await q('cost periods NOT starting on the 1st', `SELECT count(*)::int n FROM "CostInstance" WHERE ${SCOPE.cost} AND extract(day from "period_start") <> 1`, 0));
   oks.push(await q('cost periods NOT ending on the 1st', `SELECT count(*)::int n FROM "CostInstance" WHERE ${SCOPE.cost} AND extract(day from "period_end") <> 1`, 0));
+  /**
+   * ── THE ANCHOR MUST LAND ON THE 1st AT 00:00, BEFORE AND AFTER ────────────────────────────────
+   * This clause was missing while the column was already in the plan, which is the gap that
+   * mattered: the shift is +2 months and therefore PRESERVES a day-of-month, and a preserved wrong
+   * value looks exactly like a correct one. Measured 2026-11-05 — every tenant created after
+   * 20260830120000 sat mid-month, because DEFAULT CURRENT_TIMESTAMP stored the signup instant — and
+   * this script would have carried such a value forward for ever without a word.
+   *
+   * `x <> date_trunc('month', x)` asks both halves in ONE expression, wrong day and wrong
+   * time-of-day, because an anchor on the 1st at 19:15 is just as broken as one on the 26th and a
+   * day-only check calls it clean. Blocking, so a dirty baseline refuses the write exactly as the
+   * cost-period clauses do.
+   */
+  oks.push(await q('reporting anchor not on the 1st at 00:00', `SELECT count(*)::int n FROM "Group" WHERE "id" = $1 AND "reporting_start_date" <> date_trunc('month', "reporting_start_date")`, 0));
+  /**
+   * THE POPULATION FIRST, THEN THE VIOLATION. A clean verdict over an empty table is a positive
+   * report of safety about nothing, and Marketbridge holds ZERO month-precision due items today, so
+   * without the count beside it the clause below would read as proof of a rule it never tested.
+   */
+  await q('month-precision due items (population — reported, not required)', `SELECT count(*)::int n FROM "VehicleDueItem" WHERE "group_id" = $1 AND "due_date" IS NOT NULL AND "due_date_precision" = 'month'`, null);
+  oks.push(await q('month-precision due dates not on the 1st', `SELECT count(*)::int n FROM "VehicleDueItem" WHERE "group_id" = $1 AND "due_date" IS NOT NULL AND "due_date_precision" = 'month' AND "due_date" <> date_trunc('month', "due_date")`, 0));
   oks.push(await q('quotes answered before they were sent', `SELECT count(*)::int n FROM "QuoteVersion" WHERE "group_id" = $1 AND "responded_at" < "sent_at"`, 0));
   oks.push(await q('invoices created after they were issued (metadata left behind)', `SELECT count(*)::int n FROM "Invoice" WHERE "group_id" = $1 AND "created_at" > "issued_at"`, null));
   return oks.every(Boolean);
