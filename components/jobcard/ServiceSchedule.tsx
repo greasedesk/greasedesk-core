@@ -27,6 +27,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
+import MonthSelect from '@/components/ui/MonthSelect';
 
 export type ScheduleRow = { key: ScheduleKey; dueDate: string | null; dueMileage: number | null; countdownMiles?: number | null };
 
@@ -135,6 +136,8 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
   for (const s of SCHEDULE_ITEMS) seededDue[s.key] = recorded.find((x) => x.key === s.key)?.dueMileage ?? null;
   const [rows, setRows] = useState(() => seedFrom(recorded));
   const [dirty, setDirty] = useState(false);
+  /** Per-row refusals from the last save, keyed by ScheduleKey. Cleared on the next successful one. */
+  const [refusals, setRefusals] = useState<Record<string, string>>({});
   // WHAT THE FORM WAS HANDED, kept beside what it now holds. The save reports this per row so the
   // writer can tell "I emptied it" from "I never had it" — see classifyEntry. Derived from the
   // seed and re-derived with it, NEVER from the inputs: the inputs are what the question is about.
@@ -212,7 +215,24 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
         body: JSON.stringify({ jobCardId, stage, entries }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j?.message ?? 'The schedule didn’t save.'); return; }
+      if (!r.ok) {
+        // ── A REFUSAL BELONGS TO A ROW ───────────────────────────────────────────────────────
+        // refuseSchedule has always returned { key, code, message } per entry, and the API has
+        // always sent the whole array — this read `j.message` alone, which is refusals[0], and put
+        // it at the foot of a form with up to three month fields and three mileage fields. "That
+        // month does not look right" under six inputs names none of them.
+        //
+        // The foot line is kept for everything that is NOT per-row: a 409 from the bay guard, a
+        // 404, a 500. Those are about the save, not about a field.
+        const rowErrs: Record<string, string> = {};
+        for (const x of (Array.isArray(j?.refusals) ? j.refusals : [])) {
+          if (x && typeof x.key === 'string' && typeof x.message === 'string') rowErrs[x.key] = x.message;
+        }
+        setRefusals(rowErrs);
+        setErr(Object.keys(rowErrs).length ? null : (j?.message ?? 'The schedule didn’t save.'));
+        return;
+      }
+      setRefusals({});
       // WHAT THE SERVER NOW HOLDS, said by the server having just written it. Without this, `held`
       // stays at the last seed until refreshCard lands — and refreshCard fails QUIETLY by design,
       // so a user who saved rows and then emptied one would have the clear silently skipped. The
@@ -290,9 +310,9 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
               data-testid={`schedule-row-${s.key}`}>
               <span className="text-sm text-ink">{s.label}</span>
               {legs.date ? (
-                <input type="month" value={row.month} disabled={!canEdit}
-                  onChange={(e) => set(s.key, { month: e.target.value })}
-                  data-testid={`schedule-month-${s.key}`} className={field} />
+                <MonthSelect value={row.month} disabled={!canEdit}
+                  onChange={(v) => set(s.key, { month: v })}
+                  testId={`schedule-month-${s.key}`} label={`${s.label} due by`} />
               ) : <span />}
               {legs.mileage ? (
                 <input inputMode="text" value={row.miles} disabled={!canEdit}
@@ -341,6 +361,11 @@ export default function ServiceSchedule({ jobCardId, canEdit, stage, recorded = 
                   return <em className="not-italic block text-[11px] opacity-70" data-testid={`schedule-arrival-${s.key}`}>on arrival: {bits.join(' · ')}</em>;
                 })()}
               </span>
+              {refusals[s.key] && (
+                <p className="text-xs text-danger sm:col-span-4" data-testid={`schedule-row-error-${s.key}`}>
+                  {refusals[s.key]}
+                </p>
+              )}
             </div>
           );
         })}

@@ -16,6 +16,7 @@ const { chromium } = await import('/Users/hugh/Developer/greasedesk-core/node_mo
 const S = await import('../lib/service-schedule.ts');
 const D = await import('../lib/due-items.ts');
 const { readFileSync } = await import('node:fs');
+const { readMonth, setMonth } = await import('./_month-select.mjs');
 const { freezeQuoteVersion } = await import('../lib/quote-version.ts');
 const { acceptQuote } = await import('../lib/quote-acceptance.ts');
 const { issueInvoiceForCard } = await import('../lib/invoice-issue.ts');
@@ -495,7 +496,7 @@ try {
   // tab that captures each shows its own — this assertion checked the departure value on the Intake
   // tab and was passing only because both used to be the same row.
   check('  …opening on the ARRIVAL reading, which is what this tab captures',
-    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2026-09',
+    (await readMonth(page, 'schedule-month-schedule_oil_service')) === '2026-09',
     'the arrival reading, as a month');
   check('  …saying the basis the ITEM declares', 
     (await page.locator('[data-testid="schedule-basis-schedule_oil_service"]').innerText()).includes('whichever comes first'));
@@ -510,9 +511,19 @@ try {
   check('an oil service offers both',
     (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').count()) === 1
     && (await page.locator('[data-testid="schedule-miles-schedule_oil_service"]').count()) === 1);
-  check('  …and the month input asks for a month, not a day',
-    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').getAttribute('type')) === 'month',
-    'a dd/mm/yyyy picker forces a day nobody has');
+  // ── THIS CLAUSE USED TO PIN THE DEFECT (changed 2026-11-05) ────────────────────────────────
+  // It read `getAttribute('type') === 'month'` and its reasoning was right: a dd/mm/yyyy picker
+  // forces a day nobody has. What it could not see is that `type="month"` only asks for a month in
+  // the browsers that implement it — desktop Firefox and desktop Safari fall back to a free-text
+  // box, where the same field asks for nothing at all and keeps whatever is typed.
+  //
+  // So the requirement is unchanged and the evidence for it has moved: month precision now comes
+  // from there being no day to pick, in any browser. Asserted on the OPTIONS, because a control
+  // offering twelve months and a list of years cannot express a day.
+  check('  …and the month control asks for a month, not a day',
+    (await page.locator('[data-testid="schedule-month-schedule_oil_service-month"] option').count()) === 13
+    && (await page.locator('[data-testid="schedule-month-schedule_oil_service"] input').count()) === 0,
+    'twelve months plus a blank, and no free-text box to type a day into');
   check('the MOT is shown and has no input', (await page.locator('[data-testid="schedule-mot"]').count()) === 1
     && (await page.locator('[data-testid="schedule-mot"] input').count()) === 0);
 
@@ -534,7 +545,7 @@ try {
   await phone.locator('[data-testid="phone-schedule"]').waitFor({ timeout: 30000 });
   check('the schedule panel is on the phone card', true);
   check('  …opening on what this visit already recorded, not blank',
-    (await phone.locator('[data-testid="phone-schedule-month-schedule_oil_service"]').inputValue()) !== '',
+    (await readMonth(phone, 'phone-schedule-month-schedule_oil_service')) !== '',
     'a capture panel that opens blank over stored values tells a mechanic their work was lost');
 
   // THE LEGS ARE THE SHARED RULE, not a second copy of it.
@@ -633,7 +644,7 @@ try {
     panelHere ? '' : 'THE DEPARTURE READING CANNOT BE TAKEN — every schedule line downstream of this is unreachable');
   if (!panelHere) throw new Error('departure panel absent — remaining assertions would be meaningless');
   check('  …opening on the DEPARTURE reading',
-    (await page.locator('[data-testid="schedule-month-schedule_oil_service"]').inputValue()) === '2027-03',
+    (await readMonth(page, 'schedule-month-schedule_oil_service')) === '2027-03',
     'what the car needs next — the one the invoice freezes');
   check('  …and showing what the car arrived with, for comparison',
     /on arrival: 60,000 mi/.test(await page.locator('[data-testid="schedule-arrival-schedule_oil_service"]').innerText()),
@@ -671,7 +682,7 @@ try {
   await prisma.jobCard.update({ where: { id: fix.card }, data: { odometer_out: 61000 } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="service-schedule"]');
-  await page.fill('[data-testid="schedule-month-schedule_oil_service"]', '2028-05');
+  await setMonth(page, 'schedule-month-schedule_oil_service', '2028-05');
   await page.fill('[data-testid="schedule-miles-schedule_oil_service"]', '27000');
   await page.fill('[data-testid="schedule-miles-schedule_pads_rear"]', '16000');
   await page.locator('[data-testid="schedule-save"]').click();
@@ -709,7 +720,7 @@ try {
   console.log('\n— the schedule survives a tab switch —');
   await page.goto(`${BASE}/admin/jobcards/${fix.card}?tab=intake`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="service-schedule"]');
-  await page.fill('[data-testid="schedule-month-schedule_brake_fluid"]', '2029-03');
+  await setMonth(page, 'schedule-month-schedule_brake_fluid', '2029-03');
   await page.fill('[data-testid="schedule-miles-schedule_pads_front"]', '52000');
   await page.click('[data-testid="schedule-save"]');
   await page.waitForSelector('[data-testid="schedule-saved"]');
@@ -750,7 +761,7 @@ try {
   await page.waitForSelector('[data-testid="service-schedule"]');
 
   const back = {
-    month: await page.inputValue('[data-testid="schedule-month-schedule_brake_fluid"]'),
+    month: await readMonth(page, 'schedule-month-schedule_brake_fluid'),
     miles: await page.inputValue('[data-testid="schedule-miles-schedule_pads_front"]'),
   };
   check('coming back to Intake, the saved schedule is still in the form',

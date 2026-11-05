@@ -26,6 +26,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, zzSite, serverReady, describeError, declineToRun, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { readMonth } = await import('./_month-select.mjs');
 const { urlUnder } = await import('../lib/anchored-match.ts');
 const { chromium } = await import('playwright-core');
 const prisma = await gatePrisma();
@@ -103,7 +104,8 @@ try {
   await page.goto(`${BASE}/admin/jobcards/${card.id}?tab=completion`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid="service-schedule"]', { timeout: 25000 });
   const miles = (k) => page.inputValue(`[data-testid="schedule-miles-${k}"]`);
-  const month = (k) => page.inputValue(`[data-testid="schedule-month-${k}"]`);
+  // Two selects now, not an input — see scripts/_month-select.mjs.
+  const month = (k) => readMonth(page, `schedule-month-${k}`);
   const oil = await miles('schedule_oil_service');
   check('the arrival countdown is carried across unchanged', oil === '1240',
     `${oil} — 1090 would mean it was recomputed against the departure odometer, which a test drive moved`);

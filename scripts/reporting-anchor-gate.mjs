@@ -23,6 +23,7 @@
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError, serverReady, ZZ_GROUP, gateOrigin } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
+const { readMonth } = await import('./_month-select.mjs');
 const { readFileSync } = await import('node:fs');
 const { chromium } = await import('playwright-core');
 
@@ -144,8 +145,11 @@ try {
   await page.waitForSelector('#fyStartMonth', { timeout: 40000 });
   check('the control sits on Financial settings', !!(await page.$('#reportingStart')),
     'beside "Financial year starts" — the other setting that frames every figure');
-  const val = await page.$eval('#reportingStart', (el) => el.value).catch(() => null);
-  check('  …showing the tenant’s current anchor', !!val && val.startsWith(original.toISOString().slice(0, 7)),
+  // TWO SELECTS SINCE 2026-11-05. `#reportingStart` is the month half, so reading `.value` off it
+  // alone now returns "11" and would have passed this clause against a control showing the wrong
+  // YEAR entirely. readMonth composes both halves, which is the value the setting actually holds.
+  const val = await readMonth(page, 'reportingStart').catch(() => null);
+  check('  …showing the tenant’s current anchor', val === original.toISOString().slice(0, 7),
     `${JSON.stringify(val)} vs ${original.toISOString().slice(0, 10)}`);
 } catch (e) {
   check('gate run completed', false, describeError(e).slice(0, 300));

@@ -38,6 +38,8 @@
  * with the reason stated — and the distinction is written at BOTH rules so nobody later
  * "harmonises" them into one.
  */
+import { isMonthValue } from '@/lib/month-value';
+
 
 /** Today every entry is transcribed from a service computer. */
 export type ScheduleKey =
@@ -167,7 +169,10 @@ export type ScheduleEntry = {
 
 /** `YYYY-MM` → the stored instant. Returns null for anything that is not a month. */
 export function monthToStoredDate(month: string | null | undefined): Date | null {
-  if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  // THE SHAPE COMES FROM lib/month-value, which is also what the picker produces. This used to
+  // carry its own copy of the regex; two spellings of one format is how a value a form emits stops
+  // matching the value an API accepts, with nothing to point at.
+  if (!isMonthValue(month)) return null;
   const [y, m] = month.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, STORED_DAY_OF_MONTH));
 }

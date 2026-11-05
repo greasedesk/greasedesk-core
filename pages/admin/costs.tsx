@@ -9,6 +9,7 @@
  * edit to one month. Neither can reach backwards.
  */
 import { useCallback, useEffect, useState } from 'react';
+import MonthSelect from '@/components/ui/MonthSelect';
 import Head from 'next/head';
 import { requireAdminPage } from '@/lib/admin-guard';
 import { withI18n } from '@/lib/gssp-i18n';
@@ -39,6 +40,9 @@ export default function CostsPage({ sites }: { sites: { id: string; name: string
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', cadence: 'monthly', charge: 'spread', activeFrom: thisMonth(), amount: '', siteId: sites[0]?.id ?? '' });
+  /** The "change the amount from" month, per cost. Keyed by cost id: the rows are a list, and one
+   *  shared value would move every row's month when somebody set one. Absent = this month. */
+  const [rateFrom, setRateFrom] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const r = await fetch('/api/costs', { cache: 'no-store' });
@@ -101,8 +105,8 @@ export default function CostsPage({ sites }: { sites: { id: string; name: string
             </div>
             <div>
               <label htmlFor="costFrom" className="block text-xs text-muted mb-1">Applies from</label>
-              <input id="costFrom" data-testid="cost-from" type="month" value={form.activeFrom} onChange={(e) => setForm({ ...form, activeFrom: e.target.value })}
-                className="w-full p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+              <MonthSelect value={form.activeFrom} onChange={(v) => setForm({ ...form, activeFrom: v })}
+                testId="cost-from" label="Applies from" />
             </div>
           </div>
           <p className="text-xs text-muted mt-2">
@@ -130,13 +134,16 @@ export default function CostsPage({ sites }: { sites: { id: string; name: string
             <div className="mt-3 flex flex-wrap gap-2 items-end">
               <div>
                 <label className="block text-xs text-muted mb-1">Change the amount from</label>
-                <input type="month" defaultValue={thisMonth()} data-testid={`rate-from-${c.id}`} id={`rate-from-${c.id}`}
-                  className="p-2 bg-surface border border-line rounded-lg text-ink text-sm" />
+                <MonthSelect value={rateFrom[c.id] ?? thisMonth()} onChange={(v) => setRateFrom({ ...rateFrom, [c.id]: v })}
+                  testId={`rate-from-${c.id}`} label={`${c.name} — change the amount from`} />
               </div>
               <input placeholder="new amount" data-testid={`rate-amount-${c.id}`} id={`rate-amount-${c.id}`}
                 className="p-2 bg-surface border border-line rounded-lg text-ink text-sm w-32" />
               <button data-testid={`rate-save-${c.id}`} disabled={busy} onClick={() => {
-                const eff = (document.getElementById(`rate-from-${c.id}`) as HTMLInputElement)?.value;
+                // FROM STATE, not off the DOM. The month is two selects now, so there is no one
+                // element holding `YYYY-MM` to read back — and reading state is what the rest of
+                // this screen already does.
+                const eff = rateFrom[c.id] ?? thisMonth();
                 const amt = (document.getElementById(`rate-amount-${c.id}`) as HTMLInputElement)?.value;
                 send('PATCH', { costId: c.id, effectiveFrom: eff, amountPennies: Math.round(Number(String(amt).replace(/[^0-9.]/g, '')) * 100) });
               }} className="px-3 py-2 rounded-lg border border-line text-ink text-sm disabled:opacity-50">Apply from</button>

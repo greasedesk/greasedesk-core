@@ -102,11 +102,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Normalised to the first of the month, because the dashboard reads it back as "reporting starts
   // September 2025" and every period count is in whole months: a stored 22nd would make the first
   // month fractional and the sentence a lie about precision it does not have.
-  // Refused rather than silently corrected when unparseable — a bad date that saves as "now" is a
-  // reporting frame nobody chose.
+  // ── REFUSED ON SHAPE, BEFORE new Date() EVER SEES IT (2026-11-05) ──────────────────────────
+  // "Refused rather than silently corrected" was the intent here and it was not what the code did.
+  // `new Date(String(x))` is a LENIENT parser, and the anchor it produces is the frame the whole
+  // dashboard is read through. Measured on this exact path:
+  //
+  //     "November 2026-01"  → 2026-11-01   accepted by luck
+  //     "Nov-2026-01"       → 2026-11-01
+  //     "2026-01"           → 2026-01-01   a month read as a year
+  //     "November-01"       → 2001-11-01   a year invented from nothing
+  //
+  // Those reached here because the field is `<input type="month">` on a browser that does not
+  // implement it, where it is a free-text box. The picker is two selects now and cannot emit them —
+  // but a client-side fix is not a guard, because the API is a surface of its own. The shape is
+  // checked FIRST, and only then is a Date constructed, from parts rather than from a parse.
   if (reporting_start_date !== undefined) {
-    const d = new Date(String(reporting_start_date));
-    if (Number.isNaN(d.getTime())) return res.status(400).json({ message: 'Reporting start must be a valid date.' });
+    const iso = String(reporting_start_date);
+    const m = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(iso);
+    if (!m) {
+      return res.status(400).json({ message: 'Reporting start must be a date in the form YYYY-MM-DD.' });
+    }
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    // A SHAPE IS NOT A DATE. "2026-02-31" matches the pattern above and rolls over to 3 March, so
+    // the constructed date is asked whether it is still the day that was typed.
+    if (d.getUTCFullYear() !== Number(m[1]) || d.getUTCMonth() !== Number(m[2]) - 1 || d.getUTCDate() !== Number(m[3])) {
+      return res.status(400).json({ message: 'Reporting start must be a real date.' });
+    }
     data.reporting_start_date = normaliseAnchor(d);
   }
   if (invoice_warranty_prefix !== undefined) {

@@ -4,6 +4,8 @@
  * plus Profit Centre TAGS management (reporting tags via /api/profit-centres).
  */
 import React, { useState } from 'react';
+import MonthSelect from '@/components/ui/MonthSelect';
+import { isMonthValue } from '@/lib/month-value';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { GetServerSideProps } from 'next';
@@ -145,6 +147,18 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
   // The reporting anchor — business-wide, and the sibling of the FY start: between them they frame
   // every figure on the dashboard. Held as YYYY-MM because it is always the first of a month.
   const [reportingStart, setReportingStart] = useState(String(reportingStartInitial ?? '').slice(0, 7));
+  /**
+   * THE ONE PLACE THIS BECOMES A DATE. It used to be `${reportingStart}-01` inline, which was
+   * harmless while the field was a month input in Chrome and a hole everywhere else: in Firefox and
+   * Safari the same field is a plain text box, so "November" went out as "November-01", and
+   * `new Date()` on the server read that as 1 November 2001 — a year invented from nothing, saved
+   * as the tenant's reporting anchor. Measured 2026-11-05.
+   *
+   * The picker cannot produce free text any more. This is the second guard, and the API has a third:
+   * the one that matters is the API's, because it is the only one a caller cannot skip.
+   */
+  const reportingStartIso = (): string | undefined =>
+    isMonthValue(reportingStart) ? `${reportingStart}-01` : undefined;
   const [utilRed, setUtilRed] = useState(String(utilRedInitial ?? 50));
   const [utilAmber, setUtilAmber] = useState(String(utilAmberInitial ?? 75));
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | null }>({ text: '', type: null });
@@ -185,7 +199,7 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
       // The thresholds share this write. Its refusal is SURFACED, not swallowed — an inverted pair
       // must not save silently and leave a light that looks like it works.
       const cRes = await fetch('/api/company', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth), util_red_below: Number(utilRed), util_amber_below: Number(utilAmber), reporting_start_date: `${reportingStart}-01` }) });
+        body: JSON.stringify({ tax_label: taxLabel, fy_start_month: Number(fyStartMonth), util_red_below: Number(utilRed), util_amber_below: Number(utilAmber), reporting_start_date: reportingStartIso() }) });
       if (!cRes.ok) { const cd = await cRes.json().catch(() => ({})); throw new Error(cd?.message || 'Could not save the business-wide settings.'); }
       setMessage({ text: 'Settings saved successfully!', type: 'success' });
     } catch (err: any) {
@@ -269,7 +283,8 @@ export default function FinancialSettings({ initial, profitCentres, sites, selec
               </div>
               <div>
                 <label htmlFor="reportingStart" className={labelClass}>Reporting starts</label>
-                <input id="reportingStart" type="month" value={reportingStart} onChange={(e) => setReportingStart(e.target.value)} className={inputClass} />
+                <MonthSelect value={reportingStart} onChange={setReportingStart}
+                  testId="reportingStart" label="Reporting starts" />
                 <p className="text-xs text-muted mt-1">
                   The first month your dashboard reports on. Every figure — revenue, costs, capacity, utilisation —
                   is measured from here, so a period reaching further back is shortened to it and says so.

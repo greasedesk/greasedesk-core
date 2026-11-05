@@ -26,6 +26,7 @@
  * basis corrected in one place is corrected in both.
  */
 import React, { useEffect, useRef, useState } from 'react';
+import MonthSelect from '@/components/ui/MonthSelect';
 import { SCHEDULE_ITEMS, legsFor, storedDateToMonth, type ScheduleKey } from '@/lib/service-schedule';
 
 /**
@@ -165,8 +166,8 @@ export default function PhoneServiceSchedule({ jobCardId, recorded = [], countFr
                   cells; this is the same fix, two columns instead of four. */}
               <div className="grid grid-cols-[1fr_7rem] gap-2">
                 {legs.date ? (
-                  <input type="month" value={row.month} onChange={(e) => set(s.key, { month: e.target.value })}
-                    data-testid={`phone-schedule-month-${s.key}`} className={field} />
+                  <MonthSelect value={row.month} onChange={(v) => set(s.key, { month: v })}
+                    testId={`phone-schedule-month-${s.key}`} label={`${s.label} due by`} />
                 ) : <span />}
                 {legs.mileage ? (
                   <input inputMode="numeric" value={row.miles} placeholder="miles"

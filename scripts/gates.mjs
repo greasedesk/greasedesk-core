@@ -215,6 +215,10 @@ const TIERS = {
     // breaking the database to arrange one.
     'sign-in-failure-gate',
     'mot-banner-gate', 'mot-lookup-refresh-gate', 'dvsa-failure-reason-gate',
+    // THE MONTH CONTROL. Drives Chrome for the round trip and a REAL Firefox for the browser that
+    // had the defect — see scripts/_firefox-bidi.mjs. Its strongest clause needs neither: that no
+    // `type="month"` survives anywhere in the tree.
+    'month-input-gate',
     // THE MARKETING ENGINE, in two gates on purpose. The first needs no server and no database and
     // proves the rules, the state machine, the rendered templates and the wiring. The second asks
     // the six questions only Postgres can answer — that the pair CHECK really refuses, that the
