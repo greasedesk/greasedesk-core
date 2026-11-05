@@ -41,12 +41,30 @@ const { randomUUID } = await import('node:crypto');
 
 const out = [];
 const check = (n, ok, d = '') => { out.push(ok ? 'P' : 'F'); console.log(`${ok ? '✓' : '✗'} ${n}${d ? `  — ${d}` : ''}`); };
-/** Did the database REFUSE this write, and for the constraint we meant? */
-const refused = async (fn, constraint) => {
+/**
+ * DID THE DATABASE REFUSE THIS WRITE, AND FOR THE RULE WE MEANT?
+ *
+ * `wants` is one string or several, and ANY of them identifies the refusal. It is a list because
+ * Postgres and Prisma do not name a violation the same way for the two kinds of rule here:
+ *
+ *   a CHECK      arrives with the constraint's own name in the message — MarketingEnrolment_pair_chk;
+ *   a UNIQUE     arrives as P2002 naming the FIELD TUPLE and not the index — "Unique constraint
+ *                failed on the fields: (`sequence_key`,`subject_type`,`subject_id`)".
+ *
+ * The first draft of this gate asked for the index name on a unique violation and went red while the
+ * database was doing exactly the right thing. Caught the first time this ran against real tables,
+ * 2026-11-02 — a clause that cannot recognise the refusal it asked for is a clause that would also
+ * have gone green on a table with no constraint at all, for the same reason.
+ *
+ * NOT widened to "any error": the whole value of these clauses is that the refusal is the one named.
+ */
+const refused = async (fn, wants) => {
+  const all = Array.isArray(wants) ? wants : [wants];
   try { await fn(); return { ok: false, why: 'the database ACCEPTED it' }; }
   catch (e) {
     const msg = String(e?.message ?? '');
-    return { ok: msg.includes(constraint), why: msg.includes(constraint) ? constraint : msg.replace(/\s+/g, ' ').slice(0, 140) };
+    const hit = all.find((w) => msg.includes(w));
+    return { ok: !!hit, why: hit ?? `refused, but not recognisably by ${all.join(' / ')}: ${msg.replace(/\s+/g, ' ').slice(0, 140)}` };
   }
 };
 
@@ -102,7 +120,10 @@ try {
   console.log('\n— the same person cannot be sent the same five emails twice —');
   const dup = mk('dup');
   await prisma.marketingEnrolment.create({ data: ACTIVE(dup) });
-  const r2 = await refused(() => prisma.marketingEnrolment.create({ data: ACTIVE(dup) }), 'MarketingEnrolment_subject_uq');
+  // THE FIELD TUPLE, because that is how P2002 identifies a unique violation — see `refused` above.
+  // The index NAME is pinned separately, in marketing-engine-gate, off the migration SQL.
+  const r2 = await refused(() => prisma.marketingEnrolment.create({ data: ACTIVE(dup) }),
+    ['MarketingEnrolment_subject_uq', '`sequence_key`,`subject_type`,`subject_id`']);
   check('a second enrolment for one subject on one sequence is refused', r2.ok, r2.why);
   const other = await prisma.marketingEnrolment.create({
     data: { ...ACTIVE(dup), sequence_key: 'affiliate_new', subject_type: 'rep' }, select: { id: true },
@@ -190,6 +211,21 @@ try {
 
   // ASSERTED, NOT INTENDED. A gate run that left a real sequence switched on would be the one
   // failure here that cannot be taken back, so the absence of a write is a clause, not a hope.
+  // ══ 7. THE MATCHER ITSELF ════════════════════════════════════════════════════════════════════
+  // Every clause above rests on `refused` telling an expected refusal from any other failure, and it
+  // has already been wrong once in the forgiving direction (it asked for an index name on a P2002).
+  // Widening it to "an error happened" would make all twenty-four clauses pass over a table with no
+  // constraints at all, so the widening is proved not to have gone that far.
+  console.log('\n— and the matcher can still tell a refusal from a failure —');
+  const notARefusal = await refused(() => { throw new Error('connection reset by peer'); },
+    ['MarketingEnrolment_pair_chk', '`sequence_key`,`subject_type`,`subject_id`']);
+  check('an unrelated error does NOT satisfy a refusal clause', notARefusal.ok === false, notARefusal.why);
+  const acceptance = await refused(async () => undefined, ['MarketingEnrolment_pair_chk']);
+  check('  …and nor does the write succeeding', acceptance.ok === false, acceptance.why);
+  const eitherName = await refused(() => { throw new Error('Unique constraint failed on the fields: (`sequence_key`,`subject_type`,`subject_id`)'); },
+    ['MarketingEnrolment_subject_uq', '`sequence_key`,`subject_type`,`subject_id`']);
+  check('  …while EITHER accepted spelling of the unique violation does', eitherName.ok === true, eitherName.why);
+
   console.log('\n— and this gate has not touched the owner\'s switches —');
   const switches = await prisma.marketingSending.findMany({ where: { changed_by: RUN } });
   check('no switch row carries this run\'s signature', switches.length === 0,
