@@ -19,6 +19,13 @@
  * The clip moves to ONE place, before any compute runs, so a new tile cannot forget it: clipping
  * becomes opt-OUT, and an opt-out has to be written down. Section 4 is the check that matters
  * long-term — it fails if a compute starts clipping for itself again.
+ *
+ * ── WHY SECTION 1 ASKS ABOUT EVERY TENANT AND ABOUT THE COLUMN DEFAULT ──────────────────────────
+ * Because asking about one row did not work. Section 1 used to check that the GATE TENANT's anchor
+ * sat on the 1st, which is a value, not a rule — and a clause pinned to a value goes green as soon
+ * as somebody fixes that value. It did exactly that on 2026-11-05 while four other tenants on this
+ * database and two on production, one of them a real garage, were still mid-month. The rule is now
+ * asked of every row AND of the column default, so the symptom and the cause each have a clause.
  */
 import './_gate-preflight.mjs';
 const { gatePrisma, describeError, serverReady, ZZ_GROUP, gateOrigin } = await import('./_gate-preflight.mjs');
@@ -49,8 +56,43 @@ try {
   const zz = await prisma.group.findUnique({ where: { id: ZZ_GROUP }, select: { reporting_start_date: true } }).catch(() => null);
   original = zz?.reporting_start_date;
   check('the gate tenant is backfilled', !!original, original ? original.toISOString().slice(0, 10) : 'null');
-  check('  …to the first of a month, so a period is whole months',
-    !!original && original.getUTCDate() === 1, original ? `day ${original.getUTCDate()}` : '');
+  /**
+   * ── EVERY TENANT, NOT THE GATE TENANT ─────────────────────────────────────────────────────────
+   * This asked only whether ZZ's own anchor sat on the 1st, and that is why it was useless. On
+   * 2026-11-05 ZZ was found on 26 October at 13:58:49; normalising that ONE ROW turned the clause
+   * green while FOUR other tenants on the same database were still mid-month, and two on
+   * production, one of them a real garage. The clause had pinned a value where the rule belonged,
+   * so fixing the symptom silenced the only thing that could have reported the cause.
+   *
+   * The cause was DEFAULT CURRENT_TIMESTAMP: the 20260830120000 backfill normalised through
+   * date_trunc and then left new tenants on the raw signup instant, so the canonical day held for
+   * every tenant alive on 30 August 2026 and for none created after it.
+   *
+   * TIME-OF-DAY IS PART OF THE RULE, not a refinement of it. Wizzy Wheels was on the 1st at
+   * 19:15:04 — day-1 and wrong — because it happened to sign up on the 1st. A day-only check calls
+   * that clean, and it still takes 19 hours out of the tenant’s own first reported month.
+   *
+   * AND THE POPULATION IS ASSERTED FIRST. "every tenant" over zero tenants is a positive report of
+   * safety about nothing, which on a gate database that gets purged is a live possibility.
+   */
+  const anchors = await prisma.group.findMany({ select: { ref: true, reporting_start_date: true } });
+  check('there are tenants on this database to check at all', anchors.length > 0, `${anchors.length} groups`);
+  const canonical = (a) => a.getUTCDate() === 1 && a.getUTCHours() === 0 && a.getUTCMinutes() === 0
+    && a.getUTCSeconds() === 0 && a.getUTCMilliseconds() === 0;
+  const offDay = anchors.filter((g) => !canonical(g.reporting_start_date));
+  check('  …and EVERY one of their anchors is the 1st at 00:00', offDay.length === 0,
+    offDay.length ? offDay.map((g) => `${g.ref}=${g.reporting_start_date.toISOString()}`).join(', ')
+      : `all ${anchors.length} on the first of a month at midnight`);
+  /**
+   * THE CAUSE, ASKED DIRECTLY. The clause above is about rows that exist; this one is about rows
+   * that have not been created yet, and it is the one that stays true without a backfill. A gate
+   * that only checks stored values goes green the moment somebody fixes the data and says nothing
+   * at all until the next tenant signs up. See 20261105120000_reporting_anchor_default_month for
+   * why the text is spelled exactly this way and not with a ::timestamp(3) cast.
+   */
+  const DEFAULT_WANTED = "date_trunc('month'::text, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'::text))";
+  check('  …and the column DEFAULT normalises, so a new tenant cannot arrive off it',
+    (col[0]?.column_default ?? '') === DEFAULT_WANTED, col[0]?.column_default ?? '(no default)');
 
   // ── 2. THE CLIP IS A FUNCTION, TESTABLE WITHOUT A DASHBOARD ───────────────────────────────────
   console.log('\n— clipSpanToAnchor —');
