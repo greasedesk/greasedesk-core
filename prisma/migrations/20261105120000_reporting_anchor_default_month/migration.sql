@@ -1,0 +1,80 @@
+-- @migration: constraining the classifier cannot reason about ALTER COLUMN SET DEFAULT and fails
+--   closed on it, which is the right direction; the change itself constrains nothing and touches no
+--   row. Same wording as 20261026200000_annual_price_defaults, which met this ten days earlier --
+--   declared not because a write is constrained but because the classifier cannot see that none is.
+--   Nothing waits on a deploy: there is no code change in this slice for it to precede.
+--
+--   TWO of these in ten days is the signal. ADDITIVE_SQL has no entry for changing a column
+--   DEFAULT, so every one of them lands here and is waved through by a header -- which is how a
+--   fail-closed classifier turns into a formality people stop reading. Tested in memory before
+--   writing this: an anchored /^ALTER TABLE \S+ ALTER COLUMN \S+ SET DEFAULT\b/i keeps DROP
+--   DEFAULT, SET NOT NULL, ALTER COLUMN TYPE, "SET DEFAULT, ADD CONSTRAINT ... CHECK", a trailing
+--   UPDATE and a preceding DROP TABLE all constraining (CONSTRAINING_SQL is tested first), and
+--   reclassifies exactly two of the 263 applied migrations: this precedent, and one from before
+--   headers were required at all. Not done here, because "ambiguity resolves to constraining" is
+--   an owner decision (2026-09-12) and widening the classifier is not mine to take in passing.
+--
+-- A NEW TENANT'S REPORTING ANCHOR STARTS ON THE 1st, LIKE EVERY OTHER ANCHOR.
+--
+-- 20260830120000_reporting_start_anchor backfilled every existing tenant through
+-- date_trunc('month', …) and then set DEFAULT CURRENT_TIMESTAMP for new ones. Those two halves do
+-- not agree: the backfill normalises and the default does not, so the column's canonical day held
+-- for every tenant that existed on 30 August 2026 and for none created afterwards.
+--
+-- Measured 2026-11-05, before this was written. The partition is exact — not approximate, not
+-- mostly — and falls on the migration date:
+--
+--   created BEFORE 30 Aug   6 of 6 tenants on the 1st at 00:00      (the backfill truncated them)
+--   created AFTER  30 Aug   2 of 2 with anchor == created_at to the MILLISECOND
+--
+--   GB-GD2891  created 2026-09-04 15:30:29   anchor 2026-09-04 15:30:29   day 4
+--   GB-GD6623  created 2026-11-01 19:15:04   anchor 2026-11-01 19:15:04   day 1 but 19:15
+--
+-- and on the gate database, 5 of 6. G-Force is a real tenant: anchorMonthLabel prints its window
+-- "September 2026" while clipSpanToAnchor starts it on the 4th, so 1–3 September are excluded from
+-- a month the dashboard presents as whole. Wizzy Wheels is on the 1st only by the luck of its
+-- signup date and still takes 19 hours out of its own first month.
+--
+-- ── WHY THE COLUMN DEFAULT AND NOT THE SIGNUP WRITER ────────────────────────────────────────────
+-- A Group is created in 20 places: 2 product paths (pages/api/auth/register-garage and
+-- lib/demo/generate) and 18 gate fixtures. NOT ONE of them passes reporting_start_date — measured,
+-- not assumed — so the default is not merely one writer among several, it is the ONLY writer at
+-- creation time. Normalising in register-garage would fix one of the twenty and leave the fixtures
+-- producing exactly the rows that made the gate database dirty, which is how a gate stops
+-- resembling the thing it guards.
+--
+-- ── UTC, BECAUSE THAT IS THE RULE THE REST OF THE PATH ALREADY USES ─────────────────────────────
+-- lib/reporting-anchor::normaliseAnchor is Date.UTC(y, m, 1) and anchorMonthLabel renders with
+-- timeZone: 'UTC'. So the rule is UTC and this expression states it, rather than inheriting the
+-- session's TimeZone — which is 'GMT' on both databases today and would make an unqualified cast
+-- agree by accident. An accident that currently gives the right answer is the hardest kind of
+-- wrongness to find later.
+--
+-- WHAT A GARAGE SIGNING UP AT 00:30 BST ON 1 AUGUST GETS: 2026-07-01. 00:30 BST is 23:30 UTC on
+-- 31 July, so the UTC rule anchors it to July — a month in which the garage did not exist. That is
+-- the honest cost of one rule in one place, it affects a one-hour window on the seven month
+-- boundaries that fall inside BST, and it is a reporting START, so the extra month is empty rather
+-- than wrong. Stated here because the alternative (Europe/London) is a defensible different answer
+-- and the next person to notice should find the trade recorded, not re-derive it.
+--
+-- ── THE TEXT OF THE EXPRESSION IS NOT FREE-FORM ─────────────────────────────────────────────────
+-- schema.prisma must carry this expression as @default(dbgenerated("…")) in the exact spelling
+-- Postgres prints it back, or migrate diff reports drift for ever and schema-drift-gate goes red on
+-- every run. Measured rather than guessed, two ways:
+--
+--   EXPLAIN (VERBOSE) deparses it to   date_trunc('month'::text, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'::text))
+--   and Group.ref's existing default   ('GB-GD'::text || nextval('group_ref_seq'::regclass))
+--   prints in schema.prisma verbatim, which is the convention this follows.
+--
+-- No ::timestamp(3) cast is written. The assignment coercion to the column's type is implicit and
+-- pg_get_expr does not print implicit coercions — which is why CURRENT_TIMESTAMP sits on this very
+-- column today as bare "CURRENT_TIMESTAMP" and not "CURRENT_TIMESTAMP::timestamp(3)". Writing the
+-- cast would make it EXPLICIT, and then it would print, and then the schema text would be wrong.
+--
+-- ── EXISTING ROWS ARE NOT TOUCHED ───────────────────────────────────────────────────────────────
+-- Deliberately no UPDATE here. The two production rows above are a data fix on live tenants and
+-- belong to the owner with a dry run in front of them, not to a migration that runs itself; and an
+-- UPDATE in a migration classifies constraining, correctly. scripts/backfill-reporting-anchor.mjs
+-- does that half.
+ALTER TABLE "Group" ALTER COLUMN "reporting_start_date"
+  SET DEFAULT date_trunc('month', CURRENT_TIMESTAMP AT TIME ZONE 'UTC');

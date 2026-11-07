@@ -584,9 +584,16 @@ model Group {
   // any compute runs — clipping used to be opt-in per tile, and the four that did not opt in put a
   // twelve-month net profit beside a five-month cost base. NOT NULL because "nobody set it" is
   // indistinguishable to a reader from "set to the earliest record", and an invisible window is
-  // the whole failure. Backfilled to the earliest record truncated to the month; new tenants
-  // default to signup, which for them is the same date. Settings → Company Profile → Financial.
-  reporting_start_date DateTime @default(now())
+  // the whole failure. Backfilled to the earliest record truncated to the month.
+  //
+  // NEW TENANTS ANCHOR AT THE START OF THEIR SIGNUP MONTH, in UTC — the same rule as
+  // lib/reporting-anchor::normaliseAnchor, stated in the default because NO Group creator passes
+  // this column (20 call sites, measured) so the default is the only writer at creation time.
+  // This line used to read "new tenants default to signup, which for them is the same date",
+  // which was the claim rather than the behaviour: DEFAULT CURRENT_TIMESTAMP stored the signup
+  // INSTANT, so every tenant created after 2026-08-30 sat mid-month, mid-day, while the sentence
+  // explaining it stayed true-sounding. Settings → Company Profile → Financial.
+  reporting_start_date DateTime @default(dbgenerated("date_trunc('month'::text, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'::text))"))
 
   billing            GroupBilling?
   features           GroupFeature[]
