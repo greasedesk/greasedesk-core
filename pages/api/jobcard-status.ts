@@ -15,6 +15,7 @@ import { canAccessSite, canManageSite, requireCanWrite, requireTenantApi } from 
 import { canIssueInvoice } from '@/lib/permissions';
 import { acceptQuote } from '@/lib/quote-acceptance';
 import { findTransition, JobStatus, isBookedCard, stagesRemaining } from '@/lib/jobcard-status';
+import { refuseReopenNoShow, reopenNoShow } from '@/lib/no-show-reopen';
 import { refuseNoCharge, refuseReopen } from '@/lib/no-charge';
 import { getTenantPermissions, canCloseNoCharge } from '@/lib/permissions';
 import { issueInvoiceForCard, issueWarrantyInvoiceForCard, snapshotInvoiceLines } from '@/lib/invoice-issue';
@@ -38,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!scope) return;
   const user = { id: scope.userId, group_id: scope.groupId };
 
-  const { jobCardId, to, paymentMethodId, datePaid, noChargeReason } = (req.body || {}) as { jobCardId?: string; to?: JobStatus | 'reopen_no_charge'; paymentMethodId?: string; datePaid?: string; noChargeReason?: unknown };
+  const { jobCardId, to, paymentMethodId, datePaid, noChargeReason } = (req.body || {}) as { jobCardId?: string; to?: JobStatus | 'reopen_no_charge' | 'reopen_no_show'; paymentMethodId?: string; datePaid?: string; noChargeReason?: unknown };
   if (!jobCardId || !to) return res.status(400).json({ message: 'Missing jobCardId or target status.' });
 
   const card = (await prisma.jobCard.findFirst({
@@ -52,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       resource_id: true, start_at: true, end_at: true,
       _count: { select: { items: true } },
       no_charge_prior_status: true, no_charge_reason: true,
+      // What the card was before the no-show. The reopen RESTORES it and refuses when it is null,
+      // so it has to be fetched here rather than inferred from the status it currently holds.
+      no_show_prior_status: true,
       // ANY invoice, in ANY state. A void retires the number and RETAINS the document, so a card
       // whose invoice was voided is not an uninvoiced card — see lib/no-charge::refuseNoCharge.
       invoice: { select: { invoice_number: true, status: true } },
@@ -112,6 +116,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     });
     return res.status(200).json({ ok: true, status: to === 'no_charge' ? 'no_charge' : restoredTo });
+  }
+
+  /**
+   * ── THE NO-SHOW DOOR ────────────────────────────────────────────────────────────────────────
+   * Here rather than in the table, for the same reason as the two above: the destination is the
+   * status the card HELD, which a from->to table cannot express. Before this existed the only
+   * exit was a hardcoded `-> draft`, which no screen offered and which would have un-accepted
+   * eleven of the thirteen no-shows on production had anyone reached it.
+   *
+   * ENFORCED HERE, NOT IN THE UI. The screen decides whether to OFFER the button; this decides
+   * whether it happens. The gate drives this endpoint's predicate directly, with permitted:false,
+   * to say so.
+   */
+  if (to === 'reopen_no_show') {
+    const visNS = await getVisibility(scope.userId);
+    const mayNS = canManageSite(visNS, card.site_id);
+    const refusal = refuseReopenNoShow({
+      status: card.status,
+      priorStatus: (card as { no_show_prior_status?: JobStatus | null }).no_show_prior_status ?? null,
+      permitted: mayNS,
+    });
+    if (refusal) {
+      const code = refusal.code === 'not_permitted' ? 403 : refusal.code === 'not_no_show' ? 409 : 400;
+      return res.status(code).json({ code: refusal.code, message: refusal.message });
+    }
+    // The writer re-reads the row INSIDE the transaction and can still refuse — the status is
+    // exactly the field another writer may have moved between the check above and this line.
+    let restored: JobStatus | null = null;
+    const outcome = await prisma.$transaction(async (tx) => {
+      const r = await reopenNoShow(tx, { groupId: scope.groupId, jobCardId, actorUserId: scope.userId });
+      if (r.ok) restored = r.restoredTo;
+      return r;
+    });
+    if (!outcome.ok) {
+      const code = outcome.refusal.code === 'not_no_show' ? 409 : 400;
+      return res.status(code).json({ code: outcome.refusal.code, message: outcome.refusal.message });
+    }
+    /**
+     * THE CUSTOMER'S LINK IS NOT REVIVED, DELIBERATELY. The close revoked it
+     * (revokeMagicLinksForCard(..., 'no_show')) and a magic link IS the credential — bringing a
+     * dead one back to life because the car turned up after all is not a reopen, it is reissuing
+     * a credential without anybody asking for one. A fresh quote send mints a new link.
+     */
+    return res.status(200).json({ ok: true, status: restored });
   }
 
   const tr = findTransition(card.status as JobStatus, to as JobStatus);

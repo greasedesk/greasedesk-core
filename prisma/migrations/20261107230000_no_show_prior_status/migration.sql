@@ -1,0 +1,37 @@
+-- @migration: additive
+--
+-- WHAT THE CARD WAS BEFORE NOBODY TURNED UP.
+--
+-- Reopening a no-show had no destination to go back to. The transition table said
+-- `no_show -> draft`, hardcoded, and that is lossy in a way nothing reported: measured on
+-- production 2026-11-07, 11 of the 13 no-show cards were `accepted` when they were marked, 1 was
+-- `quoted` and 1 was `draft`. Sending all 13 to `draft` would silently un-accept eleven accepted
+-- quotes.
+--
+-- And it is worse than losing a label. `accepted_at` is NOT cleared by a transition, so the card
+-- would sit at `draft` with an acceptance timestamp still on it — while
+-- lib/acceptance-provenance::SPINE_AMBIGUOUS_ACCEPTANCE lists `draft: false`, so `wasAccepted()`
+-- answers FALSE for a draft card whatever the column says. The acceptance would be invisible and
+-- the evidence of it still present: the two disagree, and only one of them is read.
+--
+-- ── THE SAME SHAPE AS no_charge_prior_status, ON PURPOSE ────────────────────────────────────────
+-- `no_charge` already solved this exact problem and its reopen restores JobCard.no_charge_prior_status
+-- rather than picking a fixed destination, "because a card closed out of `declined` must not come
+-- back as live work". A no-show is the same question with a different closure, so it gets the same
+-- answer rather than a second invention.
+--
+-- NULL MEANS THE SCRIPT CANNOT GUESS, and the reopen REFUSES rather than defaulting — the rule
+-- no_charge already states for its own column. A default of `draft` would be exactly the silent
+-- un-accepting this column exists to prevent.
+--
+-- ── ONLY THIS COLUMN ───────────────────────────────────────────────────────────────────────────
+-- Not no_show_at, not no_show_by. Both are already in the AuditLog row the close writes
+-- (`status.no_show`, carrying from/to/note and the actor), nothing reads them, and a column nobody
+-- reads is the sixth entry on a standing list of things built and never read. The reversal columns
+-- that clause E needs are E's to add when E is built, for the same reason.
+--
+-- Existing rows stay NULL and are backfilled by scripts/backfill-no-show-prior-status.mjs, from the
+-- `from` field of each card's own `status.no_show` audit row — all 13 recoverable, checked before
+-- this was written. A data fix belongs in a script with a dry run in front of it, not in a
+-- migration that runs itself.
+ALTER TABLE "JobCard" ADD COLUMN "no_show_prior_status" "JobCardStatus";

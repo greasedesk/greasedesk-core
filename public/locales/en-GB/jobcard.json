@@ -438,7 +438,10 @@
     "notePlaceholder": "Optional note — e.g. didn’t answer the phone",
     "confirm": "Confirm no-show",
     "keep": "Keep the booking",
-    "history": "⚠ {{count}} no-show(s) on record ({{dates}})"
+    "history": "⚠ {{count}} no-show(s) on record ({{dates}})",
+    "reopenTitle": "The customer arrived after all",
+    "reopenHint": "Reopening puts the job back to what it was before the no-show, and takes it off this customer’s no-show record. The booking stays on file as the slot that was missed — book a new one when you know the day.",
+    "reopen": "Reopen — customer arrived"
   },
   "dueItems": {
     "title": "What this car also needs",

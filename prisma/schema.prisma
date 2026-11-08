@@ -3405,6 +3405,11 @@ model JobCard {
   /// path by parsing the newest append-only diff would make the log load-bearing for a
   /// transition, and the single reopened_at/by pair it replaces could only remember one cycle.
   no_charge_prior_status JobCardStatus? // NULL = not closed this way, OR closed before this column existed — reopen REFUSES rather than guess a destination.
+  /// What the card was when nobody turned up, so a reopen restores it instead of guessing.
+  /// @nulls: no_show_prior_status — NULL = not closed as a no-show, OR closed before this column
+  /// existed; the reopen REFUSES rather than defaulting to draft, which would silently un-accept
+  /// an accepted quote (11 of 13 production no-shows were `accepted` when marked).
+  no_show_prior_status   JobCardStatus?
   odometer_out           Int?
   vat_rate               Decimal         @default(20) @db.Decimal(5, 2) // per-quote VAT rate (editable, 0–100)
   completed_at           DateTime?

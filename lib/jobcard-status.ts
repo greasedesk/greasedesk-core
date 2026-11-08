@@ -148,17 +148,23 @@ export type ReBookingDoor = 'accept' | 'reopen' | null;
 export function reBookingDoor(status: JobStatus | string): ReBookingDoor {
   if (canMoveBooking(status)) return null;  // already movable — there is nothing to reopen
   /**
-   * THE ONE STATUS NOT DERIVED FROM THE TABLE, and it is an exception worth naming rather than
-   * hiding. `no_charge` exits through `reopen_no_charge`, which restores
-   * JobCard.no_charge_prior_status — a from→to table cannot express "back to wherever it came
-   * from", so there is deliberately no transition to read and the derivation returns nothing.
+   * THE TWO STATUSES NOT DERIVED FROM THE TABLE, and they are exceptions worth naming rather
+   * than hiding. `no_charge` exits through `reopen_no_charge` and `no_show` through
+   * `reopen_no_show`; both restore a PRIOR STATUS column — a from→to table cannot express "back
+   * to wherever it came from", so there is deliberately no transition to read and the derivation
+   * returns nothing for either.
+   *
+   * no_show joined this list on 2026-11-07, when its `-> draft` edge was removed. Before that the
+   * derivation DID answer for it — and answered 'reopen' correctly, which is the trap: the sentence
+   * was right while the edge it was derived from was wrong, so nothing anywhere disagreed with the
+   * banner's promise except the missing button.
    *
    * Returning null here would be a LIE: the card has a Reopen button. So the one word is stated,
    * and the two-step nature — reopen, then whatever door the restored status has — is left to the
    * screen. If `reopen_no_charge` ever becomes a real transition, delete this and the derivation
    * will answer on its own again.
    */
-  if (status === 'no_charge') return 'reopen';
+  if (status === 'no_charge' || status === 'no_show') return 'reopen';
   const exits = nextTransitions(status as JobStatus).map((tr) => tr.to);
   if (exits.includes('accepted')) return 'accept';
   if (exits.includes('draft')) return 'reopen';
@@ -187,8 +193,8 @@ export function isBookedCard(card: { resource_id: string | null; start_at: Date 
 // NO-SHOW is a different fact from cancellation: a cancellation is notice, a no-show is silence.
 // It is reachable only from the pre-work statuses — a card whose work has started cannot become a
 // no-show, and the table refuses it rather than anyone remembering it — and only on a card that
-// actually held a slot (the booking_exists gate). One exit, like cancelled: reopen to draft, for
-// the customer who turns up an hour late or the mis-click.
+// actually held a slot (the booking_exists gate). NO exit: the customer who turns up an hour late
+// goes back through lib/no-show-reopen, to the status the card actually held.
 /**
  * `no_charge` is reachable from every status that has not been invoiced, and leads NOWHERE: the
  * way back is `reopen_no_charge`, which restores JobCard.no_charge_prior_status rather than
@@ -207,7 +213,13 @@ const TRANSITIONS: Record<JobStatus, Transition[]> = {
   paid: [{ to: 'done', kind: 'commercial' }],
   done: [],
   cancelled: [{ to: 'draft', kind: 'commercial' }], // reopen to a live state
-  no_show: [{ to: 'draft', kind: 'commercial' }],   // reopen — and the derived count corrects itself
+  // NO EXIT, like no_charge above and for the same reason: the way back is "to whatever it was",
+  // which a from->to table cannot express. lib/no-show-reopen restores no_show_prior_status.
+  // This row used to read `[{ to: 'draft' }]`. Measured before removing it: of the 13 cards marked
+  // no-show on production, ELEVEN were `accepted`, so the fixed destination would have un-accepted
+  // eleven accepted quotes — and done it invisibly, because a status change does not clear
+  // accepted_at while cardWasAccepted() answers false for a draft card regardless.
+  no_show: [],
 };
 
 export function nextTransitions(from: JobStatus): Transition[] {

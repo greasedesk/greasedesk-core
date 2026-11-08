@@ -1003,6 +1003,7 @@ export default function JobCardWorkspace(p: Props) {
           {/* Quote Actions sit ABOVE the estimate: act on the quote first, build/save the estimate below. */}
           <QuoteActions
             status={eff.status} canManage={p.canManage && !inactive} cancelled={inactive}
+            canReopenNoShow={p.canManage && noShow}
             resources={p.resources} booking={eff.booking} siteHours={p.siteHours} siteId={p.siteId} locale={p.locale} currency={p.currency} jobCardId={p.jobCardId} busy={busy} setBusy={setBusy} setErr={setErr}
             onDone={refreshCard} navigate={(url) => router.push(url)} t={t} setStatus={setStatus} commitEstimate={commitEstimate}
             quoteSupersededNoLink={p.quoteSupersededNoLink}
@@ -1160,6 +1161,11 @@ function seedHours(wm: number): { sel: string; free: string } {
 }
 
 function QuoteActions(props: {
+  /** May this user reopen a no-show? The RAW commercial permission — deliberately NOT `canManage`,
+   *  which the caller passes as `canManage && !inactive` and which is therefore false on exactly
+   *  the cards a reopen applies to. Keeping them separate is the point: one answers "may you
+   *  change this card", the other "may you bring it back". */
+  canReopenNoShow?: boolean;
   status: JobStatus; canManage: boolean; cancelled: boolean;
   resources: Resource[]; booking: CardBooking; siteHours: { openHour: number; closeHour: number; slotMinutes: number; openDays: number[]; breaks: Break[] }; siteId: string; locale: string; jobCardId: string;
   busy: string | null; setBusy: (s: string | null) => void; setErr: (s: string | null) => void; onDone: () => void; navigate: (url: string) => void;
@@ -1271,7 +1277,35 @@ function QuoteActions(props: {
   const [noShowOpen, setNoShowOpen] = useState(false);
   const [noShowNote, setNoShowNote] = useState('');
 
-  if (!canManage) return null;
+  /**
+   * ── A NO-SHOW CARD GETS ONE CONTROL, AND NOTHING ELSE ─────────────────────────────────────────
+   * This used to be a bare `return null`, which is why the banner has been promising "Reopen it
+   * if they arrive" to a screen with no reopen on it: `canManage` is passed as
+   * `p.canManage && !inactive`, so a no-show removed the entire panel and with it any button a
+   * reopen could have lived on. The API has accepted the move the whole time, and
+   * /api/diary's own refusal says "Reopen it to a draft first" — so the only thing missing was
+   * the way to ask.
+   *
+   * A SEPARATE BRANCH, NOT A RELAXED GATE. Threading a flag into the body below and trusting the
+   * existing conditions would be wrong: AcceptVerbal near the end of this component is gated only
+   * on `!isAcceptedOnwards`, which is TRUE for no_show — it is safe today purely because this
+   * early return hides everything. Letting the body render would put "accept verbally" on a card
+   * nobody turned up for. So the reopen is its own return and the body stays unreachable.
+   */
+  if (!canManage) {
+    if (!props.canReopenNoShow) return null;
+    return (
+      <div className="bg-surface border border-line rounded-xl p-5 space-y-3" data-testid="reopen-no-show-panel">
+        <h3 className="text-sm font-semibold text-ink">{t('noShow.reopenTitle')}</h3>
+        <p className="text-sm text-muted">{t('noShow.reopenHint')}</p>
+        <button type="button" disabled={busy !== null} data-testid="reopen-no-show"
+          onClick={() => call('reopen', '/api/jobcard-status', 'PATCH', { jobCardId, to: 'reopen_no_show' })}
+          className="text-sm font-semibold rounded-lg px-4 py-2.5 bg-accent hover:bg-accent-hover text-white disabled:opacity-50">
+          {t('noShow.reopen')}
+        </button>
+      </div>
+    );
+  }
   const fmtMoney = (pennies: number) => formatMoney(pennies, { currency: props.currency, locale: props.locale });
   const canCancel = !['done', 'cancelled', 'no_show'].includes(status);
   // Pre-work + a real slot held — the same rule the server's transition table + booking_exists gate

@@ -53,7 +53,22 @@ export async function applyCardTransition(
     };
   }
 
-  await (tx as any).jobCard.update({ where: { id: args.jobCardId }, data: { status: args.to } });
+  /**
+   * ── THE NO-SHOW STAMPS WHAT THE CARD WAS, HERE AND NOWHERE ELSE ─────────────────────────────
+   * The reopen restores `no_show_prior_status` rather than a fixed destination, so something has
+   * to record it — and it has to be THIS function, because this is the one place a card's status
+   * moves. Doing it in pages/api/jobcard-status would leave the webhook path writing a no-show
+   * with nothing to come back to, which is the exact class of second-writer bug this module was
+   * created to end.
+   *
+   * `args.from` and not a re-read: the table was just consulted against it, so it is the status
+   * this transition is leaving — and a re-read here could see a row another writer had already
+   * moved, and stamp a status the card never held.
+   */
+  await (tx as any).jobCard.update({
+    where: { id: args.jobCardId },
+    data: { status: args.to, ...(args.to === 'no_show' ? { no_show_prior_status: args.from } : {}) },
+  });
   await writeAudit(tx, {
     groupId: args.groupId,
     userId: args.actorUserId,

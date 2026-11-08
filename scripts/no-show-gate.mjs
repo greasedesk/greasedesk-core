@@ -10,9 +10,18 @@ const { zzSite, describeError } = await import('./_gate-preflight.mjs');
 import './_ts.mjs';
 const { keyRegex } = await import('../lib/anchored-match.ts');
 const { prisma } = await import('../lib/db.ts');
-const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
+const { findTransition, nextTransitions, FREES_THE_SLOT, HIDDEN_FROM_DIARY, paymentState, reBookingDoor, JOB_STATUSES } = await import('../lib/jobcard-status.ts');
 const { applyCardTransition } = await import('../lib/jobcard-transition.ts');
 const { noShowHistory, noShowLostInPeriod } = await import('../lib/no-show.ts');
+const R = await import('../lib/no-show-reopen.ts').catch((e) => ({ __err: describeError(e) }));
+/**
+ * CAN THE REOPEN EVEN BE CALLED? Red-first means the clauses below report red one by one — not
+ * that the first missing function throws and takes the rest of the fixture with it. The first
+ * run of this section did exactly that: 2 red of 27, where 41 clauses had run a moment earlier,
+ * and every clause this section exists for was never reached. A crash is not a red.
+ */
+const canReopen = typeof R.reopenNoShow === 'function';
+const { cardWasAccepted } = await import('../lib/acceptance-provenance.ts');
 const { fetchDayBookings } = await import('../lib/diary-day.ts');
 const { QUOTE_CLOSED_CARD_STATUSES } = await import('../lib/quotes-list.ts');
 const { WIP_STATUSES } = await import('../lib/wip.ts');
@@ -34,7 +43,17 @@ for (const from of ['in_progress', 'invoiced', 'paid', 'done', 'declined', 'canc
     from === 'in_progress' ? 'work started — the card cannot become a no-show' : '');
 }
 const exits = nextTransitions('no_show');
-check('no_show has exactly one exit: reopen to draft', exits.length === 1 && exits[0].to === 'draft', JSON.stringify(exits));
+/**
+ * NO TABLE EXIT AT ALL, and that is the change — this clause used to assert exactly one, to
+ * 'draft'. A from->to table cannot express "back to whatever it was", and 'draft' was the wrong
+ * fixed answer: 11 of the 13 no-shows on production were 'accepted' when they were marked, so the
+ * hardcoded destination silently un-accepted eleven accepted quotes. Same reason no_charge has
+ * no exits either. The door is reopen_no_show, which restores no_show_prior_status.
+ */
+check('no_show has NO exit in the table — the door is reopen_no_show, not a fixed destination',
+  exits.length === 0, JSON.stringify(exits));
+check('  …and the re-booking door still NAMES itself, so a refusal can say what to do',
+  reBookingDoor('no_show') === 'reopen', String(reBookingDoor('no_show')));
 
 // ── 2. THE UNIONS ────────────────────────────────────────────────────────────────────────────────
 console.log('\n— every reader that enumerates statuses has decided —');
@@ -111,7 +130,8 @@ try {
   await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'accepted', to: 'no_show', actorUserId: null }));
   hist = await noShowHistory(prisma, cust.id);
   check('a second no-show reads 2, most recent first', hist.count === 2);
-  await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'no_show', to: 'draft', actorUserId: null }));
+  // THROUGH THE REOPEN PATH, not the table edge this gate used to drive: 'no_show -> draft' is gone.
+  if (canReopen) await prisma.$transaction((tx) => R.reopenNoShow(tx, { groupId: ZZ, jobCardId: two.id, actorUserId: null }));
   hist = await noShowHistory(prisma, cust.id);
   check('REOPEN corrects the count to 1 by construction — no counter to unwind', hist.count === 1, JSON.stringify(hist));
   // ── 4. THE CAPACITY LINE: slot-month attribution, reopen correction, absent-when-zero ─────────
@@ -131,7 +151,10 @@ try {
   check('marked TODAY, slot in JULY → lands in JULY (the closed month legitimately moves)',
     jul.count === 1 && jul.minutes === 90,
     `${JSON.stringify(jul)} — today's date never enters the query`);
-  await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: two.id, from: 'no_show', to: 'draft', actorUserId: null }));
+  // THROUGH THE REOPEN PATH, like the one above. This was the SECOND call site driving the
+  // removed table edge, and rewriting only the first left it refusing silently — the card stayed
+  // no_show and July went on carrying the loss. Found by this clause, which is what it is for.
+  if (canReopen) await prisma.$transaction((tx) => R.reopenNoShow(tx, { groupId: ZZ, jobCardId: two.id, actorUserId: null }));
   const jul2 = await noShowLostInPeriod(prisma, { groupId: ZZ, siteIds: [site.id], from: new Date('2026-07-01T00:00:00Z'), to: new Date('2026-08-01T00:00:00Z') });
   check('and the reopen un-moves it, in the month the slot sat', jul2.count === 0 && jul2.minutes === 0);
 
@@ -178,6 +201,88 @@ try {
     i18n.capacity.noShowLost);
   check('  …and the no-rate variant shows hours only, never £0.00',
     /booked time/.test(i18n.capacity.noShowLostNoRate) && !/rate/.test(i18n.capacity.noShowLostNoRate));
+  // ── 6. CLAUSE A: REOPEN RESTORES WHAT THE CARD WAS ──────────────────────────────────────────
+  console.log('\n— reopen: back to the status it held, not to draft —');
+  check('lib/no-show-reopen exists and exports both halves',
+    typeof R.refuseReopenNoShow === 'function' && typeof R.reopenNoShow === 'function', R.__err ?? '');
+
+  // THE REFUSALS, as pure functions — the same split no_charge uses: the route decides 'permitted',
+  // the predicate decides everything else, and the gate can ask it without a session.
+  if (typeof R.refuseReopenNoShow === 'function') {
+    const f = R.refuseReopenNoShow;
+    check('  refuses when the user may not manage the site',
+      f({ status: 'no_show', priorStatus: 'accepted', permitted: false })?.code === 'not_permitted');
+    check('  refuses a card that is not a no-show',
+      f({ status: 'accepted', priorStatus: 'accepted', permitted: true })?.code === 'not_no_show');
+    /**
+     * NULL PRIOR STATUS REFUSES RATHER THAN GUESSING. The 13 rows that predate the column are
+     * backfilled, but a row that arrives by some other route must not be reopened into 'draft' by
+     * default — that default IS the defect the column exists to remove.
+     */
+    check('  refuses when it does not know what the card was — never defaults to draft',
+      f({ status: 'no_show', priorStatus: null, permitted: true })?.code === 'no_prior_status');
+    check('  …and allows the real case', f({ status: 'no_show', priorStatus: 'accepted', permitted: true }) === null);
+  }
+
+  // END TO END on a third fixture card: accepted -> no_show -> reopen.
+  const three = await mkCard(true);
+  fix.cardIds.push(three.id);
+  await prisma.$transaction((tx) => applyCardTransition(tx, { groupId: ZZ, jobCardId: three.id, from: 'accepted', to: 'no_show', actorUserId: null }));
+  const closed = await prisma.jobCard.findUnique({ where: { id: three.id },
+    select: { status: true, no_show_prior_status: true, accepted_at: true, resource_id: true, start_at: true, end_at: true } }).catch(() => null);
+  check('the close STAMPS what the card was', closed?.no_show_prior_status === 'accepted',
+    closed === null ? 'the card READ failed — column missing from the client?' : JSON.stringify(closed.no_show_prior_status));
+
+  const before = { resource: closed?.resource_id, start: closed?.start_at?.toISOString(), end: closed?.end_at?.toISOString() };
+  if (canReopen) await prisma.$transaction((tx) => R.reopenNoShow(tx, { groupId: ZZ, jobCardId: three.id, actorUserId: null }));
+  const reopened = await prisma.jobCard.findUnique({ where: { id: three.id },
+    select: { status: true, no_show_prior_status: true, accepted_at: true, resource_id: true, start_at: true, end_at: true } }).catch(() => null);
+
+  check('REOPEN restores ACCEPTED — not draft', reopened?.status === 'accepted', String(reopened?.status));
+  /**
+   * AND THE ONE FUNCTION THAT ANSWERS "WAS THIS ACCEPTED" AGREES. This is the clause that would
+   * have caught the lossy version: reopening to 'draft' leaves accepted_at ON the row, so a column
+   * check passes while cardWasAccepted() returns FALSE — SPINE_AMBIGUOUS_ACCEPTANCE lists draft:false.
+   * The evidence and the answer disagree, and only the answer is read.
+   */
+  check('  …and cardWasAccepted() agrees, which a column check alone would not',
+    cardWasAccepted({ status: String(reopened?.status), accepted_at: reopened?.accepted_at ?? null }, false) === true,
+    `status=${reopened?.status} accepted_at=${reopened?.accepted_at ? 'set' : 'null'}`);
+  check('  …the stamp is CLEARED, so a reopened card cannot be reopened twice',
+    reopened?.no_show_prior_status === null, String(reopened?.no_show_prior_status));
+  /**
+   * THE VALUES MUST BE THERE BEFORE THEY CAN BE COMPARED. Written without the truthiness guard
+   * this clause compared undefined to undefined and went GREEN whenever the column was missing —
+   * agreeing with itself about nothing, on the exact run where everything else was red.
+   */
+  check('  …and the booking record is untouched — the slot is history, not a plan',
+    !!before.resource && !!before.start && !!before.end
+    && reopened?.resource_id === before.resource && reopened?.start_at?.toISOString() === before.start
+    && reopened?.end_at?.toISOString() === before.end, JSON.stringify(before));
+
+  // THE TRAIL: the original row survives, and the reversal is its own event.
+  const closeRows = await prisma.auditLog.count({ where: { group_id: ZZ, entity_id: three.id, action: 'status.no_show' } });
+  const revRow = await prisma.auditLog.findFirst({ where: { group_id: ZZ, entity_id: three.id, action: 'status.no_show_reversed' },
+    orderBy: { created_at: 'desc' }, select: { diff_json: true } });
+  check('the original status.no_show row is STILL THERE — never edited, never deleted', closeRows === 1, `${closeRows} row(s)`);
+  check('  …and the reversal is a SEPARATE event naming where it went back to',
+    !!revRow && revRow.diff_json?.restoredTo === 'accepted', JSON.stringify(revRow?.diff_json ?? null));
+
+  // ── 7. CLAUSE A, THE UI: one control, and nothing else let through with it ───────────────────
+  console.log('\n— the reopen-only branch —');
+  const ws = readFileSync('components/jobcard/JobCardWorkspace.tsx', 'utf8');
+  /**
+   * SLICED, NOT SEARCHED. "the file mentions a reopen button" is satisfied by a comment; what
+   * matters is what the !canManage branch RETURNS. AcceptVerbal is gated only on
+   * !isAcceptedOnwards, which is TRUE for no_show — it is safe today purely because this early
+   * return hides the whole panel, so the branch must return the control and NOT fall through.
+   */
+  const i = ws.indexOf('if (!canManage)');
+  const slice = i < 0 ? '' : ws.slice(i, i + 900);
+  check('the actions panel has a !canManage branch at all', i >= 0);
+  check('  …which offers the reopen control', /data-testid="reopen-no-show"/.test(slice), slice.slice(0, 120));
+  check('  …and does NOT let AcceptVerbal through with it', !/AcceptVerbal/.test(slice));
+
 } catch (e) {
   check('fixture run completed', false, describeError(e).slice(0, 300));
 } finally {
